@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper2run"
+version = "0.1.0"
+description = "Paper2Run API and contracts"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110,<1",
+  "uvicorn>=0.30,<1",
+  "pydantic>=2,<3",
+  "sqlalchemy>=2,<3",
+  "alembic>=1.13,<2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27"]
+
+[tool.pytest.ini_options]
+pythonpath = ["services/api", "services/kernel", "packages/contracts", "packages/artifacts", "packages/persistence", "packages/orchestration"]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["services/api", "services/kernel", "packages/contracts", "packages/persistence", "packages/artifacts", "packages/orchestration"]
+include = ["p2r_api*", "p2r_kernel*", "p2r_contracts*", "p2r_persistence*", "p2r_artifacts*", "p2r_orchestration*"]
+
+[tool.setuptools.package-dir]
+p2r_api = "services/api/p2r_api"
+p2r_contracts = "packages/contracts/p2r_contracts"
+p2r_persistence = "packages/persistence/p2r_persistence"

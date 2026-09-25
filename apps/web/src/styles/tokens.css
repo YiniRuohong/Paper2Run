@@ -1,0 +1,27 @@
+/* Paper2Run 设计 tokens · 唯一色板来源（宪法附录 A，移植自原型 :root） */
+:root {
+  --bg: #0C2238;
+  --bg-deep: #081826;
+  --panel: #10304E;
+  --panel-2: #0D2740;
+  --panel-3: #123A5E;
+  --line: #24486B;
+  --line-strong: #3E6E96;
+  --ink: #E9F1F9;
+  --muted: #8FB0CC;
+  --faint: #6E90AE; /* 自原型 --faint 提亮一档：原值 5E82A3 对正文对比不足 AA */
+  --paper: #F2ECDD;
+  --paper-ink: #2B2A26;
+  --paper-line: #C9BFA8;
+  --amber: #F0A72E;
+  --amber-dim: #8A6216;
+  --green: #46C08A;
+  --green-dim: #1E5C42;
+  --red: #E4606F;
+  --serif: Georgia, 'Times New Roman', 'Songti SC', SimSun, serif;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, 'Courier New', monospace;
+  --radius-s: 3px;
+  --radius-m: 4px;
+  --radius-l: 6px;
+}
