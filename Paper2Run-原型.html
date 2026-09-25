@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paper2Run · 论文自动复现引擎（静态原型）</title>
+<style>
+  :root{
+    --bg:#0C2238;
+    --bg-deep:#081826;
+    --panel:#10304E;
+    --panel-2:#0D2740;
+    --panel-3:#123A5E;
+    --line:#24486B;
+    --line-strong:#3E6E96;
+    --ink:#E9F1F9;
+    --muted:#8FB0CC;
+    --faint:#5E82A3;
+    --paper:#F2ECDD;
+    --paper-ink:#2B2A26;
+    --paper-line:#C9BFA8;
+    --amber:#F0A72E;
+    --amber-dim:#8A6216;
+    --green:#46C08A;
+    --green-dim:#1E5C42;
+    --red:#E4606F;
+    --serif:Georgia,"Times New Roman","Songti SC",SimSun,serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"Cascadia Code",Consolas,"Courier New",monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:14px;
+    line-height:1.6;
+    min-height:100vh;
+    background-image:
+      linear-gradient(rgba(62,110,150,.06) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(62,110,150,.06) 1px,transparent 1px);
+    background-size:32px 32px;
+  }
+  button{font-family:inherit;cursor:pointer}
+  button:focus-visible,a:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+
+  /* ============ 顶栏 ============ */
+  .topbar{
+    display:flex;align-items:center;gap:14px;
+    padding:0 24px;height:56px;
+    background:var(--bg-deep);
+    border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand svg{display:block}
+  .brand-name{font-family:var(--serif);font-size:19px;font-weight:700;letter-spacing:.2px}
+  .brand-name em{font-style:italic;color:var(--amber)}
+  .brand-sub{font-family:var(--mono);font-size:11px;color:var(--muted);border-left:1px solid var(--line);padding-left:14px;letter-spacing:.5px}
+  .topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+  .model-chip{
+    font-family:var(--mono);font-size:11px;color:var(--muted);
+    border:1px solid var(--line-strong);border-radius:3px;
+    padding:4px 10px;background:var(--panel);
+    display:flex;align-items:center;gap:8px;
+  }
+  .model-chip .caret{color:var(--faint)}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block}
+
+  /* ============ 装置条（签名元素） ============ */
+  .apparatus{
+    display:flex;align-items:center;
+    padding:14px 32px 16px;
+    background:var(--bg-deep);
+    border-bottom:1px solid var(--line);
+    overflow-x:auto;
+  }
+  .station{display:flex;align-items:center;flex-shrink:0}
+  .station-dot{
+    width:22px;height:22px;border-radius:50%;
+    border:1.5px solid var(--line-strong);
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:11px;color:var(--muted);
+    background:var(--panel-2);position:relative;z-index:1;
+    transition:all .3s;
+  }
+  .station.done .station-dot::after{content:"✓";color:var(--green);font-size:11px}
+  .station-label{
+    margin-left:8px;font-family:var(--mono);font-size:11.5px;
+    color:var(--muted);letter-spacing:.5px;white-space:nowrap;
+  }
+  .station-link{
+    flex:1;min-width:36px;height:0;
+    border-top:1.5px dashed var(--line-strong);
+    margin:0 10px;transition:border-color .3s;
+  }
+  .station-link.done{border-top:1.5px solid var(--green)}
+  .station.done .station-dot{border-color:var(--green)}
+  .station.done .station-label{color:var(--green)}
+  .station.active .station-dot{
+    border-color:var(--amber);
+    background:var(--amber);
+  }
+  .station.active .station-label{color:var(--amber);font-weight:700}
+
+  /* ============ 主体布局 ============ */
+  .shell{display:grid;grid-template-columns:210px 1fr;min-height:calc(100vh - 150px)}
+  .sidebar{
+    border-right:1px solid var(--line);
+    background:var(--bg-deep);
+    padding:20px 14px;
+    display:flex;flex-direction:column;gap:4px;
+  }
+  .nav-item{
+    display:flex;align-items:center;gap:10px;
+    padding:9px 12px;border:none;background:none;
+    color:var(--muted);font-size:13.5px;text-align:left;
+    border-radius:4px;border-left:2px solid transparent;
+    transition:all .2s;width:100%;
+  }
+  .nav-item .idx{font-family:var(--mono);font-size:10px;color:var(--faint);width:22px}
+  .nav-item:hover{color:var(--ink);background:var(--panel-2)}
+  .nav-item.on{color:var(--ink);background:var(--panel);border-left-color:var(--amber)}
+  .nav-item.on .idx{color:var(--amber)}
+  .sidebar-sep{height:1px;background:var(--line);margin:14px 0}
+  .side-card{
+    border:1px solid var(--line);border-radius:4px;
+    padding:12px;background:var(--panel-2);
+  }
+  .side-card .sc-eyebrow{font-family:var(--mono);font-size:10px;color:var(--faint);letter-spacing:1px;margin-bottom:6px}
+  .side-card .sc-title{font-family:var(--serif);font-size:13px;line-height:1.45;color:var(--ink)}
+  .side-card .sc-status{margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--amber)}
+  .sidebar-note{
+    margin-top:auto;font-family:var(--mono);font-size:10.5px;
+    color:var(--faint);line-height:1.7;padding:10px 4px 0;
+    border-top:1px dashed var(--line);
+  }
+
+  .content{padding:28px 36px 60px;max-width:1240px;min-width:0}
+
+  .view{display:none}
+  .view.on{display:block;animation:fadein .25s ease}
+  @keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;color:var(--amber);
+    letter-spacing:1.5px;margin-bottom:8px;
+  }
+
+  /* ============ 按钮 ============ */
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    border-radius:4px;padding:10px 20px;font-size:13.5px;font-weight:600;
+    border:1px solid var(--line-strong);background:var(--panel-3);color:var(--ink);
+    transition:all .2s;
+  }
+  .btn:hover{border-color:var(--amber);color:var(--amber)}
+  .btn.primary{background:var(--amber);border-color:var(--amber);color:#1A1204}
+  .btn.primary:hover{background:#FFBE4D;color:#1A1204}
+  .btn.sm{padding:6px 14px;font-size:12.5px;font-weight:500}
+
+  .tag{
+    display:inline-block;font-family:var(--mono);font-size:10.5px;
+    padding:2px 8px;border-radius:3px;letter-spacing:.5px;
+  }
+  .tag.ok{color:var(--green);border:1px solid var(--green-dim);background:rgba(70,192,138,.08)}
+  .tag.warn{color:var(--amber);border:1px solid var(--amber-dim);background:rgba(240,167,46,.08)}
+  .tag.err{color:var(--red);border:1px solid rgba(228,96,111,.4);background:rgba(228,96,111,.08)}
+  .tag.dim{color:var(--muted);border:1px solid var(--line)}
+
+  /* ============ 视图一：工作台 ============ */
+  .hero{
+    border:1px solid var(--line);border-radius:6px;
+    background:linear-gradient(160deg,var(--panel) 0%,var(--panel-2) 70%);
+    padding:34px 40px;position:relative;overflow:hidden;
+  }
+  .hero h1{font-size:30px;font-weight:700;letter-spacing:.5px;line-height:1.35}
+  .hero h1 .accent{color:var(--amber)}
+  .hero-sub{margin-top:12px;color:var(--muted);font-size:14px;max-width:560px;line-height:1.8}
+
+  .upload{
+    margin-top:22px;border:1.5px dashed var(--line-strong);border-radius:6px;
+    padding:34px;display:flex;align-items:center;gap:26px;flex-wrap:wrap;
+    background:rgba(16,48,78,.35);
+  }
+  .upload-icon{
+    width:64px;height:78px;border-radius:4px;background:var(--paper);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+    box-shadow:4px 6px 0 rgba(0,0,0,.25);
+    position:relative;
+  }
+  .upload-icon::after{
+    content:"PDF";position:absolute;bottom:-8px;left:50%;transform:translateX(-50%);
+    font-family:var(--mono);font-size:9px;background:var(--red);color:#fff;
+    padding:1px 6px;border-radius:2px;letter-spacing:1px;
+  }
+  .upload-main{flex:1;min-width:280px}
+  .upload-main .u-title{font-size:16px;font-weight:600}
+  .upload-main .u-sub{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .upload-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+  .upload-input{
+    flex:1;min-width:220px;display:flex;align-items:center;
+    background:var(--bg-deep);border:1px solid var(--line);border-radius:4px;
+    padding:9px 14px;font-family:var(--mono);font-size:12.5px;color:var(--faint);
+  }
+  .samples{display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap}
+  .samples .s-label{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .sample-chip{
+    font-family:var(--mono);font-size:11.5px;color:var(--muted);
+    border:1px solid var(--line);background:none;border-radius:3px;
+    padding:4px 10px;transition:all .2s;
+  }
+  .sample-chip:hover{color:var(--amber);border-color:var(--amber)}
+
+  .section-h{
+    display:flex;align-items:baseline;gap:12px;margin:30px 0 14px;
+  }
+  .section-h h2{font-size:16px;font-weight:600}
+  .section-h .sub{font-family:var(--mono);font-size:11px;color:var(--faint)}
+
+  table.recent{width:100%;border-collapse:collapse;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  table.recent th{
+    font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:1px;
+    text-align:left;padding:10px 16px;background:var(--panel-2);
+    border-bottom:1px solid var(--line);font-weight:400;
+  }
+  table.recent td{padding:12px 16px;border-bottom:1px solid var(--line);font-size:13px}
+  table.recent tr:last-child td{border-bottom:none}
+  table.recent tr:hover td{background:var(--panel-2)}
+  .paper-title-cell{font-family:var(--serif);font-size:13.5px}
+  .paper-title-cell .pid{font-family:var(--mono);font-size:10.5px;color:var(--faint);display:block;margin-top:2px}
+  td.mono, .mono-cell{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .score-cell{font-family:var(--serif);font-size:17px;font-weight:700}
+  .score-cell .den{font-size:11px;color:var(--faint);font-weight:400}
+
+  /* ============ 视图二：解析确认 ============ */
+  .view-head{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;margin-bottom:22px}
+  .vh-main{flex:1;min-width:300px}
+  .paper-h1{font-family:var(--serif);font-size:23px;font-weight:700;line-height:1.4}
+  .paper-meta{display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap}
+  .paper-meta .authors{font-size:12.5px;color:var(--muted)}
+  .paper-meta .venue{
+    font-family:var(--mono);font-size:10.5px;color:var(--ink);
+    border:1px solid var(--line-strong);border-radius:3px;padding:2px 8px;
+    background:var(--panel-2);
+  }
+  .conf-badge{
+    border:1px solid var(--line);border-radius:5px;background:var(--panel-2);
+    padding:12px 18px;flex-shrink:0;
+  }
+  .conf-badge .cb-label{font-family:var(--mono);font-size:10px;color:var(--faint);letter-spacing:1px}
+  .conf-badge .cb-val{font-family:var(--serif);font-size:24px;font-weight:700;color:var(--green)}
+  .conf-bar{width:110px;height:4px;background:var(--bg-deep);border-radius:2px;margin-top:6px;overflow:hidden}
+  .conf-bar i{display:block;height:100%;width:92%;background:var(--green)}
+
+  .parse-grid{display:grid;grid-template-columns:5fr 7fr;gap:22px;align-items:start}
+
+  .pdf-stage{position:relative;padding:6px 14px 18px 6px}
+  .pdf-page{
+    background:var(--paper);color:var(--paper-ink);
+    border-radius:3px;padding:26px 26px 20px;
+    box-shadow:6px 8px 0 rgba(0,0,0,.28);
+    font-size:11px;position:relative;z-index:2;
+  }
+  .pdf-page::before{
+    content:"arXiv:1512.03385v1 [cs.CV] 10 Dec 2015";
+    font-family:var(--mono);font-size:8.5px;color:#8A8272;
+    display:block;margin-bottom:10px;transform:rotate(-.4deg);
+  }
+  .pdf-title{font-family:var(--serif);font-size:15px;font-weight:700;text-align:center;line-height:1.35;margin-bottom:6px}
+  .pdf-authors{text-align:center;font-size:9.5px;color:#6B655A;margin-bottom:12px}
+  .tl{height:5px;border-radius:1px;background:#D8D0BD;margin:5px 0}
+  .tl.w98{width:98%}.tl.w92{width:92%}.tl.w100{width:100%}.tl.w88{width:88%}.tl.w95{width:95%}.tl.w60{width:60%}.tl.w75{width:75%}.tl.w40{width:40%}
+  .pdf-sec{font-family:var(--serif);font-size:10.5px;font-weight:700;margin:12px 0 5px}
+  .pdf-fig{
+    border:1px solid var(--paper-line);border-radius:2px;margin:10px auto;
+    padding:8px;background:#FBF7EC;
+  }
+  .pdf-fig svg{display:block;margin:0 auto}
+  .pdf-fig .cap{text-align:center;font-size:8.5px;color:#6B655A;margin-top:6px}
+  .pdf-page-2{
+    position:absolute;right:0;top:14px;width:78%;height:60px;
+    background:#E4DCC8;border-radius:3px;z-index:1;
+    box-shadow:4px 5px 0 rgba(0,0,0,.18);
+  }
+
+  .ext-card{
+    border:1px solid var(--line);border-radius:5px;background:var(--panel-2);
+    padding:16px 18px;margin-bottom:14px;
+  }
+  .ext-h{
+    display:flex;align-items:center;gap:10px;margin-bottom:12px;
+  }
+  .ext-h .sec-no{font-family:var(--mono);font-size:11px;color:var(--amber);letter-spacing:.5px}
+  .ext-h .sec-name{font-size:14px;font-weight:600}
+  .ext-h .sec-tip{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .kv{display:grid;grid-template-columns:96px 1fr;row-gap:9px;column-gap:14px;font-size:13px}
+  .kv dt{color:var(--faint);font-size:12px}
+  .kv dd{color:var(--ink)}
+  .kv dd.editable{
+    border-bottom:1px dashed var(--amber);cursor:text;display:inline-flex;gap:8px;align-items:center;
+  }
+  .kv dd.editable .pencil{font-size:11px;color:var(--amber)}
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{
+    font-family:var(--mono);font-size:11.5px;color:var(--ink);
+    border:1px solid var(--line-strong);border-radius:3px;
+    padding:5px 11px;background:var(--panel-3);
+  }
+  .chip small{color:var(--faint);font-size:10px}
+  .formula{
+    font-family:var(--mono);font-size:13px;color:var(--ink);
+    background:var(--bg-deep);border:1px solid var(--line);
+    border-left:3px solid var(--amber);
+    border-radius:3px;padding:10px 14px;margin-bottom:8px;
+    display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  }
+  .formula .eq-id{color:var(--faint);font-size:11px}
+  .goal-row{
+    display:flex;align-items:center;gap:12px;padding:10px 4px;
+    border-bottom:1px dashed var(--line);
+  }
+  .goal-row:last-child{border-bottom:none}
+  .goal-ico{
+    width:38px;height:28px;border:1px solid var(--paper-line);border-radius:2px;
+    background:var(--paper);flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--serif);font-size:10px;color:var(--paper-ink);font-weight:700;
+  }
+  .goal-name{flex:1;font-size:13px}
+  .goal-name .gn-sub{display:block;font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:1px}
+
+  .action-bar{
+    display:flex;align-items:center;gap:14px;margin-top:6px;
+    border:1px solid var(--line);border-radius:5px;
+    background:var(--panel);padding:14px 18px;
+  }
+  .action-bar .ab-note{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:auto}
+
+  /* ============ 视图三：Agent 工作台 ============ */
+  .agent-head{
+    display:flex;align-items:center;gap:16px;margin-bottom:18px;flex-wrap:wrap;
+  }
+  .agent-head h2{font-size:19px;font-weight:700}
+  .loop-chip{
+    display:inline-flex;align-items:center;gap:9px;
+    font-family:var(--mono);font-size:12px;color:var(--amber);
+    border:1px solid var(--amber-dim);background:rgba(240,167,46,.07);
+    border-radius:4px;padding:6px 13px;
+  }
+  .loop-chip .pulse{
+    width:8px;height:8px;border-radius:50%;background:var(--amber);
+  }
+  @media (prefers-reduced-motion: no-preference){
+    .loop-chip .pulse{animation:pulse 1.4s ease-in-out infinite}
+    .station.active .station-dot{animation:pulse-border 1.4s ease-in-out infinite}
+    .cursor{animation:blink 1s step-end infinite}
+  }
+  @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(240,167,46,.5)}50%{opacity:.6;box-shadow:0 0 0 5px rgba(240,167,46,0)}}
+  @keyframes pulse-border{0%,100%{box-shadow:0 0 0 0 rgba(240,167,46,.45)}50%{box-shadow:0 0 0 6px rgba(240,167,46,0)}}
+  @keyframes blink{50%{opacity:0}}
+  .agent-head .head-sub{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:auto}
+
+  .workbench{display:grid;grid-template-columns:212px minmax(0,1fr) 330px;gap:14px;align-items:stretch}
+
+  .files-panel{
+    border:1px solid var(--line);border-radius:5px;background:var(--panel-2);
+    padding:12px;min-width:0;
+  }
+  .files-h{font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:1px;padding:4px 8px 10px}
+  .ftree{font-family:var(--mono);font-size:12.5px}
+  .fnode{
+    display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:3px;
+    color:var(--muted);cursor:default;
+  }
+  .fnode .f-ico{width:14px;text-align:center;color:var(--faint);font-size:11px}
+  .fnode.on{background:var(--panel-3);color:var(--ink)}
+  .fnode .f-st{margin-left:auto;font-size:10px}
+  .f-st.ok{color:var(--green)}
+  .f-st.run{color:var(--amber)}
+  .fnode.depth2{padding-left:26px}
+
+  .code-panel{
+    border:1px solid var(--line);border-radius:5px;background:var(--bg-deep);
+    display:flex;flex-direction:column;min-width:0;overflow:hidden;
+  }
+  .code-tabs{display:flex;border-bottom:1px solid var(--line);background:var(--panel-2)}
+  .code-tab{
+    font-family:var(--mono);font-size:12px;padding:9px 18px;
+    color:var(--muted);background:none;border:none;
+    border-bottom:2px solid transparent;
+  }
+  .code-tab.on{color:var(--ink);border-bottom-color:var(--amber);background:var(--bg-deep)}
+  .code-tab:hover{color:var(--ink)}
+  .code-body{display:flex;padding:14px 0;overflow-x:auto;flex:1}
+  .lineno{
+    font-family:var(--mono);font-size:12px;color:#3E5F7E;text-align:right;
+    padding:0 14px 0 16px;user-select:none;line-height:1.75;flex-shrink:0;
+  }
+  .code-pre{
+    font-family:var(--mono);font-size:12px;line-height:1.75;
+    white-space:pre;color:#C9DCEC;min-width:0;
+  }
+  .c-kw{color:#7FB3E8}
+  .c-str{color:#D9A45B}
+  .c-num{color:#8ED0B0}
+  .c-com{color:#5E7A94;font-style:italic}
+  .c-fn{color:#E8CB7A}
+  .c-fix{background:rgba(70,192,138,.13);border-radius:2px}
+
+  .right-col{display:flex;flex-direction:column;gap:14px;min-width:0}
+  .terminal{
+    border:1px solid var(--line);border-radius:5px;background:#050F1A;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .term-h{
+    display:flex;align-items:center;gap:8px;padding:8px 12px;
+    border-bottom:1px solid var(--line);background:var(--panel-2);
+  }
+  .term-h .dots{display:flex;gap:5px}
+  .term-h .dots i{width:9px;height:9px;border-radius:50%;background:var(--line-strong)}
+  .term-h .t-name{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .term-body{
+    font-family:var(--mono);font-size:11.5px;line-height:1.8;
+    padding:12px 14px;overflow:auto;max-height:290px;
+  }
+  .t-cmd{color:var(--muted)}
+  .t-err{color:var(--red)}
+  .t-ok{color:var(--green)}
+  .t-agent{color:var(--amber)}
+  .t-run{color:#7FB3E8}
+  .t-dim{color:#4A6886}
+  .cursor{display:inline-block;width:7px;height:13px;background:var(--amber);vertical-align:-2px}
+
+  .loops-panel{
+    border:1px solid var(--line);border-radius:5px;background:var(--panel-2);
+    padding:14px;flex:1;
+  }
+  .loops-h{font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:1px;margin-bottom:12px}
+  .loop-item{display:flex;gap:12px;position:relative;padding-bottom:16px}
+  .loop-item:last-child{padding-bottom:0}
+  .loop-item::before{
+    content:"";position:absolute;left:10px;top:24px;bottom:0;
+    border-left:1px dashed var(--line-strong);
+  }
+  .loop-item:last-child::before{display:none}
+  .loop-no{
+    width:21px;height:21px;border-radius:50%;flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:10px;
+    border:1.5px solid var(--line-strong);color:var(--muted);background:var(--bg-deep);
+    position:relative;z-index:1;
+  }
+  .loop-item.bad .loop-no{border-color:var(--red);color:var(--red)}
+  .loop-item.good .loop-no{border-color:var(--green);color:var(--green)}
+  .loop-item.live .loop-no{border-color:var(--amber);color:var(--amber);background:rgba(240,167,46,.12)}
+  .loop-body{min-width:0;flex:1}
+  .loop-t{font-family:var(--mono);font-size:11.5px;color:var(--ink)}
+  .loop-item.bad .loop-t{color:var(--red)}
+  .loop-item.good .loop-t,.loop-item.live .loop-t{color:var(--green)}
+  .loop-d{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.55}
+  .loop-d .fix{color:var(--amber);font-family:var(--mono);font-size:11px}
+
+  .statusbar{
+    margin-top:14px;border:1px solid var(--line);border-radius:5px;
+    background:var(--panel);padding:10px 18px;
+    display:flex;align-items:center;gap:0;flex-wrap:wrap;
+    font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  }
+  .statusbar span{padding:0 18px}
+  .statusbar span:first-child{padding-left:0}
+  .statusbar span + span{border-left:1px solid var(--line)}
+  .statusbar b{color:var(--ink);font-weight:500}
+  .statusbar .sb-grow{margin-left:auto}
+  .statusbar .sb-cost{color:var(--green)}
+
+  /* ============ 视图四：报告 ============ */
+  .report-head{
+    display:flex;align-items:center;gap:26px;flex-wrap:wrap;
+    border:1px solid var(--line);border-radius:6px;
+    background:linear-gradient(150deg,var(--panel) 0%,var(--panel-2) 80%);
+    padding:22px 30px;margin-bottom:20px;
+  }
+  .score-big{display:flex;align-items:baseline;gap:6px}
+  .score-big .n{font-family:var(--serif);font-size:64px;font-weight:700;line-height:1;color:var(--ink)}
+  .score-big .d{font-family:var(--serif);font-size:22px;color:var(--faint)}
+  .score-breakdown{
+    font-family:var(--mono);font-size:11px;color:var(--muted);
+    line-height:2;margin-left:8px;
+  }
+  .score-breakdown i{font-style:normal;color:var(--ink)}
+  .verdict{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+  .report-grid{display:grid;grid-template-columns:7fr 5fr;gap:18px;align-items:start}
+
+  .panel{
+    border:1px solid var(--line);border-radius:5px;background:var(--panel-2);
+    padding:18px 20px;margin-bottom:18px;min-width:0;
+  }
+  .panel-h{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .panel-h .sec-no{font-family:var(--mono);font-size:11px;color:var(--amber)}
+  .panel-h .sec-name{font-size:14.5px;font-weight:600}
+  .panel-h .panel-tip{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--faint)}
+
+  table.cmp{width:100%;border-collapse:collapse}
+  table.cmp th{
+    font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.5px;
+    text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:400;
+  }
+  table.cmp th:first-child{text-align:left}
+  table.cmp td{
+    padding:11px 10px;border-bottom:1px dashed var(--line);
+    font-family:var(--mono);font-size:12.5px;text-align:right;color:var(--muted);
+  }
+  table.cmp td:first-child{text-align:left;font-family:var(--sans);font-size:13px;color:var(--ink)}
+  table.cmp td.paper-col{color:#D8CFB9}
+  table.cmp td.rep-col{color:var(--ink);font-weight:600}
+  table.cmp td .delta-bad{color:var(--red)}
+  table.cmp td .delta-ok{color:var(--green)}
+  table.cmp tr:last-child td{border-bottom:none}
+
+  .claim{
+    font-family:var(--mono);font-size:11.5px;line-height:2;
+    background:var(--bg-deep);border:1px solid var(--line);border-radius:4px;
+    padding:14px 16px;color:var(--muted);
+  }
+  .claim b{color:var(--ink);font-weight:500}
+  .claim .k{color:var(--faint);display:inline-block;width:118px}
+
+  .fig-compare{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .fig-plate{
+    border-radius:4px;padding:14px;min-width:0;
+  }
+  .fig-plate.paper-fig{background:var(--paper);box-shadow:4px 5px 0 rgba(0,0,0,.22)}
+  .fig-plate.rep-fig{background:var(--bg-deep);border:1px solid var(--line)}
+  .fig-plate .fp-tag{
+    font-family:var(--mono);font-size:10px;letter-spacing:1px;margin-bottom:10px;
+    display:flex;align-items:center;gap:8px;
+  }
+  .paper-fig .fp-tag{color:#6B655A}
+  .rep-fig .fp-tag{color:var(--muted)}
+  .fig-plate svg{width:100%;height:auto;display:block}
+  .fig-legend{
+    display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:10px;
+  }
+  .paper-fig .fig-legend{color:#6B655A}
+  .rep-fig .fig-legend{color:var(--muted)}
+  .fig-legend .li{display:flex;align-items:center;gap:6px}
+  .fig-legend .sw{width:16px;height:0;border-top:2px solid}
+  .rep-fig .sw.a{border-color:var(--green)}
+  .rep-fig .sw.b{border-top-style:dashed;border-color:#D8CFB9}
+
+  .assets-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .asset-note{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-left:auto}
+
+  /* ============ 响应式 ============ */
+  @media (max-width:1080px){
+    .workbench{grid-template-columns:190px minmax(0,1fr)}
+    .right-col{grid-column:1/-1;flex-direction:row}
+    .right-col .terminal{flex:1.2}
+    .right-col .loops-panel{flex:1}
+    .parse-grid{grid-template-columns:1fr}
+    .report-grid{grid-template-columns:1fr}
+  }
+  @media (max-width:860px){
+    .shell{grid-template-columns:1fr}
+    .sidebar{flex-direction:row;flex-wrap:wrap;align-items:center;border-right:none;border-bottom:1px solid var(--line)}
+    .sidebar-sep,.sidebar-note,.side-card{display:none}
+    .nav-item{width:auto;border-left:none;border-bottom:2px solid transparent}
+    .nav-item.on{border-left:none;border-bottom-color:var(--amber)}
+    .content{padding:20px 16px 50px}
+    .right-col{flex-direction:column}
+    .brand-sub{display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ 顶栏 ═══════════ -->
+<header class="topbar">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+      <rect x="1" y="1" width="24" height="24" rx="3" stroke="#3E6E96" stroke-width="1.5"/>
+      <path d="M7 5 h9 l3 3 v6" stroke="#8FB0CC" stroke-width="1.5" fill="none"/>
+      <path d="M7 10 h7 M7 13 h5" stroke="#5E82A3" stroke-width="1.2"/>
+      <path d="M11 19 l7-4.5 v9 z" fill="#F0A72E"/>
+    </svg>
+    <span class="brand-name">Paper<em>2</em>Run</span>
+    <span class="brand-sub">论文自动复现引擎 · Qwen POWERED</span>
+  </div>
+  <div class="topbar-right">
+    <span class="model-chip"><span class="live-dot"></span>Qwen3-Coder-32B + Qwen-VL <span class="caret">▾</span></span>
+  </div>
+</header>
+
+<!-- ═══════════ 装置条（签名元素：六道工序） ═══════════ -->
+<nav class="apparatus" id="apparatus" aria-label="复现流水线状态">
+  <div class="station" data-st="0"><span class="station-dot"></span><span class="station-label">上传论文</span></div>
+  <span class="station-link" data-lk="0"></span>
+  <div class="station" data-st="1"><span class="station-dot"></span><span class="station-label">解析提取</span></div>
+  <span class="station-link" data-lk="1"></span>
+  <div class="station" data-st="2"><span class="station-dot"></span><span class="station-label">生成代码</span></div>
+  <span class="station-link" data-lk="2"></span>
+  <div class="station" data-st="3"><span class="station-dot"></span><span class="station-label">沙箱执行</span></div>
+  <span class="station-link" data-lk="3"></span>
+  <div class="station" data-st="4"><span class="station-dot"></span><span class="station-label">修复循环</span></div>
+  <span class="station-link" data-lk="4"></span>
+  <div class="station" data-st="5"><span class="station-dot"></span><span class="station-label">复现报告</span></div>
+</nav>
+
+<div class="shell">
+
+  <!-- ═══════════ 侧栏 ═══════════ -->
+  <aside class="sidebar">
+    <button class="nav-item on" data-view="v1">工作台</button>
+    <button class="nav-item" data-view="v2">论文解析</button>
+    <button class="nav-item" data-view="v3">生成与执行</button>
+    <button class="nav-item" data-view="v4">复现报告</button>
+
+    <div class="sidebar-sep"></div>
+
+    <div class="side-card">
+      <div class="sc-eyebrow">当前项目</div>
+      <div class="sc-title">Deep Residual Learning for Image Recognition</div>
+      <div class="sc-status">◐ 修复循环 #3 · 运行中</div>
+    </div>
+
+    <div class="sidebar-note">
+      静态原型<br>页面数据均为演示用途
+    </div>
+  </aside>
+
+  <!-- ═══════════ 主内容 ═══════════ -->
+  <main class="content">
+
+    <!-- ─────────── 视图一：工作台 ─────────── -->
+    <section class="view on" id="v1">
+      <div class="hero">
+        <h1>把论文，<span class="accent">变成能跑的实验。</span></h1>
+        <p class="hero-sub">上传 PDF，Agent 解析方法、生成代码、沙箱运行、自动修复，最后交出一份与原文对照的复现报告。</p>
+      </div>
+
+      <div class="upload">
+        <div class="upload-icon" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+            <path d="M13 3 v13 M7 10 l6 6 6-6" stroke="#2B2A26" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M4 20 h18" stroke="#2B2A26" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="upload-main">
+          <div class="u-title">拖入论文 PDF，或粘贴 arXiv 链接</div>
+          <div class="u-sub">支持计算机视觉 / 自然语言处理常见范式 · v1 限定单卡可完成的实验规模</div>
+          <div class="upload-row">
+            <div class="upload-input">arxiv.org/abs/1512.03385 或 拖拽文件到此处…</div>
+            <button class="btn primary" data-goto="v2">开始复现</button>
+          </div>
+          <div class="samples">
+            <span class="s-label">试试示例:</span>
+            <button class="sample-chip" data-goto="v2">ResNet · 1512.03385</button>
+            <button class="sample-chip" data-goto="v2">Attention Is All You Need</button>
+            <button class="sample-chip" data-goto="v2">Playing Atari with DQN</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-h">
+        <h2>最近项目</h2>
+      </div>
+      <table class="recent">
+        <thead>
+          <tr><th>论文</th><th>状态</th><th>复现得分</th><th>耗时</th><th>循环</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="paper-title-cell">Deep Residual Learning for Image Recognition<span class="pid">arXiv:1512.03385 · CVPR 2016</span></td>
+            <td><span class="tag ok">✓ 已完成</span></td>
+            <td class="score-cell">87<span class="den">/100</span></td>
+            <td class="mono-cell">42 min</td>
+            <td class="mono-cell">3</td>
+            <td><button class="btn sm" data-goto="v4">查看报告</button></td>
+          </tr>
+          <tr>
+            <td class="paper-title-cell">Attention Is All You Need<span class="pid">arXiv:1706.03762 · NeurIPS 2017</span></td>
+            <td><span class="tag warn">◐ 修复循环 #3</span></td>
+            <td class="mono-cell">-</td>
+            <td class="mono-cell">12 min</td>
+            <td class="mono-cell">3</td>
+            <td><button class="btn sm" data-goto="v3">进入工作台</button></td>
+          </tr>
+          <tr>
+            <td class="paper-title-cell">Playing Atari with Deep RL<span class="pid">arXiv:1312.5602 · Nature 2015</span></td>
+            <td><span class="tag ok">✓ 已完成</span></td>
+            <td class="score-cell">91<span class="den">/100</span></td>
+            <td class="mono-cell">28 min</td>
+            <td class="mono-cell">2</td>
+            <td><button class="btn sm" data-goto="v4">查看报告</button></td>
+          </tr>
+          <tr>
+            <td class="paper-title-cell">U-Net: Convolutional Networks…<span class="pid">arXiv:1505.04597 · MICCAI 2015</span></td>
+            <td><span class="tag err">✗ 超过循环上限</span></td>
+            <td class="score-cell">43<span class="den">/100</span></td>
+            <td class="mono-cell">55 min</td>
+            <td class="mono-cell">5</td>
+            <td><button class="btn sm" data-goto="v4">诊断报告</button></td>
+          </tr>
+          <tr>
+            <td class="paper-title-cell">BERT: Pre-training of Deep…<span class="pid">arXiv:1810.04805 · NAACL 2019</span></td>
+            <td><span class="tag dim">排队中</span></td>
+            <td class="mono-cell">-</td>
+            <td class="mono-cell">-</td>
+            <td class="mono-cell">-</td>
+            <td><button class="btn sm" disabled style="opacity:.4;cursor:not-allowed">等待</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ─────────── 视图二：论文解析 ─────────── -->
+    <section class="view" id="v2">
+      <div class="view-head">
+        <div class="vh-main">
+          <h1 class="paper-h1">Deep Residual Learning for Image Recognition</h1>
+          <div class="paper-meta">
+            <span class="authors">Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun</span>
+            <span class="venue">CVPR 2016</span>
+            <span class="venue">arXiv:1512.03385</span>
+          </div>
+        </div>
+        <div class="conf-badge">
+          <div class="cb-label">解析置信度</div>
+          <div class="cb-val">92%</div>
+          <div class="conf-bar"><i></i></div>
+        </div>
+      </div>
+
+      <div class="parse-grid">
+        <!-- 左：论文原文（纸） -->
+        <div class="pdf-stage">
+          <div class="pdf-page-2" aria-hidden="true"></div>
+          <div class="pdf-page">
+            <div class="pdf-title">Deep Residual Learning<br>for Image Recognition</div>
+            <div class="pdf-authors">Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun<br>Microsoft Research</div>
+            <div class="tl w98"></div><div class="tl w100"></div><div class="tl w95"></div><div class="tl w88"></div><div class="tl w92"></div>
+            <div class="pdf-sec">1. Introduction</div>
+            <div class="tl w100"></div><div class="tl w95"></div><div class="tl w60"></div>
+            <div class="pdf-sec">2. Approach</div>
+            <div class="tl w98"></div><div class="tl w75"></div>
+            <div class="pdf-fig">
+              <svg width="220" height="64" viewBox="0 0 220 64" aria-hidden="true">
+                <rect x="6" y="10" width="40" height="18" fill="none" stroke="#2B2A26" stroke-width="1.2" rx="2"/>
+                <text x="26" y="22" font-size="8" text-anchor="middle" fill="#2B2A26" font-family="Georgia,serif">weight</text>
+                <rect x="6" y="36" width="40" height="18" fill="none" stroke="#2B2A26" stroke-width="1.2" rx="2"/>
+                <text x="26" y="48" font-size="8" text-anchor="middle" fill="#2B2A26" font-family="Georgia,serif">weight</text>
+                <rect x="62" y="10" width="34" height="18" fill="none" stroke="#2B2A26" stroke-width="1.2" rx="2"/>
+                <text x="79" y="22" font-size="8" text-anchor="middle" fill="#2B2A26" font-family="Georgia,serif">relu</text>
+                <rect x="62" y="36" width="34" height="18" fill="none" stroke="#2B2A26" stroke-width="1.2" rx="2"/>
+                <text x="79" y="48" font-size="8" text-anchor="middle" fill="#2B2A26" font-family="Georgia,serif">relu</text>
+                <text x="112" y="28" font-size="10" fill="#2B2A26" font-family="Georgia,serif">⊕</text>
+                <path d="M112 33 v18 h-8" stroke="#2B2A26" stroke-width="1.2" fill="none"/>
+                <path d="M112 33 v14 h30 v-40 h-10" stroke="#2B2A26" stroke-width="1" stroke-dasharray="3,2" fill="none"/>
+                <text x="132" y="45" font-size="8" fill="#6B655A" font-family="Georgia,serif">identity</text>
+                <path d="M148 27 h20" stroke="#2B2A26" stroke-width="1.2"/>
+                <rect x="170" y="18" width="34" height="18" fill="none" stroke="#2B2A26" stroke-width="1.2" rx="2"/>
+                <text x="187" y="30" font-size="8" text-anchor="middle" fill="#2B2A26" font-family="Georgia,serif">relu</text>
+                <path d="M0 19 h4 M0 45 h4 M204 27 h10" stroke="#2B2A26" stroke-width="1.2"/>
+              </svg>
+              <div class="cap">Fig. 1. Residual learning: a building block.</div>
+            </div>
+            <div class="tl w92"></div><div class="tl w88"></div><div class="tl w40"></div>
+          </div>
+        </div>
+
+        <!-- 右：提取结果 -->
+        <div>
+          <div class="ext-card">
+            <div class="ext-h"><span class="sec-name">任务画像</span></div>
+            <dl class="kv">
+              <dt>任务类型</dt><dd>图像分类（监督学习）</dd>
+              <dt>数据集</dt><dd class="editable">CIFAR-10 <span class="pencil">✏ 改为 ImageNet</span></dd>
+              <dt>评价指标</dt><dd>Top-1 Accuracy</dd>
+              <dt>输入规格</dt><dd>32 × 32 × 3（CIFAR 设置）</dd>
+              <dt>硬件需求</dt><dd>单卡 GPU ≥ 8GB 显存</dd>
+            </dl>
+          </div>
+
+          <div class="ext-card">
+            <div class="ext-h"><span class="sec-name">方法实体</span></div>
+            <div class="chips">
+              <span class="chip">残差连接 <small>identity shortcut</small></span>
+              <span class="chip">BatchNorm</span>
+              <span class="chip">SGD + Momentum <small>0.9</small></span>
+              <span class="chip">He 初始化</span>
+              <span class="chip">权重衰减 <small>5e-4</small></span>
+              <span class="chip">数据增强 <small>裁剪 + 翻转</small></span>
+            </div>
+          </div>
+
+          <div class="ext-card">
+            <div class="ext-h"><span class="sec-name">关键公式</span></div>
+            <div class="formula"><span>y = F(x, {W&#8342;}) + x</span><span class="eq-id">Eq. 1</span></div>
+            <div class="formula"><span>H(x) = F(x, {W&#8342;}) + x &nbsp;→&nbsp; F(x) = W&#8322;σ(W&#8321;x)</span><span class="eq-id">Eq. 4-5</span></div>
+          </div>
+
+          <div class="ext-card">
+            <div class="ext-h"><span class="sec-name">复现对比目标</span></div>
+            <div class="goal-row">
+              <span class="goal-ico">T6</span>
+              <span class="goal-name">Table 6 · CIFAR-10 误差率<span class="gn-sub">普通层 vs 残差层，6.37% / 5.46% test error</span></span>
+              <span class="tag ok">✓ 已设为对比目标</span>
+            </div>
+            <div class="goal-row">
+              <span class="goal-ico">F4</span>
+              <span class="goal-name">Fig. 4 · 训练 / 验证曲线<span class="gn-sub">plain-20 vs ResNet-20，误差随 epoch 变化</span></span>
+              <span class="tag ok">✓ 已设为对比目标</span>
+            </div>
+            <div class="goal-row">
+              <span class="goal-ico">T1</span>
+              <span class="goal-name">Table 1 · ImageNet Top-5<span class="gn-sub">需 8 GPU，大规模训练</span></span>
+              <span class="tag dim">未启用</span>
+            </div>
+          </div>
+
+          <div class="action-bar">
+            <button class="btn primary" data-goto="v3">确认解析，开始生成代码 →</button>
+            <span class="ab-note">确认后进入 Agent 工作台，预计 8~15 分钟出首版代码</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── 视图三：生成与执行 ─────────── -->
+    <section class="view" id="v3">
+      <div class="agent-head">
+        <h2>Agent 工作台</h2>
+        <span class="loop-chip"><span class="pulse"></span>修复循环 #3 运行中</span>
+        <span class="head-sub">docker --network=none --memory=8g</span>
+      </div>
+
+      <div class="workbench">
+        <!-- 文件树 -->
+        <div class="files-panel">
+          <div class="files-h">生成文件</div>
+          <div class="ftree">
+            <div class="fnode depth2"><span class="f-ico">▸</span>data/</div>
+            <div class="fnode depth2"><span class="f-ico">▸</span>checkpoints/</div>
+            <div class="fnode"><span class="f-ico">◦</span>model.py<span class="f-st ok">✓</span></div>
+            <div class="fnode on"><span class="f-ico">◦</span>train.py<span class="f-st run">◐</span></div>
+            <div class="fnode"><span class="f-ico">◦</span>dataset.py<span class="f-st ok">✓</span></div>
+            <div class="fnode"><span class="f-ico">◦</span>eval.py<span class="f-st ok">✓</span></div>
+            <div class="fnode"><span class="f-ico">◦</span>requirements.txt<span class="f-st ok">✓</span></div>
+            <div class="fnode"><span class="f-ico">◦</span>loop_log.jsonl<span class="f-st ok">✓</span></div>
+          </div>
+        </div>
+
+        <!-- 代码视图 -->
+        <div class="code-panel">
+          <div class="code-tabs">
+            <button class="code-tab on">train.py</button>
+            <button class="code-tab">model.py</button>
+            <button class="code-tab">dataset.py</button>
+          </div>
+          <div class="code-body">
+<div class="lineno">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11<br>12<br>13<br>14<br>15<br>16<br>17<br>18<br>19<br>20<br>21<br>22<br>23<br>24<br>25<br>26<br>27<br>28<br>29<br>30<br>31<br>32<br>33<br>34<br>35</div>
+<pre class="code-pre"><span class="c-com"># train.py 由 Paper2Run 依据解析结果生成</span>
+<span class="c-kw">import</span> torch
+<span class="c-kw">from</span> model <span class="c-kw">import</span> ResNet18
+<span class="c-kw">from</span> dataset <span class="c-kw">import</span> load_cifar10
+
+CFG = {
+    <span class="c-str">"epochs"</span>: <span class="c-num">120</span>,
+    <span class="c-str">"batch_size"</span>: <span class="c-num">128</span>,      <span class="c-com"># RUN#2 修复: 512 → 128</span>
+    <span class="c-str">"lr"</span>: <span class="c-num">0.05</span>,            <span class="c-com"># RUN#1 修复: 1.0 → 0.05</span>
+    <span class="c-str">"momentum"</span>: <span class="c-num">0.9</span>,
+    <span class="c-str">"weight_decay"</span>: <span class="c-num">5e-4</span>,
+    <span class="c-str">"seed"</span>: <span class="c-num">42</span>,
+}
+
+<span class="c-kw">def</span> <span class="c-fn">train</span>():
+    torch.manual_seed(CFG[<span class="c-str">"seed"</span>])
+    model = ResNet18().cuda()
+    train_loader, val_loader = <span class="c-fn">load_cifar10</span>(CFG[<span class="c-str">"batch_size"</span>])
+    opt = torch.optim.SGD(model.<span class="c-fn">parameters</span>(), lr=CFG[<span class="c-str">"lr"</span>],
+                          momentum=CFG[<span class="c-str">"momentum"</span>],
+                          weight_decay=CFG[<span class="c-str">"weight_decay"</span>])
+    sched = CosineAnnealingLR(opt, CFG[<span class="c-str">"epochs"</span>])
+    <span class="c-kw">for</span> epoch <span class="c-kw">in</span> <span class="c-fn">range</span>(CFG[<span class="c-str">"epochs"</span>]):
+        model.<span class="c-fn">train</span>()
+        <span class="c-kw">for</span> x, y <span class="c-kw">in</span> train_loader:
+            loss = F.cross_entropy(model(x.cuda()), y.cuda())
+            opt.zero_grad(); loss.<span class="c-fn">backward</span>(); opt.<span class="c-fn">step</span>()
+        sched.<span class="c-fn">step</span>()
+        <span class="c-kw">if</span> epoch % <span class="c-num">20</span> == <span class="c-num">0</span>:
+            acc = <span class="c-fn">evaluate</span>(model, val_loader)
+            <span class="c-fn">print</span>(<span class="c-str">f"epoch={epoch} loss={loss.item():.4f} acc={acc:.2%}"</span>)
+    torch.save(model.state_dict(), <span class="c-str">"resnet18_cifar10.pt"</span>)
+
+<span class="c-kw">if</span> __name__ == <span class="c-str">"__main__"</span>:
+    <span class="c-fn">train</span>()</pre>
+          </div>
+        </div>
+
+        <!-- 右列：终端 + 循环时间线 -->
+        <div class="right-col">
+          <div class="terminal">
+            <div class="term-h">
+              <span class="dots"><i></i><i></i><i></i></span>
+              <span class="t-name">sandbox: python train.py</span>
+            </div>
+            <div class="term-body">
+<div class="t-dim">$ docker run --rm --network=none paper2run:sbx</div>
+<div class="t-run">[RUN #1] python train.py</div>
+<div class="t-err">✗ RuntimeError: loss became NaN at epoch 0, step 340</div>
+<div class="t-agent">[AGENT] 诊断: lr=1.0 过大，与论文 §4.2 (lr=0.05) 不符</div>
+<div class="t-agent">[AGENT] 补丁: train.py:9 lr 1.0 → 0.05</div>
+<div class="t-run">[RUN #2] python train.py</div>
+<div class="t-err">✗ CUDA OOM: batch_size=512 超出沙箱 8G 限制</div>
+<div class="t-agent">[AGENT] 诊断: 论文 Table 6 设置 batch=128</div>
+<div class="t-agent">[AGENT] 补丁: train.py:8 batch_size 512 → 128</div>
+<div class="t-run">[RUN #3] python train.py</div>
+<div class="t-ok">✓ epoch=0   loss=1.9821  acc=32.41%</div>
+<div class="t-ok">✓ epoch=20  loss=0.8412  acc=76.90%</div>
+<div class="t-ok">✓ epoch=40  loss=0.5231  acc=84.14%</div>
+<div class="t-ok">◐ epoch=41 训练中 <span class="cursor"></span></div>
+            </div>
+          </div>
+
+          <div class="loops-panel">
+            <div class="loops-h">修复循环</div>
+            <div class="loop-item bad">
+              <span class="loop-no">#1</span>
+              <div class="loop-body">
+                <div class="loop-t">✗ loss = NaN</div>
+                <div class="loop-d">Agent: 学习率与论文不符 <span class="fix">lr 1.0 → 0.05</span></div>
+              </div>
+            </div>
+            <div class="loop-item bad">
+              <span class="loop-no">#2</span>
+              <div class="loop-body">
+                <div class="loop-t">✗ CUDA OOM</div>
+                <div class="loop-d">Agent: 沙箱显存限制 <span class="fix">batch 512 → 128</span></div>
+              </div>
+            </div>
+            <div class="loop-item live">
+              <span class="loop-no">#3</span>
+              <div class="loop-body">
+                <div class="loop-t">◐ 训练进行中</div>
+                <div class="loop-d">epoch 41/120，acc 84.1%，无报错</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <span>沙箱 <b>Docker</b></span>
+        <span>环境 <b>Python 3.11 · torch 2.3.1</b></span>
+        <span>已运行 <b>12m 34s</b></span>
+        <span>自动修复 <b>2 处</b></span>
+        <span class="sb-grow"></span>
+        <span class="sb-cost">预计成本 ¥1.8</span>
+      </div>
+    </section>
+
+    <!-- ─────────── 视图四：复现报告 ─────────── -->
+    <section class="view" id="v4">
+      <div class="report-head">
+        <div>
+          <div class="score-big"><span class="n">87</span><span class="d">/100</span></div>
+        </div>
+        <div class="score-breakdown">
+          指标吻合度 <i>54 / 60</i><br>
+          流程完整度 <i>22 / 25</i><br>
+          环境可复刻度 <i>11 / 15</i>
+        </div>
+        <div class="verdict">
+          <span class="tag ok" style="font-size:13px;padding:6px 14px">✓ 核心结论成立</span>
+          <span class="mono-cell" style="font-size:11px">历经 3 轮修复循环，共 42 分钟</span>
+        </div>
+      </div>
+
+      <div class="report-grid">
+        <div>
+          <div class="panel">
+            <div class="panel-h"><span class="sec-name">指标对比</span></div>
+            <table class="cmp">
+              <thead><tr><th>指标</th><th>论文报告</th><th>复现结果</th><th>偏差</th></tr></thead>
+              <tbody>
+                <tr><td>Top-1 Accuracy</td><td class="paper-col">94.10%</td><td class="rep-col">93.72%</td><td><span class="delta-bad">−0.38pp</span></td></tr>
+                <tr><td>参数量</td><td class="paper-col">11.2M</td><td class="rep-col">11.2M</td><td><span class="delta-ok">0</span></td></tr>
+                <tr><td>Batch Size</td><td class="paper-col">128</td><td class="rep-col">128</td><td><span class="delta-ok">0</span></td></tr>
+                <tr><td>训练轮数</td><td class="paper-col">164</td><td class="rep-col">120</td><td class="mono-cell">提前收敛</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="panel">
+            <div class="panel-h"><span class="sec-name">曲线对比</span><span class="panel-tip">对应论文 Fig. 4</span></div>
+            <div class="fig-compare">
+              <div class="fig-plate paper-fig">
+                <div class="fp-tag">论文原图 Fig. 4</div>
+                <svg viewBox="0 0 260 150" aria-label="论文原始曲线">
+                  <rect x="30" y="8" width="218" height="118" fill="none" stroke="#B7AD95" stroke-width="1"/>
+                  <g stroke="#DCD4BE" stroke-width=".5">
+                    <line x1="30" y1="37" x2="248" y2="37"/><line x1="30" y1="66" x2="248" y2="66"/><line x1="30" y1="95" x2="248" y2="95"/>
+                    <line x1="84" y1="8" x2="84" y2="126"/><line x1="139" y1="8" x2="139" y2="126"/><line x1="193" y1="8" x2="193" y2="126"/>
+                  </g>
+                  <polyline points="30,20 48,26 66,33 84,41 102,49 120,56 139,63 157,69 175,74 193,79 211,83 229,86 248,89"
+                            fill="none" stroke="#2B2A26" stroke-width="1.6"/>
+                  <polyline points="30,24 48,31 66,39 84,48 102,56 120,63 139,70 157,75 175,80 193,84 211,87 229,90 248,92"
+                            fill="none" stroke="#2B2A26" stroke-width="1" stroke-dasharray="4,3"/>
+                  <text x="139" y="142" font-size="9" text-anchor="middle" fill="#6B655A" font-family="Georgia,serif">iterations (×1000)</text>
+                  <text x="14" y="70" font-size="9" fill="#6B655A" font-family="Georgia,serif" transform="rotate(-90 14,70)">error (%)</text>
+                </svg>
+                <div class="fig-legend"><span class="li"><span class="sw" style="border-color:#2B2A26"></span>plain-20</span><span class="li"><span class="sw" style="border-color:#2B2A26;border-top-style:dashed"></span>ResNet-20</span></div>
+              </div>
+              <div class="fig-plate rep-fig">
+                <div class="fp-tag">沙箱复现 seed=42</div>
+                <svg viewBox="0 0 260 150" aria-label="复现曲线">
+                  <rect x="30" y="8" width="218" height="118" fill="none" stroke="#24486B" stroke-width="1"/>
+                  <g stroke="#1A3A57" stroke-width=".5">
+                    <line x1="30" y1="37" x2="248" y2="37"/><line x1="30" y1="66" x2="248" y2="66"/><line x1="30" y1="95" x2="248" y2="95"/>
+                    <line x1="84" y1="8" x2="84" y2="126"/><line x1="139" y1="8" x2="139" y2="126"/><line x1="193" y1="8" x2="193" y2="126"/>
+                  </g>
+                  <polyline points="30,22 48,28 66,35 84,43 102,51 120,58 139,65 157,71 175,76 193,81 211,85 229,88 248,91"
+                            fill="none" stroke="#D8CFB9" stroke-width="1.2" stroke-dasharray="4,3"/>
+                  <polyline points="30,25 48,32 66,40 84,49 102,57 120,64 139,71 157,76 175,81 193,85 211,88 229,91 248,93"
+                            fill="none" stroke="#46C08A" stroke-width="1.8"/>
+                  <circle cx="248" cy="91" r="3" fill="#46C08A"/>
+                  <text x="139" y="142" font-size="9" text-anchor="middle" fill="#5E82A3" font-family="monospace">epoch (0-120)</text>
+                  <text x="14" y="70" font-size="9" fill="#5E82A3" font-family="monospace" transform="rotate(-90 14,70)">error (%)</text>
+                </svg>
+                <div class="fig-legend"><span class="li"><span class="sw a"></span>复现 ResNet-20</span><span class="li"><span class="sw b"></span>论文参考曲线</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="panel">
+            <div class="panel-h"><span class="sec-name">复现声明</span></div>
+            <div class="claim">
+              <span class="k">seed</span>= <b>42</b><br>
+              <span class="k">commit</span>= <b>a3f9c2e</b><br>
+              <span class="k">torch</span>= <b>2.3.1+cu121</b><br>
+              <span class="k">数据集校验</span>= <b>cifar10 md5 ✓</b><br>
+              <span class="k">沙箱</span>= docker --network=none<br>
+              <span class="k">修复循环</span>= <b>3 轮 · 已全部披露</b><br>
+              <span class="k">训练日志</span>= train.log (2.1MB)
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-h"><span class="sec-name">下载资产</span></div>
+            <div class="assets-row">
+              <button class="btn primary sm">⬇ 代码包 .zip</button>
+              <button class="btn sm">Docker 镜像</button>
+              <button class="btn sm">训练日志</button>
+              <button class="btn sm">报告 PDF</button>
+            </div>
+            <div class="assets-row" style="margin-top:14px">
+              <button class="btn sm">公开分享复现报告 →</button>
+              <span class="asset-note">含环境 lock，他人可一键复刻</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // ── 视图切换 + 装置条状态 ──
+  // 每个视图对应的六道工序状态: done / active / idle
+  const PIPELINE = {
+    v1: ["active","idle","idle","idle","idle","idle"],
+    v2: ["done","active","idle","idle","idle","idle"],
+    v3: ["done","done","done","done","active","idle"],
+    v4: ["done","done","done","done","done","done"],
+  };
+  const navItems = document.querySelectorAll(".nav-item");
+  const stations = document.querySelectorAll(".station");
+  const links    = document.querySelectorAll(".station-link");
+
+  function switchView(id){
+    document.querySelectorAll(".view").forEach(v=>v.classList.remove("on"));
+    document.getElementById(id).classList.add("on");
+    navItems.forEach(n=>n.classList.toggle("on", n.dataset.view===id));
+    const st = PIPELINE[id];
+    stations.forEach(s=>{
+      s.classList.remove("done","active");
+      if(st[+s.dataset.st]==="done") s.classList.add("done");
+      if(st[+s.dataset.st]==="active") s.classList.add("active");
+    });
+    links.forEach((l,i)=>{
+      l.classList.toggle("done", st[i]==="done" && st[i+1]!=="idle");
+    });
+    window.scrollTo({top:0});
+  }
+
+  navItems.forEach(n=>n.addEventListener("click",()=>switchView(n.dataset.view)));
+  document.querySelectorAll("[data-goto]").forEach(b=>
+    b.addEventListener("click",()=>switchView(b.dataset.goto))
+  );
+
+  // 代码 tab（静态原型：仅切换高亮）
+  document.querySelectorAll(".code-tab").forEach(t=>t.addEventListener("click",()=>{
+    document.querySelectorAll(".code-tab").forEach(x=>x.classList.remove("on"));
+    t.classList.add("on");
+  }));
+</script>
+</body>
+</html>
