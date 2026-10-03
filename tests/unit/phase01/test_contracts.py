@@ -24,7 +24,6 @@ from p2r_contracts.sessions import (
     PermissionDecision,
     RecoveryStatus,
     SessionCreate,
-    SessionCreateRequest,
     SessionInfo,
     SessionStatus,
     TrustClass,
@@ -71,7 +70,6 @@ def test_envelopes_and_error_dto():
 
 def test_session_dtos_round_trip_and_public_shape():
     now = datetime.now(timezone.utc)
-    request = SessionCreateRequest(invite_token="invite-secret")
     info = SessionInfo(
         user={"id": "u1", "display_name": "Ada"},
         session={"expires_at": now, "idle_expires_at": now},
@@ -79,7 +77,6 @@ def test_session_dtos_round_trip_and_public_shape():
         permissions={"can_create_project": True},
         memberships=[{"project_id": "p1", "role": "owner"}],
     )
-    assert request.invite_token == "invite-secret"
     assert set(info.model_dump()) == {"user", "session", "csrf_token", "permissions", "memberships"}
     assert info.user.id == "u1"
 
@@ -97,11 +94,6 @@ def test_session_dtos_reject_legacy_flat_or_extra_fields():
             memberships=[],
             status="active",
         )
-
-
-def test_invite_token_has_reasonable_bound():
-    with pytest.raises(ValidationError):
-        SessionCreateRequest(invite_token="x" * 4097)
 
 
 def test_science_contracts_validate_bounds_hashes_and_allowlist():

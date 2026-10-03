@@ -68,10 +68,6 @@ class SessionCreate(_Contract):
     trust_class: TrustClass
 
 
-class SessionCreateRequest(_Contract):
-    invite_token: str = Field(min_length=1, max_length=4096)
-
-
 class SessionUser(_Contract):
     id: str = _ID
     display_name: str = Field(min_length=1, max_length=256)

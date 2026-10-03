@@ -14,6 +14,12 @@ if config.config_file_name:
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata
 
+# Allow CI and local migration checks to select an isolated database without
+# mutating the checked-in Alembic URL.
+_x_args = context.get_x_argument(as_dictionary=True)
+if _x_args.get("db_url"):
+    config.set_main_option("sqlalchemy.url", _x_args["db_url"])
+
 
 def run_migrations_offline() -> None:
     context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True, dialect_opts={"paramstyle": "named"})

@@ -26,18 +26,18 @@ class WorkerService:
             job = JobRepository(session).claim(worker_id=worker_id, lease_seconds=lease_seconds)
             if job is None:
                 return False
-            job_id, kind, payload_ref = job.id, job.kind, job.payload_ref
+            job_id, kind, payload_ref, fencing_token = job.id, job.kind, job.payload_ref, job.fencing_token
         handler = self._handlers.get(kind)
         if handler is None:
             with self.session_factory.begin() as session:
-                JobRepository(session).fail(job_id, worker_id=worker_id, error=f"unknown job kind: {kind}")
+                JobRepository(session).fail(job_id, worker_id=worker_id, fencing_token=fencing_token, error=f"unknown job kind: {kind}")
             raise UnknownJobKind(kind)
         try:
             handler(payload_ref)
         except Exception as exc:
             with self.session_factory.begin() as session:
-                JobRepository(session).fail(job_id, worker_id=worker_id, error=str(exc))
+                JobRepository(session).fail(job_id, worker_id=worker_id, fencing_token=fencing_token, error=str(exc))
             raise
         with self.session_factory.begin() as session:
-            JobRepository(session).complete(job_id, worker_id=worker_id)
+            JobRepository(session).complete(job_id, worker_id=worker_id, fencing_token=fencing_token)
         return True

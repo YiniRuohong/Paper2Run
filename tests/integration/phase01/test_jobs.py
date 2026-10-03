@@ -56,6 +56,63 @@ def test_job_claim_respects_availability_and_idempotency(tmp_path):
         assert repo.claim(worker_id="worker") is None
 
 
+def test_job_heartbeat_extends_lease_with_current_fence(tmp_path):
+    factory = db(tmp_path)
+    with factory.begin() as session:
+        job = JobRepository(session).enqueue(kind="heartbeat", payload_ref="a")
+        claimed = JobRepository(session).claim(worker_id="worker-a", lease_seconds=1)
+        token = claimed.fencing_token
+        original_lease_until = claimed.lease_until
+        assert JobRepository(session).heartbeat(
+            job.id, worker_id="worker-a", fencing_token=token, lease_seconds=60
+        )
+        assert claimed.lease_until > original_lease_until
+
+
+def test_stale_fence_cannot_heartbeat_or_complete_reclaimed_job(tmp_path):
+    factory = db(tmp_path)
+    with factory.begin() as session:
+        job = JobRepository(session).enqueue(kind="heartbeat", payload_ref="a")
+        first = JobRepository(session).claim(worker_id="worker-a", lease_seconds=1)
+        old_token = first.fencing_token
+        first.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+        assert JobRepository(session).requeue_expired() == 1
+        second = JobRepository(session).claim(worker_id="worker-b")
+        assert second.fencing_token == old_token + 1
+        repo = JobRepository(session)
+        assert not repo.heartbeat(job.id, worker_id="worker-b", fencing_token=old_token)
+        assert not repo.complete(job.id, worker_id="worker-b", fencing_token=old_token)
+        assert repo.complete(job.id, worker_id="worker-b", fencing_token=second.fencing_token)
+
+
+def test_requeue_owned_rejects_stale_fence_and_wrong_owner(tmp_path):
+    factory = db(tmp_path)
+    with factory.begin() as session:
+        repo = JobRepository(session)
+        job = repo.enqueue(kind="run_fixture", payload_ref="fixture")
+        first = repo.claim(worker_id="worker-a")
+        job_id, old_token = job.id, first.fencing_token
+        first.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+        assert repo.requeue_expired() == 1
+        second = repo.claim(worker_id="worker-a")
+        current_token = second.fencing_token
+    with factory.begin() as session:
+        repo = JobRepository(session)
+        assert not repo.requeue_owned(job_id, worker_id="worker-a", fencing_token=old_token)
+        assert not repo.requeue_owned(job_id, worker_id="worker-b", fencing_token=current_token)
+    with factory() as session:
+        stored = session.get(Job, job_id)
+        assert stored.status == "running"
+        assert stored.fencing_token == current_token
+        assert stored.leased_by == "worker-a"
+    with factory.begin() as session:
+        assert JobRepository(session).requeue_owned(job_id, worker_id="worker-a", fencing_token=current_token)
+    with factory.begin() as session:
+        reclaimed = JobRepository(session).claim(worker_id="worker-b")
+        assert reclaimed.id == job_id
+        assert reclaimed.fencing_token == current_token + 1
+
+
 def test_expired_running_job_is_requeued_and_claimable(tmp_path):
     factory = db(tmp_path)
     with factory.begin() as session:
@@ -68,6 +125,43 @@ def test_expired_running_job_is_requeued_and_claimable(tmp_path):
         claimed = JobRepository(session).claim(worker_id="worker-2")
         assert claimed.id == job.id
         assert claimed.attempt == 2
+
+
+@pytest.mark.parametrize("handler_fails", [False, True])
+def test_worker_stale_execution_cannot_finish_reclaimed_lease(tmp_path, handler_fails):
+    factory = db(tmp_path)
+    worker = WorkerService(factory)
+    with factory.begin() as session:
+        job_id = JobRepository(session).enqueue(kind="known", payload_ref="ref-1").id
+
+    def reclaim_during_handler(payload_ref):
+        assert payload_ref == "ref-1"
+        with factory.begin() as session:
+            job = session.get(Job, job_id)
+            old_token = job.fencing_token
+            job.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+            session.flush()
+            repo = JobRepository(session)
+            assert repo.requeue_expired() == 1
+            reclaimed = repo.claim(worker_id="same-worker")
+            assert reclaimed.id == job_id
+            assert reclaimed.fencing_token == old_token + 1
+        if handler_fails:
+            raise RuntimeError("controlled handler failure")
+
+    worker.register("known", reclaim_during_handler)
+    if handler_fails:
+        with pytest.raises(RuntimeError, match="controlled handler failure"):
+            worker.run_once(worker_id="same-worker")
+    else:
+        worker.run_once(worker_id="same-worker")
+    with factory() as session:
+        stored = session.get(Job, job_id)
+        assert stored.status == "running"
+        assert stored.leased_by == "same-worker"
+        assert stored.fencing_token == 2
+        assert stored.lease_until is not None
+        assert stored.error is None
 
 
 def test_worker_dispatch_uses_registered_handler_only(tmp_path):
