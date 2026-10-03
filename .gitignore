@@ -2,6 +2,10 @@
 .superpowers/
 .p2r-demo/
 .p2r-demo-*/
+.p2r-app/
+.p2r-e2e-*/
+.p2r-guided-verification/
+.p2r-loopback-fix/
 *.log
 *.sqlite3
 *.sqlite3-*
