@@ -1,0 +1,251 @@
+/* ============================================================
+   Paper2Run 实操工作台 — Swiss International Typographic Style
+   黑白灰阶 · 发丝线网格 · 极大字号对比 · 零色相
+   ============================================================ */
+
+.guided-page {
+  --bg: #FFFFFF;
+  --surface: #FAFAFA;
+  --surface-2: #F4F4F4;
+  --line: #E2E2E2;
+  --line-strong: #111111;
+  --text: #111111;
+  --muted: #666666;
+  --faint: #999999;
+  --accent: #111111;
+  --accent-ink: #FFFFFF;
+  --ok: #111111;
+  --warn: #111111;
+  --bad: #111111;
+  --info: #666666;
+  --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --sans: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
+  box-sizing: border-box;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 48px 28px 72px;
+  color: var(--text);
+  color-scheme: light;
+  background: #FFFFFF;
+  font: 15px/1.7 var(--sans);
+  min-height: 100vh;
+}
+.guided-page * { box-sizing: border-box; }
+
+/* ---------- 头部 ---------- */
+.guided-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 14px; }
+.guided-brand { display: flex; gap: 16px; align-items: flex-start; }
+/* 品牌方块：黑底白边，无渐变 */
+.guided-mark {
+  width: 40px; height: 40px; flex: none; margin-top: 6px;
+  border: 1px solid #111111;
+  background: #111111;
+  position: relative;
+}
+.guided-mark::after {
+  content: ''; position: absolute; inset: 11px;
+  border: 2px solid #FFFFFF; border-radius: 0;
+  transform: rotate(45deg);
+  border-right-color: transparent; border-bottom-color: transparent;
+}
+/* 主标题：瑞士极大字号 */
+.guided-page h1 { font-size: clamp(32px, 4.4vw, 44px); letter-spacing: -0.02em; line-height: 1.1; margin: 6px 0 0; font-weight: 700; color: #111111; }
+.guided-page h2 { font-size: 24px; letter-spacing: -0.01em; margin: 6px 0 14px; font-weight: 700; color: #111111; }
+.guided-page h3 { font-size: 11px; letter-spacing: 0.1em; margin: 26px 0 10px; color: var(--muted); text-transform: uppercase; font-weight: 700; }
+.guided-page p { color: var(--muted); margin: 8px 0; }
+/* Kicker：全大写，宽字距，无彩色 */
+.guided-kicker { font: 700 10px/1.5 var(--mono); letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase; }
+.guided-actor { font: 10px/1.5 var(--mono); letter-spacing: 0.08em; color: var(--faint); border: 1px solid #E2E2E2; padding: 4px 10px; white-space: nowrap; margin-top: 8px; background: #FAFAFA; text-transform: uppercase; }
+/* Lede：黑色左边线引言，无渐变 */
+.guided-lede {
+  color: var(--muted); max-width: 68ch; margin: 2px 0 30px; padding: 14px 18px;
+  border-left: 2px solid #111111; background: #FAFAFA;
+  border-radius: 0 12px 12px 0;
+  font-size: 14px; line-height: 1.7;
+}
+
+/* ---------- 步骤轨 ---------- */
+.guided-realflow { display: block; }
+.guided-steps {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0;
+  margin: 6px 0 26px;
+  background: #FFFFFF; border: 1px solid #111111;
+  border-radius: 12px; overflow: hidden;
+}
+/* 步骤按钮：发丝线分隔，无圆角 */
+.guided-steps button {
+  border: 0; border-right: 1px solid #E2E2E2; padding: 14px 8px 13px;
+  color: var(--muted); background: transparent;
+  font: 600 10px/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+  border-top: 2px solid transparent;
+}
+.guided-steps button:last-child { border-right: 0; }
+.guided-steps b { display: block; font: 700 16px/1 var(--mono); margin-bottom: 7px; color: inherit; }
+/* 当前步骤：黑底反白 */
+.guided-steps .active { color: #FFFFFF; background: #111111; border-top-color: #111111; }
+.guided-steps .active b { color: #FFFFFF; }
+.guided-steps button:not(:disabled):not(.active):hover { color: #111111; background: #F4F4F4; }
+.guided-page .guided-steps button:disabled { opacity: 0.4; }
+
+/* ---------- 主卡片 ---------- */
+.guided-card {
+  padding: 36px 38px;
+  min-height: 340px;
+  background: #FFFFFF;
+  border: 1px solid #111111;
+  border-radius: 18px;
+  animation: guided-enter 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.guided-card > .guided-kicker { display: block; margin-bottom: 6px; color: var(--muted); }
+
+/* ---------- 表单 ---------- */
+.guided-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 4px 18px; margin: 14px 0; }
+.guided-field { display: block; margin: 10px 0; font-size: 11px; letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; font-family: var(--mono); font-weight: 700; }
+.guided-field input, .guided-field textarea, .guided-field select {
+  display: block; width: 100%; margin-top: 6px; padding: 10px 12px;
+  border: 1px solid #E2E2E2; border-radius: 10px;
+  background: #FAFAFA; color: var(--text);
+  font: 14px/1.5 var(--sans); transition: border-color 160ms;
+}
+.guided-field textarea { resize: vertical; }
+.guided-field input::placeholder, .guided-field textarea::placeholder { color: var(--faint); }
+.guided-field input[type="file"] { color: var(--muted); font: 12px/1.5 var(--mono); }
+.guided-field input[type="file"]::file-selector-button {
+  border: 1px solid #111111; border-radius: 8px;
+  background: #111111; color: #FFFFFF;
+  font: 700 11px/1 var(--sans); letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 8px 14px; margin-right: 12px;
+  cursor: pointer; transition: background 160ms, color 160ms;
+}
+.guided-field input[type="file"]::file-selector-button:hover { background: #FFFFFF; color: #111111; }
+.guided-field input:focus-visible, .guided-field textarea:focus-visible, .guided-field select:focus-visible {
+  outline: none; border-color: #111111;
+  box-shadow: 0 0 0 2px #111111;
+}
+.guided-check { display: flex; align-items: flex-start; gap: 10px; margin: 22px 0; color: var(--muted); }
+.guided-check input { accent-color: #111111; margin-top: 4px; width: 15px; height: 15px; }
+
+/* ---------- 按钮 ---------- */
+.guided-page button { font: inherit; cursor: pointer; transition: background 260ms cubic-bezier(0.25, 1, 0.5, 1), color 260ms cubic-bezier(0.25, 1, 0.5, 1), border-color 260ms cubic-bezier(0.25, 1, 0.5, 1); }
+/* 步骤按钮逐个浮起 */
+.guided-steps button:nth-child(1) { animation: p2r-rise 600ms cubic-bezier(0.16, 1, 0.3, 1) 60ms both; }
+.guided-steps button:nth-child(2) { animation: p2r-rise 600ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both; }
+.guided-steps button:nth-child(3) { animation: p2r-rise 600ms cubic-bezier(0.16, 1, 0.3, 1) 180ms both; }
+.guided-steps button:nth-child(4) { animation: p2r-rise 600ms cubic-bezier(0.16, 1, 0.3, 1) 240ms both; }
+.guided-steps button:nth-child(5) { animation: p2r-rise 600ms cubic-bezier(0.16, 1, 0.3, 1) 300ms both; }
+.guided-steps button:nth-child(6) { animation: p2r-rise 600ms cubic-bezier(0.16, 1, 0.3, 1) 360ms both; }
+.guided-page button:disabled { cursor: not-allowed; opacity: 0.38; }
+/* 主按钮：黑底白字，hover 反转 */
+.guided-primary, .guided-secondary {
+  border: 1px solid #111111; padding: 10px 20px; border-radius: 12px; margin: 10px 10px 10px 0; font-weight: 700; font-size: 13px; letter-spacing: 0.02em;
+  transition: background 260ms cubic-bezier(0.25, 1, 0.5, 1), color 260ms cubic-bezier(0.25, 1, 0.5, 1), border-color 260ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+.guided-primary { background: #111111; color: #FFFFFF; }
+.guided-primary:not(:disabled):hover { background: #FFFFFF; color: #111111; }
+.guided-secondary { background: #FFFFFF; color: #111111; }
+.guided-secondary:not(:disabled):hover { background: #111111; color: #FFFFFF; }
+.guided-page :focus-visible { outline: 2px solid #111111; outline-offset: 3px; border-radius: 2px; }
+
+/* ---------- 徽章 / 状态 ---------- */
+/* 状态靠边框样式（实线/虚线/反色）区分，不靠色相 */
+.guided-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid #E2E2E2; padding: 2px 9px;
+  border-radius: 20px;
+  font: 10px/1.7 var(--mono); background: #FAFAFA; color: var(--muted); white-space: nowrap; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.guided-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 1; }
+/* supported → 加粗实线边框 */
+.guided-badge-supported { border: 1.5px solid #111111; background: #FFFFFF; color: #111111; font-weight: 700; }
+/* requires_review → 虚线边框 */
+.guided-badge-requires_review { border: 1px dashed #111111; background: #FAFAFA; color: #111111; }
+/* unsupported → 弱边框 */
+.guided-badge-unsupported { border: 1px solid #E2E2E2; background: transparent; color: var(--faint); }
+/* 环境检查 pass/fail/unknown */
+.guided-env-pass { border: 1.5px solid #111111; background: #FFFFFF; color: #111111; font-weight: 700; }
+.guided-env-fail { background: #111111; color: #FFFFFF; border: 1px solid #111111; font-weight: 700; }
+.guided-env-unknown { border: 1px dashed #111111; background: #FAFAFA; color: #111111; }
+
+/* ---------- 数据卡 / 列表 ---------- */
+.guided-paper-card {
+  border: 1px solid #E2E2E2; border-left: 3px solid #111111;
+  border-radius: 12px;
+  background: #FAFAFA; padding: 16px 18px; margin: 16px 0;
+}
+.guided-paper-card p { margin: 5px 0; font-size: 13px; }
+.guided-itemlist { list-style: none; padding: 0; margin: 10px 0; }
+.guided-itemlist li { padding: 9px 4px; border-bottom: 1px solid #E2E2E2; font-size: 13px; color: var(--muted); }
+.guided-itemlist li b { color: #111111; font-weight: 700; }
+.guided-itemlist li:last-child { border-bottom: 0; }
+.guided-note { display: block; font-size: 12px; color: var(--faint); margin-top: 3px; }
+
+/* ---------- 候选卡片 ---------- */
+.guided-candidates { list-style: none; padding: 0; margin: 12px 0; }
+.guided-candidates li { margin: 10px 0; }
+.guided-candidate {
+  display: flex; gap: 12px; align-items: flex-start;
+  border: 1px solid #E2E2E2; border-radius: 12px;
+  background: #FFFFFF; padding: 14px 16px; cursor: pointer;
+  transition: border-color 160ms, background 160ms;
+}
+.guided-candidate:hover { border-color: #111111; background: #FAFAFA; }
+/* 选中：加粗黑边 + 反色左边线 */
+.guided-candidate:has(input:checked) { border: 1.5px solid #111111; border-left: 4px solid #111111; background: #FAFAFA; }
+.guided-candidate input { accent-color: #111111; margin-top: 5px; }
+.guided-candidate b { color: #111111; }
+.guided-candidate.is-disabled { cursor: not-allowed; opacity: 0.5; }
+.guided-candidate.is-disabled:hover { border-color: #E2E2E2; background: #FFFFFF; }
+.guided-candidate.is-disabled input { cursor: not-allowed; }
+
+/* ---------- 分支 / 证据 / 错误 ---------- */
+.guided-branch { border: 1px dashed #E2E2E2; border-radius: 14px; padding: 6px 18px 18px; margin: 20px 0; background: #FAFAFA; }
+/* 证据：黑色左边线 */
+.guided-evidence {
+  border-left: 3px solid #111111; padding: 12px 16px; margin: 14px 0;
+  border-radius: 0 10px 10px 0;
+  background: #FAFAFA; color: var(--text); font-size: 14px;
+}
+.guided-evidence strong { color: #111111; font-weight: 700; }
+/* 错误：反色块 */
+.guided-error {
+  border: 1px solid #111111; padding: 12px 16px; margin: 14px 0;
+  border-radius: 10px;
+  background: #111111; color: #FFFFFF;
+}
+.guided-error strong { color: #FFFFFF; }
+
+/* ---------- 代码 / 标识 ---------- */
+.guided-page code { overflow-wrap: anywhere; font: 12px/1.6 var(--mono); color: #666666; }
+.guided-paper-card code, .guided-evidence code { color: #111111; font-weight: 700; }
+.guided-page pre {
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 380px; overflow: auto;
+  border: 1px solid #E2E2E2; background: #FAFAFA; color: #111111;
+  padding: 18px; font: 12px/1.75 var(--mono); margin: 12px 0;
+}
+.guided-page pre::-webkit-scrollbar, .guided-page textarea::-webkit-scrollbar { width: 10px; height: 10px; }
+.guided-page pre::-webkit-scrollbar-thumb { background: #E2E2E2; border: 2px solid #FAFAFA; }
+
+.guided-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin-top: 26px; font-size: 10px; color: var(--faint); overflow-wrap: anywhere; border-top: 1px solid #E2E2E2; padding-top: 18px; }
+.guided-link { border: 0; background: transparent; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; padding: 0; }
+.guided-link:hover { color: #111111; }
+.guided-page a { color: #111111; text-decoration: underline; text-underline-offset: 3px; }
+.guided-page a:hover { color: #666666; }
+.guided-page li { margin: 8px 0; }
+
+/* ---------- 动效与响应式 ---------- */
+@keyframes guided-enter {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .guided-card { animation: none; }
+  .guided-page button { transition: none; }
+}
+@media (max-width: 640px) {
+  .guided-page { padding: 20px 14px 48px; }
+  .guided-card { padding: 24px 20px; }
+  .guided-header { flex-direction: column; gap: 10px; }
+  .guided-steps { grid-auto-flow: row; }
+  .guided-steps b { display: inline; margin: 0 8px 0 0; }
+}

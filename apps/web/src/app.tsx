@@ -6,7 +6,6 @@ import { TopBar } from './components/TopBar';
 import { StationBar } from './components/StationBar';
 import { SideNav } from './components/SideNav';
 import { PageLoading } from './components/Feedback';
-import { LoginPage } from './features/auth/LoginPage';
 import { ProjectsPage } from './features/projects/ProjectsPage';
 import { ReviewPage } from './features/papers/ReviewPage';
 import { RunPage } from './features/runs/RunPage';
@@ -79,7 +78,6 @@ function AppLayout() {
 export function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
       <Route element={<AppLayout />}>
         <Route path="/" element={<ProjectsPage />} />
         <Route path="/projects" element={<ProjectsPage />} />

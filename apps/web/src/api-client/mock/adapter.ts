@@ -6,7 +6,7 @@ import type {
   RunAccepted, SpecDraft, SpecRevision,
 } from '../types';
 import {
-  DEMO_USER, artifactText, baseAttempt, baseDraft, baseExtraction, baseRun, fakeHash, iso, type MutableDb,
+  artifactText, baseAttempt, baseDraft, baseExtraction, baseRun, fakeHash, iso, type MutableDb,
 } from './fixtures';
 import { buildScenarioDb, progressingTick, tickDb } from './scenarios';
 
@@ -91,14 +91,6 @@ function tickAll(): void {
 
 export function createMockClient(): ApiClient {
   return {
-    async login(inviteToken) {
-      await latency();
-      if (!inviteToken.trim()) throw err('INVITE_TOKEN_REQUIRED', '请输入邀请码', 422, {
-        field_errors: [{ path: '/invite_token', code: 'required', message: '邀请码不能为空' }],
-      });
-      state.db.session = DEMO_USER;
-      return DEMO_USER;
-    },
     async getSession() {
       await latency();
       if (!state.db.session) throw err('SESSION_REQUIRED', '未登录', 401);

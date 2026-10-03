@@ -269,7 +269,7 @@ export function ReviewPage() {
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, lineHeight: 1.4 }}>
               {paper.title ?? '（标题解析中）'}
             </div>
-            <div style={{ textAlign: 'center', fontSize: 9.5, color: '#6B655A', marginTop: 4 }}>
+            <div style={{ textAlign: 'center', fontSize: 9.5, color: '#666666', marginTop: 4 }}>
               {paper.arxiv_version ? `arXiv:${paper.arxiv_version}` : '本地 PDF'}
             </div>
             {refs.slice(0, 5).map((r) => (

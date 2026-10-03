@@ -1,9 +1,10 @@
-.entry-screen { box-sizing: border-box; max-width: 960px; margin: 24px auto; padding: 28px; background: var(--bg-deep); color: var(--ink); font: 14px/1.7 var(--sans); border: 1px solid var(--line); border-radius: var(--radius-l); overflow-wrap: anywhere; }
-.entry-screen h1 { font-size: 26px; }
-.entry-screen p { color: var(--muted); }
-.entry-label { color: var(--amber); font-family: var(--mono); }
+/* 入口屏 · Swiss 风格 */
+.entry-screen { box-sizing: border-box; max-width: 960px; margin: 24px auto; padding: 32px 36px; background: #FFFFFF; color: #111111; font: 14px/1.7 "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; border: 1px solid #111111; overflow-wrap: anywhere; }
+.entry-screen h1 { font-size: 36px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+.entry-screen p { color: #666666; }
+.entry-label { color: #666666; font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
 .entry-screen nav { display: flex; flex-wrap: wrap; gap: 16px; margin: 24px 0; }
-.entry-screen a { color: var(--amber); border-bottom: 1px solid var(--line-strong); text-decoration: none; }
-.entry-screen a:focus-visible { outline: 2px solid var(--amber); outline-offset: 4px; }
-.entry-skeleton { height: 200px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--panel); }
-@media (max-width: 760px) { .entry-screen { margin: 12px; padding: 18px; } }
+.entry-screen a { color: #111111; border-bottom: 1px solid #111111; text-decoration: none; }
+.entry-screen a:focus-visible { outline: 2px solid #111111; outline-offset: 4px; }
+.entry-skeleton { height: 200px; border: 1px solid #E2E2E2; background: #F4F4F4; }
+@media (max-width: 760px) { .entry-screen { margin: 12px; padding: 22px 20px; } .entry-screen h1 { font-size: 28px; } }

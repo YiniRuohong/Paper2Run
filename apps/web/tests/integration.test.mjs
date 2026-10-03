@@ -23,36 +23,22 @@ test('post-write refresh failures preserve API diagnostics without claiming writ
   assert.match(error.message, /勿重复写入/);
 });
 
-test('entry lazily mounts independent surfaces and product client is explicitly mock', async () => {
+test('entry mounts only the guided live surface; product client default stays explicit', async () => {
   const entry = await readFile(new URL('../src/main.tsx', import.meta.url), 'utf8');
-  assert.match(entry, /resolveSurface\(window.location.pathname, import.meta.env.VITE_DATA_MODE\)/);
-  assert.match(entry, /lazy\(\(\) => import\('\.\/features\/lab\/Phase01Lab'\)\)/);
-  assert.match(entry, /lazy\(\(\) => import\('\.\/MockWorkspace'\)\)/);
+  assert.match(entry, /lazy\(\(\) => import\('\.\/features\/guided\/GuidedPage'\)\)/, 'the live workbench is the only lazily mounted surface');
+  assert.doesNotMatch(entry, /Phase01Lab|MockWorkspace|resolveSurface/, 'lab and mock surfaces are retired from the product entry');
   assert.doesNotMatch(entry, /import .* from ['"]\.\/(?:app|api-client)/);
   const config = await readFile(new URL('../src/api-client/config.ts', import.meta.url), 'utf8');
   assert.match(config, /dataMode: DataMode = 'mock'/);
 });
 
-test('lab bypasses product mode and auth for mock, live and replay', async () => {
+test('resolveSurface maps every path and mode to the single guided surface (live-only product)', async () => {
   const { resolveSurface } = await import('../src/routing.ts');
-  for (const mode of ['mock', 'live', 'replay']) {
-    for (const path of ['/lab', '/lab/']) {
-      assert.deepEqual(resolveSurface(path, mode), { kind: 'lab', basename: '/' });
+  for (const mode of ['mock', 'live', 'replay', undefined]) {
+    for (const path of ['/', '/lab', '/lab/', '/lab/advanced', '/mock/projects', '/projects', '/papers/p/review', '/runs/r', '/runs/r/report', '/login', '/mocking', '/laboratory']) {
+      assert.deepEqual(resolveSurface(path, mode), { kind: 'guided', basename: '/' });
     }
-    assert.deepEqual(resolveSurface('/mock/projects', mode), { kind: 'mock', basename: '/mock' });
   }
-  assert.equal(resolveSurface('/laboratory', 'live').kind, 'unavailable');
-  assert.equal(resolveSurface('/lab/unknown', 'live').kind, 'unavailable');
-});
-
-test('default mock preserves four views; live and replay never enter product auth', async () => {
-  const { resolveSurface } = await import('../src/routing.ts');
-  for (const path of ['/', '/projects', '/papers/p/review', '/runs/r', '/runs/r/report', '/login']) {
-    assert.equal(resolveSurface(path, 'mock').kind, 'mock');
-    assert.equal(resolveSurface(path, 'live').kind, 'unavailable');
-    assert.equal(resolveSurface(path, 'replay').kind, 'unavailable');
-  }
-  assert.equal(resolveSurface('/mocking', 'live').kind, 'unavailable');
 });
 
 test('ambiguous write retry reuses identical key/body; successful next operation is new', async () => {

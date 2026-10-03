@@ -29,7 +29,6 @@ export interface UploadPaperInput {
 }
 
 export interface ApiClient {
-  login(inviteToken: string): Promise<SessionInfo>;
   getSession(): Promise<SessionInfo>;
   logout(): Promise<void>;
 
@@ -69,6 +68,10 @@ export interface ApiClient {
 // ============ live 实现（F2+ 联调用；走同源 /api/v1，代理到 127.0.0.1:8000）============
 const BASE = '/api/v1';
 
+// CSRF tokens are intentionally process-local: sessionStorage would make the
+// token readable by any injected script and violates the browser contract.
+let csrfToken: string | undefined;
+
 interface Envelope<T> { data: T; meta: { request_id: string } }
 
 function uuid(): string {
@@ -80,7 +83,7 @@ async function request<T>(
   path: string,
   opts: { body?: unknown; idempotencyKey?: string } = {},
 ): Promise<Envelope<T>> {
-  const csrf = sessionStorage.getItem('p2r.csrf') ?? undefined;
+  const csrf = csrfToken;
   const res = await fetch(`${BASE}${path}`, {
     method,
     credentials: 'same-origin',
@@ -113,19 +116,14 @@ async function requestPage<T>(path: string): Promise<PageData<T>> {
 
 export function createLiveClient(): ApiClient {
   return {
-    async login(inviteToken) {
-      const env = await request<SessionInfo>('POST', '/auth/session', { body: { invite_token: inviteToken } });
-      sessionStorage.setItem('p2r.csrf', env.data.csrf_token);
-      return env.data;
-    },
     async getSession() {
       const env = await request<SessionInfo>('GET', '/auth/me');
-      sessionStorage.setItem('p2r.csrf', env.data.csrf_token);
+      csrfToken = env.data.csrf_token;
       return env.data;
     },
     async logout() {
       await request<void>('DELETE', '/auth/session');
-      sessionStorage.removeItem('p2r.csrf');
+      csrfToken = undefined;
     },
     async getCapabilities() {
       return (await request<Capabilities>('GET', '/capabilities')).data;
@@ -162,7 +160,7 @@ export function createLiveClient(): ApiClient {
       }
       const res = await fetch(`${BASE}/projects/${projectId}/papers`, {
         method: 'POST', credentials: 'same-origin',
-        headers: { ...headers, 'X-CSRF-Token': sessionStorage.getItem('p2r.csrf') ?? '', 'Idempotency-Key': uuid() },
+        headers: { ...headers, 'X-CSRF-Token': csrfToken ?? '', 'Idempotency-Key': uuid() },
         body,
       });
       const json = await res.json();
