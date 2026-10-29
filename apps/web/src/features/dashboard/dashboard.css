@@ -1,0 +1,56 @@
+/* 总览控制面板 — 沿用 guided.css 的 .guided-page 变量 */
+.dash { max-width: 1080px; margin: 0; }
+.dash-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.dash-head h1 { font-size: 26px; letter-spacing: -0.02em; line-height: 1.2; margin: 0 0 4px; font-weight: 650; }
+.dash-head p { margin: 0; color: var(--muted); }
+.dash-actions { display: flex; gap: 10px; }
+
+.dash-cta, .dash-ghost { padding: 9px 18px; border-radius: 9px; border: 1px solid transparent; font-weight: 600; }
+.dash-cta { background: var(--accent); color: var(--accent-ink); }
+.dash-cta:hover { background: #115e59; }
+.dash-ghost { background: #fff; border-color: var(--line-strong); color: var(--text); }
+.dash-ghost:hover:not(:disabled) { background: var(--surface-2); }
+.dash-cta:active, .dash-ghost:active:not(:disabled) { transform: translateY(1px); }
+
+.dash-alert { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; padding: 12px 16px; background: var(--bad-soft); border: 1px solid #fecaca; border-radius: 12px; color: var(--bad); }
+.dash-alert .dash-ghost { margin-left: auto; padding: 5px 14px; }
+
+.dash-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.dash-stat { padding: 16px 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.dash-stat-label { display: block; color: var(--faint); font-size: 13px; }
+.dash-stat-value { display: block; margin-top: 4px; font: 600 30px/1.1 var(--mono); letter-spacing: -0.02em; }
+.dash-stat.ok .dash-stat-value { color: var(--ok); }
+.dash-stat.run .dash-stat-value { color: var(--accent); }
+.dash-stat.bad .dash-stat-value { color: var(--bad); }
+.dash-skel { display: block; width: 48px; height: 30px; margin-top: 4px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2) 25%, #e9e9ec 50%, var(--surface-2) 75%); background-size: 200% 100%; animation: dash-shimmer 1.4s linear infinite; }
+@keyframes dash-shimmer { to { background-position: -200% 0; } }
+
+.dash-empty { padding: 48px 32px; text-align: center; background: var(--surface); border: 1px dashed var(--line-strong); border-radius: 16px; }
+.dash-empty h2 { margin: 0 0 8px; }
+.dash-empty p { margin: 0 auto 20px; }
+
+.dash-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; }
+.dash-panel { padding: 20px 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+.dash-panel h2 { margin: 0 0 12px; font-size: 15px; }
+.dash-muted { color: var(--faint); }
+
+.dash-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.dash-table th { text-align: left; padding: 6px 4px; color: var(--faint); font-weight: 500; border-bottom: 1px solid var(--line); }
+.dash-table td { padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.dash-table tr:last-child td { border-bottom: 0; }
+.dash-num { font-family: var(--mono); color: var(--muted); }
+
+.dash-pill { display: inline-flex; align-items: center; gap: 6px; padding: 1px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--surface-2); color: var(--muted); }
+.dash-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.dash-pill.ok { background: #f0fdf4; color: var(--ok); }
+.dash-pill.run { background: var(--accent-soft); color: var(--accent); }
+.dash-pill.bad { background: var(--bad-soft); color: var(--bad); }
+
+.dash-list { list-style: none; margin: 0; padding: 0; }
+.dash-list li { display: grid; gap: 2px; padding: 9px 0; margin: 0; border-bottom: 1px solid var(--line); }
+.dash-list li:last-child { border-bottom: 0; }
+.dash-list-title { font-weight: 500; overflow-wrap: anywhere; }
+.dash-list-meta { color: var(--faint); font-size: 12px; }
+
+@media (max-width: 860px) { .dash-grid { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .dash-skel { animation: none; } }

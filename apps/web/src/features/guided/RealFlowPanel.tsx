@@ -43,6 +43,16 @@ const EVIDENCE_CLASS_TEXT: Record<string, string> = {
   unclassified: 'unclassified（未分类：非受控 smoke 亦非真实本机 CPU recipe）',
 };
 
+const STEP_HINT: Record<RealFlowState['step'], string> = {
+  input: '先放入要复现的论文',
+  provider: '连接用于抽取的模型',
+  extract: '让模型读出实验方案',
+  spec: '确认要运行的实验与参数',
+  environment: '通过环境检查',
+  codegen: '生成并审阅复现代码',
+  execute: '运行、查看报告并导出',
+};
+
 export default function RealFlowPanel({ api }: { api: GuidedApi }) {
   const [controller, setController] = useState<RealFlowController | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,12 +109,13 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
   // sandbox_python 执行的是模型生成代码：代码未生成前不提供任何创建 Run 的入口。
   const sandboxCodeMissing = sandboxRecipe && state.codegen === null;
   return <section className="guided-realflow">
+    <div className="guided-progress" aria-hidden="true"><i style={{ width: `${((steps.findIndex(s => s === state.step) + 1) / steps.length) * 100}%` }} /></div>
     <nav className="guided-steps" aria-label="真实流程步骤">{steps.map((step, i) => <button key={step} aria-current={state.step === step ? 'step' : undefined} className={state.step === step ? 'active' : ''} disabled={busy || !canRealViewStep(state, step)} onClick={() => controller.viewStep(step)}><b>{i + 1}</b>{REALFLOW_STEP_LABELS[step]}</button>)}</nav>
     <section key={state.step} ref={card} tabIndex={-1} className="guided-card" aria-busy={busy || state.busy}>
-      <span className="guided-kicker">REAL FLOW / {String(steps.findIndex(s => s === state.step) + 1).padStart(2, '0')} / {state.step.toUpperCase()}</span>
+      <span className="guided-kicker">第 {steps.findIndex(s => s === state.step) + 1} 步 / 共 {steps.length} 步 · {STEP_HINT[state.step]}</span>
       {state.step === 'input' && <>
-        <h2>真实文章输入</h2>
-        <p>上传 .pdf 走 PDF 入口；.txt / .json 文件或粘贴文本走文本入口。上传后展示服务器计算的 paper_id 与 SHA-256。</p>
+        <h2>上传论文</h2>
+        <p>选择 PDF / TXT / JSON 文件，或直接粘贴文本。上传后会显示论文的唯一编号与 SHA-256，便于之后核验。</p>
         <label className="guided-field">文件（.txt / .pdf / .json）
           <input type="file" accept=".txt,.pdf,.json" disabled={busy} onChange={e => { setFile(e.target.files?.[0] ?? null); setPasteText(''); }} />
         </label>
@@ -122,8 +133,8 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
         </div>}
       </>}
       {state.step === 'provider' && <>
-        <h2>Provider 会话</h2>
-        <p>OpenAI-compatible 抽取 Provider。api_key 只保存在当前页面内存（React state），不写 localStorage；刷新后需要重新输入。</p>
+        <h2>连接模型</h2>
+        <p>填写兼容 OpenAI 协议的模型服务。api_key 只保存在当前页面内存，不会落盘，刷新后需要重新输入。</p>
         {state.provider
           ? <div className="guided-paper-card">
             <p>provider_session_id：<code>{state.provider.providerSessionId}</code></p>
@@ -138,7 +149,7 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
             <label className="guided-field">api_key（必填，仅内存）<input type="password" value={providerForm.apiKey} disabled={busy} autoComplete="off" onChange={e => setProviderForm({ ...providerForm, apiKey: e.target.value })} /></label>
             <label className="guided-field">endpoint_alias（可选，缺省自动派生）<input type="text" value={providerForm.endpointAlias} disabled={busy} onChange={e => setProviderForm({ ...providerForm, endpointAlias: e.target.value })} /></label>
             <button disabled={busy || !providerForm.baseUrl || !providerForm.modelId || !providerForm.apiKey} className="guided-primary" onClick={() => void call(async () => { await controller.createSession(providerForm); setProviderForm({ ...providerForm, apiKey: '' }); })}>创建会话</button>
-            <p>没有会话时仍可尝试抽取：PDF 走服务器确定性文本抽取；纯文本文章会如实报错。</p>
+            <p>也可以先跳过：PDF 会用服务器确定性抽取，纯文本文章则无法抽取。</p>
           </div>}
       </>}
       {state.step === 'extract' && <>
