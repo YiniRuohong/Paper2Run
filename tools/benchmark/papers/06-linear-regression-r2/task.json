@@ -1,0 +1,12 @@
+{
+  "task_id": "06-linear-regression-r2",
+  "title": "训练数据离群值污染下的 OLS 线性回归 R²（合成数据）",
+  "metric": "r2",
+  "claimed_low": 0.67,
+  "claimed_high": 0.79,
+  "seed": 20261006,
+  "n_train": 160,
+  "n_test": 60,
+  "method": "闭式最小二乘（正规方程求 slope/intercept），在干净测试集上计算 R²",
+  "difficulty": "离群值污染：6% 的训练目标被 +9 抬高，把拟合直线拖离真实关系；测试集干净"
+}

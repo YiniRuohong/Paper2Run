@@ -1,0 +1,12 @@
+{
+  "task_id": "08-nearest-centroid",
+  "title": "方差不等与先验偏斜下的最近质心分类（合成数据）",
+  "metric": "accuracy",
+  "claimed_low": 0.81,
+  "claimed_high": 0.93,
+  "seed": 20261008,
+  "n_train": 200,
+  "n_test": 80,
+  "method": "逐类均值质心 + 欧氏最近质心判类（平局判 0 类）",
+  "difficulty": "方差不等 + 先验偏斜：类 0 紧（sigma 0.25）占 75%，类 1 宽（sigma 1.3）仅 25%，宽类质心噪声大且被拖向重叠区"
+}

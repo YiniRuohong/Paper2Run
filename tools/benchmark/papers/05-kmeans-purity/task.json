@@ -1,0 +1,12 @@
+{
+  "task_id": "05-kmeans-purity",
+  "title": "重叠高斯簇上的 k-means 聚类纯度（合成数据）",
+  "metric": "purity",
+  "claimed_low": 0.7,
+  "claimed_high": 0.83,
+  "seed": 20261005,
+  "n_train": 150,
+  "n_test": 150,
+  "method": "Lloyd 算法 k=3，seeded 随机初始化（从数据点抽样），60 轮或分配稳定即停；空簇保留原质心",
+  "difficulty": "簇重叠：三簇中心两两距离约 0.9、sigma 0.45，纯度远离 1；purity 在全量聚类集合上计算（train==eval，无泛化主张）"
+}

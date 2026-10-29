@@ -1,0 +1,12 @@
+{
+  "task_id": "02-logistic-regression",
+  "title": "90/10 类别不平衡下的加权逻辑回归（合成数据）",
+  "metric": "accuracy",
+  "claimed_low": 0.82,
+  "claimed_high": 0.93,
+  "seed": 20261002,
+  "n_train": 200,
+  "n_test": 80,
+  "method": "类加权交叉熵全批梯度下降（权重 n/(2*count_c)，500 轮，lr=0.5，决策阈值 0）",
+  "difficulty": "类别不平衡：P(class=1)=0.10，多数类基线即达 0.90 accuracy，类加权使少数类不被忽略"
+}

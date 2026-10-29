@@ -1,0 +1,12 @@
+{
+  "task_id": "04-decision-stump",
+  "title": "同心圆结构上的单层决策树桩（合成数据）",
+  "metric": "accuracy",
+  "claimed_low": 0.61,
+  "claimed_high": 0.74,
+  "seed": 20261004,
+  "n_train": 240,
+  "n_test": 80,
+  "method": "穷举轴对齐树桩（特征 x 阈值 x 极性）按训练误差最小选取，候选阈值取分位数中点",
+  "difficulty": "非线性结构：圆盘 vs 圆环线性不可分，单层树桩存在精度天花板（论文诚实报告低区间）"
+}
