@@ -8,7 +8,21 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 
 推荐继续队友的 Paper2Run 方向，但把“任意论文自动复现”收敛为**受支持 CV 分类实验的证据驱动复现工作台**。保留四页面和蓝图视觉，优先实现真实执行、有限修复、独立评测与诚实报告。
 
-当前已有 **本地 Phase 0/1 工程与六步 Guided Demo 实现**：真实持久化 API、受控 smoke 运行、证据登记、报告与导出。它不是任意论文复现产品，不调用真实模型或 GPU。API 集成测试已覆盖新 Run 的证据与 ZIP 校验；前端 58 项测试与构建通过，已为步骤动画补充重挂载修复及源码契约回归；动画的浏览器视觉验收仍待完成。浏览器扩展环境仍未能捕获 Blob 下载事件，因此浏览器文件落盘尚未宣称完成。最新证据与限制见 [验证记录](docs/verification/2026-09-27-phase0-phase1-demo.md)。
+仓库已包含一个**本地可运行的 MVP**：上传论文 → 模型抽取实验协议 → 生成实验代码，在 macOS 沙箱或内置 CPU 实验（real CPU baseline）中真实执行 → 独立评测 → 报告与导出。它不是任意论文复现产品，也不承诺 GPU 级复现。
+
+已知限制：
+
+- 执行面仅在本地：无远程 GPU Runner；SSH 仅用于目标环境核验，不承载远程执行。
+- 沙箱依赖 macOS seatbelt（`sandbox-exec`）；不可用时自动降级并如实上报能力。
+- 本地持久化使用 SQLite；PostgreSQL 是生产目标，尚未在本机验证。
+- 模型调用通过 OpenAI-compatible Provider，需自行配置可用的模型服务。
+
+实测证据与逐项验收记录见 [验证记录](docs/verification/2026-09-30-paper2run-real-closed-loop.md)。
+
+## 🚀 快速启动
+
+- **一键启动（推荐）：** macOS 双击 `启动Paper2Run.command`，Windows 双击 `启动Paper2Run.bat`。两者调用 `scripts/launch.py`：自动创建 `.venv`、必要时构建前端，然后从单一本地端口（8010 起）同时提供 API 与页面并打开浏览器；需要 Python 3.11+。
+- **开发模式：** 分别启动 API 与前端 dev server，命令见下文 [本地 Guided Demo](#本地-guided-demo)。
 
 ## 📚 文档导航
 
@@ -36,7 +50,7 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 
 ### 本地 Guided Demo
 
-在本 worktree 根目录使用现有 `.venv` 与前端依赖，分别启动两个终端（仅 loopback，不部署）：
+在仓库根目录使用现有 `.venv` 与前端依赖，分别启动两个终端（仅 loopback，不部署）：
 
 ```bash
 P2R_DEMO_DIR=.p2r-guided-verification/runtime PYTHONPATH=.:services/runner .venv/bin/python -m uvicorn p2r_api.main:create_demo_app --factory --host 127.0.0.1 --port 8010
