@@ -35,7 +35,9 @@ SEATBELT_EXPECTED = sys.platform == "darwin" and os.path.exists("/usr/bin/sandbo
 
 def test_sandbox_capabilities_structure():
     caps = sandbox_capabilities()
-    assert set(caps) == {"seatbelt", "rlimits", "platform_walls"}
+    # Legacy keys keep their semantics; newer keys are additive only.
+    assert {"seatbelt", "rlimits", "platform_walls"} <= set(caps)
+    assert "sensitive_read_denied" in caps
     assert all(isinstance(value, bool) for value in caps.values())
     if SEATBELT_EXPECTED:
         # Verified live on this host: seatbelt must actually deny network and

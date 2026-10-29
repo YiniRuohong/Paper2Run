@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p2r-sandbox"
+version = "0.1.0"
+description = "Host-isolated execution of untrusted Python scripts (Paper2Run sandbox), usable standalone"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+# Zero third-party runtime dependencies: stdlib only, by contract.
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Security",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["p2r_sandbox*"]

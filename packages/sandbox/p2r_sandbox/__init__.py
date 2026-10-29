@@ -3,12 +3,20 @@
 Public contract (fixed across the sandbox / codegen / runner tasks):
 
 - :class:`SandboxLimits` - per-run resource limits
-- :class:`SandboxResult` - outcome of one run
+- :class:`SandboxResult` - outcome of one run (``backend`` names the
+  isolation backend actually used: "seatbelt" / "bwrap" / "unshare" / "none")
 - :func:`run_python_sandbox` - execute guest code under host isolation
-- :func:`sandbox_capabilities` - ``{"seatbelt": bool, "rlimits": bool}``
+- :func:`sandbox_capabilities` - live-probed capability report; legacy keys
+  ``{"seatbelt", "rlimits", "platform_walls"}`` keep their semantics, newer
+  keys (``sensitive_read_denied``, ``bubblewrap``, ``unshare_net``) are
+  additive only
 - :func:`validate_output_files` - shape-check predictions/labels, returns
   ``(predictions, labels)`` or raises :class:`SandboxOutputError`
 - :class:`SandboxUnavailable` - sandbox could not be established at all
+
+Command line: ``python -m p2r_sandbox run script.py [--json]`` and
+``python -m p2r_sandbox capabilities [--json]``. The package is standalone
+(zero third-party dependencies) and never imports other ``p2r_*`` packages.
 
 Isolation layers and their honest degradation matrix are documented in
 :mod:`p2r_sandbox.sandbox`.
