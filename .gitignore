@@ -25,6 +25,12 @@ htmlcov/
 playwright-report/
 test-results/
 
+# Local archive of non-project / temporary files (never committed)
+_archive/
+
+# Git worktrees live here
+.worktrees/
+
 # Local configuration and operating-system files
 .env
 .env.*
