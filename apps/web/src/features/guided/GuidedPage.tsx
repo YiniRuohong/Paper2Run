@@ -13,9 +13,14 @@ import '../dashboard/dashboard.css';
 // The offline teaching fixture remains a backend regression path, not a UI entry.
 const api = createGuidedApi('demo-user');
 const Dashboard = lazy(() => import('../dashboard/Dashboard'));
+const TaskDetail = lazy(() => import('../dashboard/TaskDetail'));
 
-type View = 'overview' | 'new';
-const viewFromHash = (): View => (window.location.hash.startsWith('#/new') ? 'new' : 'overview');
+type View = 'overview' | 'new' | 'task';
+const viewFromHash = (): View => {
+  const h = window.location.hash;
+  return h.startsWith('#/new') ? 'new' : h.startsWith('#/task/') ? 'task' : 'overview';
+};
+const taskIdFromHash = (): string => decodeURIComponent(window.location.hash.slice('#/task/'.length));
 
 // Backend reachability, shown in the sidebar footer. Any HTTP response from
 // /healthz means the server is up; only a network failure counts as offline.
@@ -38,9 +43,10 @@ function useBackendHealth(): 'checking' | 'up' | 'down' {
 
 export default function GuidedPage() {
   const [view, setView] = useState<View>(viewFromHash);
+  const [, setTick] = useState(0);
   const health = useBackendHealth();
   useEffect(() => {
-    const onHash = () => setView(viewFromHash());
+    const onHash = () => { setView(viewFromHash()); setTick(x => x + 1); };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -57,7 +63,7 @@ export default function GuidedPage() {
       </div>
       <nav className="app-nav" aria-label="主导航">
         <span className="app-group">工作区</span>
-        <button className={view === 'overview' ? 'on' : ''} aria-current={view === 'overview' ? 'page' : undefined} onClick={() => go('overview')}><Icon name="home" />总览</button>
+        <button className={view !== 'new' ? 'on' : ''} aria-current={view !== 'new' ? 'page' : undefined} onClick={() => go('overview')}><Icon name="home" />总览</button>
         <button className={view === 'new' ? 'on' : ''} aria-current={view === 'new' ? 'page' : undefined} onClick={() => go('new')}><Icon name="play" />新建任务</button>
       </nav>
       <div className="app-status" role="status">
@@ -67,9 +73,11 @@ export default function GuidedPage() {
     </aside>
     <main className="app-main">
       <div className="app-top">
-        <nav aria-label="面包屑"><span>{view === 'overview' ? '工作区' : '任务'}</span><i>/</i><b>{view === 'overview' ? '总览' : '新建'}</b></nav>
+        <nav aria-label="面包屑"><span>{view === 'new' ? '任务' : '工作区'}</span><i>/</i><b>{view === 'overview' ? '总览' : view === 'task' ? '任务详情' : '新建'}</b></nav>
       </div>
-      {view === 'overview'
+      {view === 'task'
+        ? <Suspense fallback={<p role="status" className="dash-muted">加载任务…</p>}><TaskDetail key={taskIdFromHash()} api={api} paperId={taskIdFromHash()} onBack={() => go('overview')} /></Suspense>
+        : view === 'overview'
         ? <Suspense fallback={<p role="status" className="dash-muted">加载总览…</p>}><Dashboard api={api} onNew={() => go('new')} /></Suspense>
         : <div className="wizard">
             <header className="wizard-head">

@@ -11,7 +11,7 @@ type Phase = 'loading' | 'ready' | 'error';
 type Filter = 'all' | 'active' | 'done' | 'failed';
 type Layout = 'grid' | 'list';
 
-const RUN_LABEL: Record<string, { text: string; tone: 'ok' | 'run' | 'bad' | 'idle' }> = {
+export const RUN_LABEL: Record<string, { text: string; tone: 'ok' | 'run' | 'bad' | 'idle' }> = {
   completed: { text: '已完成', tone: 'ok' },
   running: { text: '执行中', tone: 'run' },
   evaluating: { text: '评估中', tone: 'run' },
@@ -28,12 +28,12 @@ const PAPER_LABEL: Record<string, { text: string; tone: 'ok' | 'run' | 'bad' | '
   ready: { text: '就绪', tone: 'idle' },
   failed: { text: '失败', tone: 'bad' },
 };
-const MODE_LABEL: Record<string, string> = { 'local-cpu': '本机 CPU', 'local-fixture': '教学 fixture', sandbox: '沙箱' };
-const VERDICT_LABEL: Record<string, string> = { matched: '与论文吻合', mismatched: '与论文不符', inconclusive: '无法判定' };
+export const MODE_LABEL: Record<string, string> = { 'local-cpu': '本机 CPU', 'local-fixture': '教学 fixture', sandbox: '沙箱', 'sandbox-python': '沙箱' };
+export const VERDICT_LABEL: Record<string, string> = { matched: '与论文吻合', mismatched: '与论文不符', inconclusive: '无法判定', not_comparable: '不可直接比较' };
 const ACTIVE = new Set(['queued', 'running', 'evaluating', 'cancel_requested']);
 const AUTO_RETRY_MS = 8000;
 
-function when(iso: string | null): string {
+export function when(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
@@ -41,7 +41,7 @@ function when(iso: string | null): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-interface Task {
+export interface Task {
   paperId: string;
   title: string;
   paperStatus: string;
@@ -50,7 +50,7 @@ interface Task {
   runCount: number;
 }
 
-function buildTasks(snap: Snapshot): Task[] {
+export function buildTasks(snap: Snapshot): Task[] {
   const expToPaper = new Map(snap.experiments.map(e => [e.id, e.paperId]));
   const byPaper = new Map<string, TaskRun[]>();
   for (const run of snap.runs) {
@@ -205,10 +205,11 @@ export default function Dashboard({ api, onNew }: { api: GuidedApi; onNew: () =>
 
 function TaskCard({ task }: { task: Task }) {
   const status = task.run ? RUN_LABEL[task.run.status] ?? { text: task.run.status, tone: 'idle' as const } : PAPER_LABEL[task.paperStatus] ?? { text: task.paperStatus, tone: 'idle' as const };
-  return <article className="card task">
+  const open = () => { window.location.hash = `#/task/${encodeURIComponent(task.paperId)}`; };
+  return <article className="card task clickable" onClick={open}>
     <header>
       <span className="task-icon"><Icon name="doc" /></span>
-      <div className="task-title"><b title={task.title}>{task.title}</b><small>{task.paperId.replace(/^pap_/, '').slice(0, 8)}</small></div>
+      <div className="task-title"><b title={task.title}><a href={`#/task/${encodeURIComponent(task.paperId)}`} onClick={e => e.stopPropagation()}>{task.title}</a></b><small>{task.paperId.replace(/^pap_/, '').slice(0, 8)}</small></div>
       <span className={`pill ${status.tone}`}>{status.text}</span>
     </header>
     <p className="task-line">

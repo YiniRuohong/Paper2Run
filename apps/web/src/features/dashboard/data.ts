@@ -102,3 +102,40 @@ export function describeError(error: unknown): ErrorInfo {
   if (http !== null && http >= 500) return { kind: 'server', title: '后端处理请求时出错', hint: '后端已响应，但返回了服务器错误。', steps: ['查看后端日志定位原因，修复后点击重试。'], detail };
   return { kind: 'unknown', title: '读取任务数据失败', hint: '返回的数据无法解析，或请求被中断。', steps: ['点击重试；若持续出现，请把下面的详情发给开发者。'], detail };
 }
+
+export interface ReportView {
+  recipe: string | null; metrics: Array<[string, string]>; evidenceClass: string | null; verdict: string | null;
+  evaluator: string | null; manifestHash: string | null; limitations: string[];
+  evidence: Array<{ sha256: string; bytes: number | null; mediaType: string | null }>;
+}
+
+export async function loadReport(api: GuidedApi, runId: string, signal: AbortSignal): Promise<ReportView | null> {
+  let raw: unknown;
+  try {
+    raw = await api.read(`/runs/${encodeURIComponent(runId)}/report`, (v: unknown) => v, signal);
+  } catch (error) {
+    // REPORT_NOT_READY (409) simply means no report has been built yet.
+    if (status(error) === 409 || status(error) === 404) return null;
+    throw error;
+  }
+  const r = rec(raw);
+  if (!r) return null;
+  const metrics: Array<[string, string]> = [];
+  for (const [k, v] of Object.entries(rec(r.metrics) ?? {})) {
+    if (typeof v === 'number') metrics.push([k, Number.isInteger(v) ? String(v) : v.toFixed(4)]);
+    else if (typeof v === 'string') metrics.push([k, v]);
+  }
+  const recipe = rec(r.recipe);
+  const manifest = rec(r.manifest);
+  const evidence = (Array.isArray(r.evidence) ? r.evidence : []).flatMap(e => {
+    const x = rec(e); const sha = x && str(x.sha256);
+    return x && sha ? [{ sha256: sha, bytes: typeof x.bytes === 'number' ? x.bytes : null, mediaType: str(x.media_type) }] : [];
+  });
+  return {
+    recipe: recipe ? [str(recipe.id), str(recipe.version)].filter(Boolean).join('/') : null,
+    metrics, evidenceClass: str(r.evidence_class), verdict: str(r.verdict), evaluator: str(r.evaluator_version),
+    manifestHash: manifest ? str(manifest.manifest_hash) : null,
+    limitations: (Array.isArray(r.limitations) ? r.limitations : []).filter((x): x is string => typeof x === 'string'),
+    evidence,
+  };
+}

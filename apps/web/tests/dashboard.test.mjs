@@ -85,3 +85,28 @@ test('describeError classifies auth, server and unknown failures', () => {
   assert.equal(describeError(new GuidedApiError('请求失败 (HTTP 500)', 500, 'UNKNOWN_ERROR')).kind, 'offline');
   assert.equal(describeError(new Error('weird')).kind, 'unknown');
 });
+
+const detail = await readFile(new URL('../src/features/dashboard/TaskDetail.tsx', import.meta.url), 'utf8');
+
+test('task detail is wired by hash route and stays read-only', () => {
+  assert.match(page, /#\/task\//);
+  assert.match(page, /TaskDetail/);
+  assert.doesNotMatch(detail, /api\.write\(|localStorage\.|sessionStorage\./);
+  assert.match(dashboard, /#\/task\//);
+});
+
+test('loadReport maps a report and treats 409 as not generated', async () => {
+  const { loadReport } = await import('../src/features/dashboard/data.ts');
+  const report = {
+    recipe: { id: 'r', version: '1' }, metrics: { accuracy: 0.5, total: 4 }, evidence_class: 'sandboxed_model_code',
+    verdict: 'not_comparable', evaluator_version: 'e1', manifest: { manifest_hash: 'abc' },
+    evidence: [{ sha256: 'f'.repeat(64), bytes: 3, media_type: 'text/plain' }], limitations: ['x'],
+  };
+  const ok = { async read() { return report; } };
+  const view = await loadReport(ok, 'run_1', signal);
+  assert.equal(view.recipe, 'r/1');
+  assert.deepEqual(view.metrics, [['accuracy', '0.5000'], ['total', '4']]);
+  assert.equal(view.evidence.length, 1);
+  const pending = { async read() { throw new GuidedApiError('n', 409, 'REPORT_NOT_READY'); } };
+  assert.equal(await loadReport(pending, 'run_1', signal), null);
+});
