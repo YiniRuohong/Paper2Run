@@ -1079,7 +1079,7 @@ make contracts-check
 
 ### 仓库内专题文档
 
-- [README 入口](../README.md)
+- [README 入口](../../README.md)
 - [技术架构](02-技术架构.md)
 - [模块化与数据设计](05-模块化与数据设计.md)
 - [接口定义](06-接口定义.md)

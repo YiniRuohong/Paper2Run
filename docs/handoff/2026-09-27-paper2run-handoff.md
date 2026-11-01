@@ -551,7 +551,7 @@ created_at
 
 公共契约参考：
 
-- `docs/09-前后端公共接口契约.md:454-519`
+- `docs/engineering/09-前后端公共接口契约.md:454-519`
 
 ### 5.10 Runner reconciliation、reaper 和真实取消未完成
 
@@ -620,7 +620,7 @@ PYTHONPATH=. .venv/bin/pytest -q tests/integration/phase02/test_run_detail_http.
 - `services/api/p2r_api/routes/runs.py`
 - `packages/persistence/p2r_persistence/models.py`
 - `packages/artifacts/p2r_artifacts/store.py`
-- `docs/09-前后端公共接口契约.md`
+- `docs/engineering/09-前后端公共接口契约.md`
 - `apps/web/src/api-client/client.ts`
 - `apps/web/src/api-client/types.ts`
 
@@ -735,15 +735,15 @@ PDF 如果当前环境缺少可靠渲染依赖，应先完成接口和可验证�
 
 ### 规划和契约
 
-- `docs/superpowers/plans/2026-09-25-execution-control-plane.md`
-- `docs/09-前后端公共接口契约.md`
-- `docs/06-接口定义.md`
+- `docs/design/plans/2026-09-25-execution-control-plane.md`
+- `docs/engineering/09-前后端公共接口契约.md`
+- `docs/engineering/06-接口定义.md`
 
 ## 八、新会话开场建议
 
 可以直接把下面这段作为新会话第一条消息：
 
-> 继续推进 Paper2Run。请先阅读交接文档 `docs/2026-09-27-paper2run-handoff.md`，固定使用 worktree `/Users/andyzhao/Documents/claude code/Ali_Hackthon/.worktrees/phase0-phase1` 和分支 `feat/paper2run-phase0-phase1`。遵守文档中的禁止 commit、push、安装依赖、联网、真实模型/GPU/外部部署约束。先核对当前文件和聚焦测试结果，再优先闭合 Attempt 文件到 Artifact 文本读取的证据链，补齐完整性校验、UTF-8 字节分块、权限隔离、标准错误 envelope 和回归测试。完成后继续推进 Report operation、Markdown/PDF/ZIP 导出、Runner reconciliation、repair budget、Session/CSRF 和综合验证，直到所有可在当前环境完成的功能都落地，并如实记录 PostgreSQL、多 Worker 和真实 Runner 的外部限制。
+> 继续推进 Paper2Run。请先阅读交接文档 `docs/handoff/2026-09-27-paper2run-handoff.md`，固定使用 worktree `/Users/andyzhao/Documents/claude code/Ali_Hackthon/.worktrees/phase0-phase1` 和分支 `feat/paper2run-phase0-phase1`。遵守文档中的禁止 commit、push、安装依赖、联网、真实模型/GPU/外部部署约束。先核对当前文件和聚焦测试结果，再优先闭合 Attempt 文件到 Artifact 文本读取的证据链，补齐完整性校验、UTF-8 字节分块、权限隔离、标准错误 envelope 和回归测试。完成后继续推进 Report operation、Markdown/PDF/ZIP 导出、Runner reconciliation、repair budget、Session/CSRF 和综合验证，直到所有可在当前环境完成的功能都落地，并如实记录 PostgreSQL、多 Worker 和真实 Runner 的外部限制。
 
 ## 九、交接结论
 

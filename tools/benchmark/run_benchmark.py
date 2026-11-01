@@ -15,7 +15,7 @@ Online mode (entry point only; needs a user-supplied provider)
     sandbox -> interval. The provider must implement the
     :class:`ProviderCodegen` protocol (``extract`` + ``generate_code``).
     The default provider raises :class:`ProviderNotConfigured`; see
-    ``docs/benchmark.md`` and :class:`NotConfiguredProvider` for how to
+    ``docs/components/benchmark.md`` and :class:`NotConfiguredProvider` for how to
     wire ``OpenAICompatibleProvider`` / ``p2r_orchestration``. No code
     path in this file performs network I/O by itself.
 
@@ -687,7 +687,7 @@ class ProviderCodegen(Protocol):
 
 
 _WIRING_EXAMPLE = """
-How to configure a provider (see docs/benchmark.md for the full guide):
+How to configure a provider (see docs/components/benchmark.md for the full guide):
 
 1. Preferred: adapt the production service —
        from p2r_orchestration.codegen_service import CodegenService

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from p2r_orchestration.execution_repository import ExecutionRepository
 from p2r_persistence.job_repository import JobRepository
 from p2r_persistence.models import AttemptRecord, ExecutionRecord, Job
-from p2r_runner_service import ControlledRunner, RunnerResult
+from p2r_orchestration.controlled_runner import ControlledRunner, RunnerResult
 
 from tests.integration.phase02.test_run_worker import factory, make_run
 

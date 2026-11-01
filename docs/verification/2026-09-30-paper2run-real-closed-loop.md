@@ -20,7 +20,7 @@
 
 ## 结论
 
-交接文档（`docs/2026-09-30-paper2run-handoff.md`）的 P0/P1/P2 前四步全部完成：
+交接文档（`docs/handoff/2026-09-30-paper2run-handoff.md`）的 P0/P1/P2 前四步全部完成：
 
 1. **P1 测试绿化**：21 个旧 export/guided-export 失败全部修复。真实根因与交接文档描述略有不同——`EnvironmentCheckRecord(ready)` 前置插入在早前部分修复中已存在于 `test_export_artifacts_http.py`，剩余门禁是 candidate 缺 `execution_support="supported"`（422 UNSUPPORTED_RECIPE）。实际修复：给 seeded candidate 补 `execution_support/label` 一处 fixture 数据，未触碰产品代码与门禁。
 2. **P0 真实 CPU Recipe `real_cpu_baseline/1`**：仓库内置固定数据集（`services/runner/data/real_cpu_baseline_v1.csv`，400 行，SHA-256 `607d8d8c…9854` 执行时校验；生成脚本 `tools/generate_real_cpu_baseline_dataset.py`，种子 20260930，重生成逐字节一致）；纯标准库逻辑回归（train 320 / test 80，确定性 split，seeded minibatch），实测默认参数测试集 accuracy **0.8875**（71/80）；Pydantic 冻结参数 schema（seed/max_epochs/learning_rate/batch_size，越界与未知键拒绝）；墙钟超时 `RecipeTimeout`；evidence_class `real_local_cpu`。

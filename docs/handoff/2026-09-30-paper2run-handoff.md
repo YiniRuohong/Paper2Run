@@ -379,13 +379,13 @@ PYTHONPATH=. .venv/bin/python -m pytest -q
 主要验证记录：
 
 - `docs/verification/2026-09-29-paper2run-phase0-phase1.md`
-- `docs/2026-09-27-paper2run-handoff.md`
-- `docs/superpowers/plans/2026-09-29-paper2run-article-to-execution-plan.md`
-- `docs/superpowers/specs/2026-09-29-paper2run-article-to-execution-design.md`
+- `docs/handoff/2026-09-27-paper2run-handoff.md`
+- `docs/design/plans/2026-09-29-paper2run-article-to-execution-plan.md`
+- `docs/design/specs/2026-09-29-paper2run-article-to-execution-design.md`
 
 当前交接文档：
 
-- `docs/2026-09-30-paper2run-handoff.md`
+- `docs/handoff/2026-09-30-paper2run-handoff.md`
 
 ## 12. 子代理委托注意事项
 

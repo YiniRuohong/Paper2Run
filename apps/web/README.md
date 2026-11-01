@@ -2,8 +2,8 @@
 
 论文复现工作台前端。当前阶段：**F1 GUI Mock 完成**（四视图 + 路由 + 唯一 api-client + M01–M12 Mock 场景），尚未进入 live 联调。
 
-- 契约：`docs/09-前后端公共接口契约.md` v0.2（DTO 逐字转录于 `src/api-client/types.ts`，后端交付 OpenAPI 生成类型后替换）
-- 页面与状态规范：`docs/10-前端GUI交接说明.md`
+- 契约：`docs/engineering/09-前后端公共接口契约.md` v0.2（DTO 逐字转录于 `src/api-client/types.ts`，后端交付 OpenAPI 生成类型后替换）
+- 页面与状态规范：`docs/engineering/10-前端GUI交接说明.md`
 - 视觉与工程约束：工作区根 `AGENTS.md`（前端 Agent 宪法）及 `docs/12-前端宪法.md`（注释版）
 
 ## 启动

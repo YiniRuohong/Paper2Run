@@ -349,7 +349,7 @@ Expected: 原有测试与新入口测试全部 PASS，Vite build 成功，无 AP
 
 **Files:**
 - Create: `docs/verification/2026-09-29-article-entry-environment-ssh.md`
-- Modify: `docs/2026-09-27-paper2run-handoff.md`（仅追加本轮状态，不删除历史证据）
+- Modify: `docs/handoff/2026-09-27-paper2run-handoff.md`（仅追加本轮状态，不删除历史证据）
 
 - [ ] **Step 1: 运行后端、前端和静态检查**
 

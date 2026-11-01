@@ -20,7 +20,7 @@ Paper2Run 采用**架构借鉴、独立实现**路线：只吸收 OpenAI4S 的 `
 - PostgreSQL + SQLAlchemy 2 + Alembic；
 - 本地 Artifact Store 抽象，后续可替换对象存储；
 - 首版不强制 Redis、Celery、Kubernetes、向量数据库；
-- 浏览器公共 API 继续遵循 `docs/09-前后端公共接口契约.md` v0.2。
+- 浏览器公共 API 继续遵循 `docs/engineering/09-前后端公共接口契约.md` v0.2。
 
 ## 2. 产品与可信边界
 
@@ -317,7 +317,7 @@ audit_events, idempotency_records
 
 ## 9. API 设计
 
-公共 API 继续以 `docs/09-前后端公共接口契约.md` v0.2 为唯一浏览器契约来源，不在本设计中重新定义同名 DTO。需补充的 Session/Action/Kernel/Checkpoint 端点如下，具体字段在实现时加入 contracts 并生成 OpenAPI/TypeScript：
+公共 API 继续以 `docs/engineering/09-前后端公共接口契约.md` v0.2 为唯一浏览器契约来源，不在本设计中重新定义同名 DTO。需补充的 Session/Action/Kernel/Checkpoint 端点如下，具体字段在实现时加入 contracts 并生成 OpenAPI/TypeScript：
 
 ```text
 POST   /projects/{project_id}/sessions

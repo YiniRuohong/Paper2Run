@@ -38,8 +38,10 @@
 
 1. 独立进程：`python -I`（隔离模式，无视用户 site-packages 与
    `PYTHON*` 环境影响）。
-2. 独立会话/进程组（`start_new_session=True`）：一次 `os.killpg` 可击杀
-   整棵 guest 进程树。
+2. 独立会话/进程组（`start_new_session=True`）：`os.killpg` 击杀整棵
+   guest 进程树。击杀会**重复发送直到内核返回 ESRCH**（单次 killpg 会漏掉
+   恰在 fork 中的子进程，2026-11 实测复现）；并且**每次运行结束后都清扫
+   一次进程组**，guest 正常退出时留在后台的子进程同样会被回收。
 3. 白名单环境：仅构造 `PATH` 与 `TMPDIR`（指向沙箱工作目录）。macOS
    CoreFoundation 注入的 `LC_CTYPE`/`__CF_USER_TEXT_ENCODING` 属平台常量。
 4. 一次性工作目录（`tempfile.mkdtemp`），`finally` 中删除。

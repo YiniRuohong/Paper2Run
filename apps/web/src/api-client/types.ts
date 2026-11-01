@@ -1,4 +1,4 @@
-// Paper2Run 公共 API 契约类型 · 逐字对齐 docs/09-前后端公共接口契约.md v0.2
+// Paper2Run 公共 API 契约类型 · 逐字对齐 docs/engineering/09-前后端公共接口契约.md v0.2
 // 后端交付 OpenAPI 生成类型后，本文件由生成物替换；组件只消费类型，不改字段。
 
 export type ID = string;

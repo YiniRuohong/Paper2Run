@@ -19,25 +19,12 @@ dependencies = [
 test = ["pytest>=8", "httpx>=0.27"]
 
 [tool.pytest.ini_options]
-pythonpath = ["services/api", "services/kernel", "services/runner", "packages/contracts", "packages/artifacts", "packages/persistence", "packages/orchestration", "packages/evaluation", "packages/codegen", "packages/sandbox"]
+pythonpath = ["services/api", "packages/contracts", "packages/artifacts", "packages/persistence", "packages/sandbox", "packages/evaluation", "packages/codegen", "packages/runner", "packages/kernel", "packages/orchestration"]
 testpaths = ["tests"]
 
-[tool.setuptools]
-# p2r_runner and p2r_runner_service are single-file modules under services/runner
-# (no __init__.py), so they must be declared as py-modules; packages.find only
-# discovers package directories and would silently drop them from installs.
-py-modules = ["p2r_runner", "p2r_runner_service"]
+[tool.setuptools.package-data]
+p2r_runner = ["data/*.csv"]
 
 [tool.setuptools.packages.find]
-where = ["services/api", "services/kernel", "services/runner", "packages/contracts", "packages/persistence", "packages/artifacts", "packages/orchestration", "packages/evaluation", "packages/codegen", "packages/sandbox"]
-include = ["p2r_api*", "p2r_kernel*", "p2r_contracts*", "p2r_persistence*", "p2r_artifacts*", "p2r_orchestration*", "p2r_evaluation*", "p2r_codegen*", "p2r_sandbox*"]
-
-[tool.setuptools.package-dir]
-p2r_api = "services/api/p2r_api"
-p2r_contracts = "packages/contracts/p2r_contracts"
-p2r_persistence = "packages/persistence/p2r_persistence"
-p2r_evaluation = "packages/evaluation/p2r_evaluation"
-p2r_codegen = "packages/codegen/p2r_codegen"
-p2r_sandbox = "packages/sandbox/p2r_sandbox"
-p2r_runner = "services/runner"
-p2r_runner_service = "services/runner"
+where = ["services/api", "packages/contracts", "packages/artifacts", "packages/persistence", "packages/sandbox", "packages/evaluation", "packages/codegen", "packages/runner", "packages/kernel", "packages/orchestration"]
+include = ["p2r_api*", "p2r_contracts*", "p2r_artifacts*", "p2r_persistence*", "p2r_sandbox*", "p2r_evaluation*", "p2r_codegen*", "p2r_runner*", "p2r_kernel*", "p2r_orchestration*"]

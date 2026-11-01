@@ -70,5 +70,5 @@ fixed schema.
 - On macOS `RLIMIT_AS` is unenforceable; memory is enforced reactively by
   sampling RSS (leader every ~15 ms, whole process tree every ~200 ms).
 - A guest child that creates a *new session* escapes process-group kills.
-- Full threat model and backend matrix: [`docs/sandbox.md`](../../docs/sandbox.md)
+- Full threat model and backend matrix: [`docs/components/sandbox.md`](../../docs/components/sandbox.md)
   (repository root) when used inside Paper2Run.

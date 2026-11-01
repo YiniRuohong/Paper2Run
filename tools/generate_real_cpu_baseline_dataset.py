@@ -10,8 +10,9 @@ ROWS_PER_CLASS = 200
 FEATURE_COUNT = 8
 OUTPUT_PATH = (
     Path(__file__).resolve().parents[1]
-    / "services"
+    / "packages"
     / "runner"
+    / "p2r_runner"
     / "data"
     / "real_cpu_baseline_v1.csv"
 )

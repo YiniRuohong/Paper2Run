@@ -13,7 +13,7 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 已知限制：
 
 - 执行面仅在本地：无远程 GPU Runner；SSH 仅用于目标环境核验，不承载远程执行。
-- 沙箱依赖 macOS seatbelt（`sandbox-exec`）；不可用时自动降级并如实上报能力。
+- 沙箱后端按 macOS seatbelt → Linux bwrap → unshare → 无隔离 依次探测，能力由探针实测后才上报；Linux 后端尚未在真实 Linux 上实跑，Windows 仅有超时与输出封顶。
 - 本地持久化使用 SQLite；PostgreSQL 是生产目标，尚未在本机验证。
 - 模型调用通过 OpenAI-compatible Provider，需自行配置可用的模型服务。
 
@@ -24,27 +24,31 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 - **一键启动（推荐）：** macOS 双击 `启动Paper2Run.command`，Windows 双击 `启动Paper2Run.bat`。两者调用 `scripts/launch.py`：自动创建 `.venv`、必要时构建前端，然后从单一本地端口（8010 起）同时提供 API 与页面并打开浏览器；需要 Python 3.11+。
 - **开发模式：** 分别启动 API 与前端 dev server，命令见下文 [本地 Guided Demo](#本地-guided-demo)。
 
+## 🗂️ 仓库结构
+
+软件代码在 `apps/`（前端）、`services/api/`（唯一可部署服务）、`packages/`（分层 Python 库）、`scripts/`、`tests/`、`tools/`；所有产品与工程文档在 `docs/`，索引见 [docs/README.md](docs/README.md)，当前实现的分层架构见 [docs/architecture.md](docs/architecture.md)。
+
 ## 📚 文档导航
 
-**总体工程规划：** [总体工程规划](docs/00-总体工程规划.md) 是总体工程文档入口；其中 [Paper2Run 统一工程设计](docs/11-Paper2Run统一工程设计.md) 是首版 Demo 的唯一工程总设计和优先级更高的设计基线。它统一定义 Paper2Run Framework Service、Pi SDK + Extension、OpenAI-compatible Provider、FastAPI 控制面、Worker、Runner、独立评测、公共 API 和内部 API 的边界。
+**总体工程规划：** [总体工程规划](docs/engineering/00-总体工程规划.md) 是总体工程文档入口；其中 [Paper2Run 统一工程设计](docs/engineering/11-Paper2Run统一工程设计.md) 是首版 Demo 的唯一工程总设计和优先级更高的设计基线。它统一定义 Paper2Run Framework Service、Pi SDK + Extension、OpenAI-compatible Provider、FastAPI 控制面、Worker、Runner、独立评测、公共 API 和内部 API 的边界。
 
-**前后端交接标准接口：** [前后端交接标准接口](docs/00-前后端交接标准接口.md) 是两人联调入口；具体标准见 [前后端公共接口契约 v0.2](docs/09-前后端公共接口契约.md) 和 [发给队友的 GUI 交接说明](docs/10-前端GUI交接说明.md)。用户负责后端，队友完整负责 `apps/web/`；公共 API 字段以 v0.2 为准，旧 06 的公共示例不再作为独立标准。
+**前后端交接标准接口：** [前后端交接标准接口](docs/engineering/00-前后端交接标准接口.md) 是两人联调入口；具体标准见 [前后端公共接口契约 v0.2](docs/engineering/09-前后端公共接口契约.md) 和 [发给队友的 GUI 交接说明](docs/engineering/10-前端GUI交接说明.md)。用户负责后端，队友完整负责 `apps/web/`；公共 API 字段以 v0.2 为准，旧 06 的公共示例不再作为独立标准。
 
-[前端交接包 v0.2](deliveries/Paper2Run-前端交接包-v0.2.zip) 包含上述两份文档、原型 HTML 和阅读说明，可直接转发。它是本次基线快照，后续修改文档需重新出包；不包含任何密钥、账号或服务实现。
+[前端交接包 v0.2](docs/delivery/Paper2Run-前端交接包-v0.2.zip) 包含上述两份文档、原型 HTML 和阅读说明，可直接转发。它是本次基线快照，后续修改文档需重新出包；不包含任何密钥、账号或服务实现。
 
-1. **[总体工程规划](docs/00-总体工程规划.md)**：总体工程文档入口；先读其中的统一工程设计。
-2. **[前后端交接标准接口](docs/00-前后端交接标准接口.md)**：浏览器公共 API、DTO、SSE、Mock、页面状态和联调边界。
-3. **[统一工程设计](docs/11-Paper2Run统一工程设计.md)**：首版唯一总设计；总体工程的最高优先级基线。
-4. [总体技术架构](docs/02-技术架构.md)：产品范围、技术取舍、科研可比性与安全原则。
-5. **[模块化与数据设计](docs/05-模块化与数据设计.md)**：模块职责、内部端口、表与约束、Experiment/Revision/Run/Execution 生命周期。
-6. **[接口定义](docs/06-接口定义.md)**：请求/响应、错误码、分页、幂等、SSE、报告导出、Runner 内部协议。
-7. **[运行与部署](docs/07-运行与部署.md)**：四种运行模式、进程与端口、配置、拟实现启动命令、两机部署、恢复与重放。
-8. **[前后端公共接口契约](docs/09-前后端公共接口契约.md)**：浏览器 `/api/v1` DTO、页面状态和联调规则。
-9. **[前端 GUI 交接说明](docs/10-前端GUI交接说明.md)**：页面、Mock、视觉和前端负责人边界。
-10. **[开发任务包](docs/08-开发任务包.md)**：按依赖拆分的任务、允许路径、验收、测试与完成定义。
-11. [比赛规则与交付清单](docs/01-比赛规则与交付清单.md)：公开证据、待官方核实条款和提交材料。
-12. [实施计划与验收](docs/03-实施计划与验收.md)：日历排期、团队分工、基准设计与演示。
-13. [技能安装与使用记录](docs/04-技能安装与使用记录.md)：来源、安装校验、许可证和限制。
+1. **[总体工程规划](docs/engineering/00-总体工程规划.md)**：总体工程文档入口；先读其中的统一工程设计。
+2. **[前后端交接标准接口](docs/engineering/00-前后端交接标准接口.md)**：浏览器公共 API、DTO、SSE、Mock、页面状态和联调边界。
+3. **[统一工程设计](docs/engineering/11-Paper2Run统一工程设计.md)**：首版唯一总设计；总体工程的最高优先级基线。
+4. [总体技术架构](docs/engineering/02-技术架构.md)：产品范围、技术取舍、科研可比性与安全原则。
+5. **[模块化与数据设计](docs/engineering/05-模块化与数据设计.md)**：模块职责、内部端口、表与约束、Experiment/Revision/Run/Execution 生命周期。
+6. **[接口定义](docs/engineering/06-接口定义.md)**：请求/响应、错误码、分页、幂等、SSE、报告导出、Runner 内部协议。
+7. **[运行与部署](docs/engineering/07-运行与部署.md)**：四种运行模式、进程与端口、配置、拟实现启动命令、两机部署、恢复与重放。
+8. **[前后端公共接口契约](docs/engineering/09-前后端公共接口契约.md)**：浏览器 `/api/v1` DTO、页面状态和联调规则。
+9. **[前端 GUI 交接说明](docs/engineering/10-前端GUI交接说明.md)**：页面、Mock、视觉和前端负责人边界。
+10. **[开发任务包](docs/engineering/08-开发任务包.md)**：按依赖拆分的任务、允许路径、验收、测试与完成定义。
+11. [比赛规则与交付清单](docs/engineering/01-比赛规则与交付清单.md)：公开证据、待官方核实条款和提交材料。
+12. [实施计划与验收](docs/engineering/03-实施计划与验收.md)：日历排期、团队分工、基准设计与演示。
+13. [技能安装与使用记录](docs/engineering/04-技能安装与使用记录.md)：来源、安装校验、许可证和限制。
 
 阅读顺序建议：先读 00-总体工程规划；两人联调再读 00-前后端交接标准接口 → 10 → 09；后端实现按 11 → 02 → 05 → 06 的内部协议 → 07 → 08 查阅。公共接口 DTO 与 GUI 协作范围以 00-前后端交接标准接口、09/10 为准，Framework Service、Provider 和确定性控制面的统一边界以 11 为准。规划文档包含未实现的生产能力；本地 Demo 的实测启动方法与验收范围以验证记录为准。
 
@@ -53,13 +57,13 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 在仓库根目录使用现有 `.venv` 与前端依赖，分别启动两个终端（仅 loopback，不部署）：
 
 ```bash
-P2R_DEMO_DIR=.p2r-guided-verification/runtime PYTHONPATH=.:services/runner .venv/bin/python -m uvicorn p2r_api.main:create_demo_app --factory --host 127.0.0.1 --port 8010
+P2R_DEMO_DIR=.p2r-guided-verification/runtime .venv/bin/python -m uvicorn p2r_api.main:create_demo_app --factory --host 127.0.0.1 --port 8010
 P2R_API_TARGET=http://127.0.0.1:8010 pnpm --dir apps/web dev --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-启动前确认端口未被占用，不要终止其他服务。入口 `/lab` 是六步 Guided Demo；`/lab/advanced` 保留 Session 工作台；`/mock/projects` 是 Mock。普通 `create_app()` 不启用 demo。上述 `PYTHONPATH` 是现有 editable 环境的兼容启动方式，安装包实际 build/install 尚未验证。最近浏览器已完成六步至 Export succeeded，历史加载态问题未再复现但根因未确定；浏览器下载落盘及剩余交互验收尚未完成，不能把 HTTP 200 或测试通过视为完整交付。
+启动前确认端口未被占用，不要终止其他服务。入口 `/lab` 是六步 Guided Demo；`/lab/advanced` 保留 Session 工作台；`/mock/projects` 是 Mock。普通 `create_app()` 不启用 demo。首次需 `uv pip install --python .venv/bin/python -e .`（或用一键启动脚本，它会把全部源码根放进 `PYTHONPATH`）。最近浏览器已完成六步至 Export succeeded，历史加载态问题未再复现但根因未确定；浏览器下载落盘及剩余交互验收尚未完成，不能把 HTTP 200 或测试通过视为完整交付。
 
-原始设计依据：[Paper2Run PRD](Paper2Run-PRD.pdf) · [静态交互原型](Paper2Run-原型.html)。原型中的分数、结果和曲线只是演示内容，不能作为实际实验或论文事实。
+原始设计依据：[Paper2Run PRD](docs/product/Paper2Run-PRD.pdf) · [静态交互原型](docs/product/Paper2Run-原型.html)。原型中的分数、结果和曲线只是演示内容，不能作为实际实验或论文事实。
 
 ## 🎯 架构摘要
 

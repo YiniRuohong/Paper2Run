@@ -12,7 +12,7 @@
 
 ## 0. 执行协议与范围
 
-- 规格：`docs/superpowers/specs/2026-09-27-guided-demo-design.md`。对话中已批准；文件内“待审阅”是旧状态，不重新要求设计批准。本计划等待执行批准。
+- 规格：`docs/design/specs/2026-09-27-guided-demo-design.md`。对话中已批准；文件内“待审阅”是旧状态，不重新要求设计批准。本计划等待执行批准。
 - 所有相对路径均基于 `/Users/andyzhao/Documents/claude code/Ali_Hackthon/.worktrees/phase0-phase1`；分支 `feat/paper2run-phase0-phase1`。
 - 不 commit、不 push、不安装依赖、不联网、不部署、不调用模型/GPU/真实训练/外部 Runner。计划中各任务的收尾是 diff 检查，不执行技能默认的 commit 步骤。
 - 已有大量未提交修改；每项任务开始前读取所触及文件当前内容，不能 checkout/reset/clean。写任务串行，主 Agent 保留最终 review。
@@ -117,7 +117,7 @@ Report status 的 `pending` 必须伴随已持久化 build。尚未请求构建�
 
 ## Task 1：冻结 HTTP 契约和数据库迁移
 
-**Files:** 修改 `models.py`；新建 `0014_guided_demo.py`、`tests/integration/phase02/test_guided_schema.py`；修改 `docs/09-前后端公共接口契约.md`（仅添加 Local guided demo 章节）。
+**Files:** 修改 `models.py`；新建 `0014_guided_demo.py`、`tests/integration/phase02/test_guided_schema.py`；修改 `docs/engineering/09-前后端公共接口契约.md`（仅添加 Local guided demo 章节）。
 
 - [ ] 1. 写迁移测试：空库 upgrade head；旧库在 0013 插入 Paper/Report/Export 后 upgrade；旧 report/JSON metadata 保留；重复 build generation、重复 export format、重复 receipt 被数据库拒绝。
 - [ ] 2. 执行 `PYTHONPATH=. .venv/bin/pytest tests/integration/phase02/test_guided_schema.py -q`，确认新增表/字段缺失导致失败，不接受 import 环境错误作为目标红灯。

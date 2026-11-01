@@ -62,7 +62,7 @@
 ### Task 5: Full verification and residual-risk record
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-09-25-execution-control-plane.md` only for checkboxes/results
+- Modify: `docs/design/plans/2026-09-25-execution-control-plane.md` only for checkboxes/results
 
 - [x] **Step 1: Run `.venv/bin/python -m pytest -q`.**
 - [x] **Step 2: Run `.venv/bin/python -m compileall -q packages services tests`.**

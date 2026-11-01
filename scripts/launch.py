@@ -31,12 +31,21 @@ VENV_DIR = ROOT / ".venv"
 DIST_INDEX = ROOT / "apps" / "web" / "dist" / "index.html"
 DEMO_DIR = ROOT / ".p2r-app"
 BASE_PORT = 8010
+# Python source roots (keep in sync with pyproject.toml [tool.pytest.ini_options]).
+# Putting them on PYTHONPATH means a stale editable install can never shadow them.
+SOURCE_ROOTS = ("services/api", "packages/contracts", "packages/artifacts", "packages/persistence",
+                "packages/sandbox", "packages/evaluation", "packages/codegen", "packages/runner",
+                "packages/kernel", "packages/orchestration")
 
 WINDOWS = sys.platform == "win32"
 
 
 def message(text: str) -> None:
     print(text, flush=True)
+
+
+def source_pythonpath() -> str:
+    return os.pathsep.join([str(ROOT)] + [str(ROOT / r) for r in SOURCE_ROOTS])
 
 
 def venv_python() -> Path:
@@ -62,8 +71,9 @@ def ensure_venv() -> Path:
         message(f"[!] 虚拟环境损坏（缺 {python}）；删除 .venv 目录后重试 / broken venv, remove .venv and retry")
         raise SystemExit(1)
     probe = subprocess.run(
-        [str(python), "-c", "import p2r_api, uvicorn"],
+        [str(python), "-c", "import p2r_api, p2r_runner, p2r_kernel, uvicorn"],
         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, "PYTHONPATH": source_pythonpath()},
     )
     if probe.returncode != 0:
         message("[1/3] 安装后端依赖 / installing backend dependencies ...")
@@ -116,10 +126,7 @@ def main() -> None:
         "P2R_DEMO_DIR": str(DEMO_DIR),
         "P2R_WEB_DIST": str(DIST_INDEX.parent),
         "PYTHONIOENCODING": "utf-8",
-        # p2r_runner is a single-file module under services/runner; the
-        # editable install does not reliably surface it, so mirror the
-        # verified manual launch path.
-        "PYTHONPATH": os.pathsep.join([str(ROOT), str(ROOT / "services" / "runner")]),
+        "PYTHONPATH": source_pythonpath(),
     })
     message(f"[3/3] 启动服务 / starting server at {url} （数据目录 .p2r-app）")
     message("    停止 / stop: 关闭本窗口或按 Ctrl+C")
