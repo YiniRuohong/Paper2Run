@@ -281,7 +281,8 @@ def test_forkbomb_stopped_no_residual_processes():
     # killed the group - the run must not end cleanly.
     assert result.exit_code != 0 or result.timed_out
     for _ in range(30):  # up to ~3s for SIGKILL delivery to be observable
-        survivors = _marker_survivors()
+        # match this run's marker only, so leftovers of other runs cannot mask/fake a result
+        survivors = [line for line in _marker_survivors() if marker in line]
         if not survivors:
             break
         time.sleep(0.1)
@@ -376,3 +377,23 @@ def test_none_backend_reports_no_isolation(monkeypatch):
     result = run_python_sandbox("print('x')")
     assert result.backend == "none"
     assert result.network_isolated is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="ps/killpg unavailable")
+def test_background_child_of_cleanly_exiting_guest_is_reaped():
+    """A guest that spawns a background child and exits 0 must not leave it running."""
+    marker = FORKBOMB_MARKER_PREFIX + "bg-" + uuid.uuid4().hex[:8]
+    code = (
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(120)', "
+        + repr(marker) + "], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "print('spawned')\n"
+    )
+    result = run_python_sandbox(code, limits=SandboxLimits(max_seconds=10, max_processes=_nproc_allowing_forks()))
+    assert result.exit_code == 0 and not result.timed_out
+    for _ in range(30):
+        survivors = [line for line in _marker_survivors() if marker in line]
+        if not survivors:
+            break
+        time.sleep(0.1)
+    assert survivors == []

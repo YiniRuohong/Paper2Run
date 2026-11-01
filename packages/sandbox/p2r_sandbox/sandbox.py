@@ -796,13 +796,34 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
         except OSError:
             pass
         return
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
+    if not _sweep_process_group(proc.pid):
         try:
             proc.kill()
         except OSError:
             pass
+
+
+def _sweep_process_group(pgid: int, attempts: int = 200) -> bool:
+    """SIGKILL ``pgid`` repeatedly until the group is empty.
+
+    A single ``killpg`` races with a guest that is forking at that instant:
+    the new child joins the group after the signal was delivered and
+    survives (observed with a fork bomb). Re-signalling until the kernel
+    reports ESRCH closes that window. Also used after a *normal* exit so a
+    guest cannot leave background children behind in its group.
+    Returns False only if the group could not be signalled at all.
+    """
+    signalled = False
+    for _ in range(attempts):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except (PermissionError, OSError):
+            return signalled
+        signalled = True
+        time.sleep(0.005)
+    return signalled
 
 
 def _drain_pipe(fd: int, buffer: bytearray, cap: int, truncated: bool) -> bool:
@@ -1147,6 +1168,9 @@ def run_python_sandbox(
                 memory_rss_observed,
             ) = _pump(proc, limits)
         exit_code = proc.returncode
+        if sys.platform != "win32":
+            # The leader has exited; reap anything it left in its group.
+            _sweep_process_group(proc.pid)
         files, file_notes = _collect_files(workdir, collect_files)
         duration_ms = int((time.monotonic() - started) * 1000)
     finally:
