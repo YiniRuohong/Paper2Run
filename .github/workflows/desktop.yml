@@ -1,0 +1,87 @@
+name: desktop
+
+# Builds the Paper2Run desktop app on real macOS and Windows hosts, smoke-tests
+# the bundled Python runtime the way Electron launches it, and uploads the
+# installers. Nothing is signed or published.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "services/**"
+      - "scripts/desktop/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "services/**"
+      - "scripts/desktop/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+            python: apps/desktop/.runtime/darwin-arm64/python/bin/python3.12
+          - os: windows-latest
+            target: win32-x64
+            python: apps/desktop/.runtime/win32-x64/python/python.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            apps/web/pnpm-lock.yaml
+            apps/desktop/pnpm-lock.yaml
+
+      - name: Web tests
+        run: |
+          pnpm --dir apps/web install --frozen-lockfile
+          pnpm --dir apps/web test
+
+      - name: Build desktop app
+        run: python scripts/desktop/build_desktop.py --target ${{ matrix.target }}
+
+      - name: Smoke-test bundled runtime
+        run: python scripts/desktop/smoke_runtime.py --python ${{ matrix.python }} --web-dist apps/web/dist
+
+      - name: Sandbox capabilities under bundled runtime
+        shell: bash
+        run: ${{ matrix.python }} -I -B -m p2r_sandbox capabilities
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Paper2Run-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.zip

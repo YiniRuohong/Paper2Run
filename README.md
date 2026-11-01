@@ -24,6 +24,15 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 - **一键启动（推荐）：** macOS 双击 `启动Paper2Run.command`，Windows 双击 `启动Paper2Run.bat`。两者调用 `scripts/launch.py`：自动创建 `.venv`、必要时构建前端，然后从单一本地端口（8010 起）同时提供 API 与页面并打开浏览器；需要 Python 3.11+。
 - **开发模式：** 分别启动 API 与前端 dev server，命令见下文 [本地 Guided Demo](#本地-guided-demo)。
 
+## 🖥️ 桌面应用（macOS / Windows）
+
+`apps/desktop/` 是 Electron 桌面壳：内置一份独立的 CPython 3.12（python-build-standalone，按 SHA-256 固定），启动时在本机回环随机端口拉起后端，并在原生窗口中加载界面；用户无需安装 Python 或 Node。之所以内置真实解释器而不是 PyInstaller，是因为沙箱用 `sys.executable -I` 启动受控子进程。
+
+- **构建：** `python scripts/desktop/build_desktop.py`（默认本机平台）；`--target win32-x64` 可在 macOS 上交叉构建 Windows 安装包；`--skip-web --skip-runtime --dir` 用于快速出包。产物在 `apps/desktop/release/`（macOS：`.dmg`/`.zip`；Windows：NSIS `.exe`/`.zip`）。CI 见 `.github/workflows/desktop.yml`，在真实 macOS 与 Windows 上构建并冒烟测试内置运行时。
+- **开发：** `pnpm --dir apps/desktop install && pnpm --dir apps/desktop dev`，使用仓库 `.venv` 与 `apps/web/dist`。
+- **数据与日志：** macOS 在 `~/Library/Application Support/Paper2Run/{data,logs}`，Windows 在 `%APPDATA%\Paper2Run\{data,logs}`；应用内「设置」可直接打开。退出或应用崩溃时后端随之退出（stdin 看门狗）。
+- **未签名：** 安装包未做代码签名/公证。macOS 首次打开需右键 →「打开」（或在「系统设置 → 隐私与安全性」中允许）；Windows SmartScreen 需点「更多信息 → 仍要运行」。
+
 ## 🗂️ 仓库结构
 
 软件代码在 `apps/`（前端）、`services/api/`（唯一可部署服务）、`packages/`（分层 Python 库）、`scripts/`、`tests/`、`tools/`；所有产品与工程文档在 `docs/`，索引见 [docs/README.md](docs/README.md)，当前实现的分层架构见 [docs/architecture.md](docs/architecture.md)。

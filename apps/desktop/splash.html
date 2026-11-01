@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'" />
+    <title>Paper2Run</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #F7F7F8;
+        --text: #1D1D1F;
+        --muted: #6E6E76;
+        --track: rgba(0, 0, 0, 0.08);
+        --panel: rgba(0, 0, 0, 0.04);
+        --line: rgba(0, 0, 0, 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1C1C1F;
+          --text: #ECECF0;
+          --muted: #8B8B93;
+          --track: rgba(255, 255, 255, 0.1);
+          --panel: rgba(255, 255, 255, 0.05);
+          --line: rgba(255, 255, 255, 0.14);
+        }
+      }
+      * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
+        user-select: none;
+        -webkit-app-region: drag;
+      }
+      .mark { width: 72px; height: 72px; flex: none; }
+      body.failed .mark { width: 40px; height: 40px; }
+      h1 { margin: 14px 0 4px; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+      body.failed h1 { margin-top: 8px; font-size: 14px; }
+      #status { margin: 0; font-size: 12px; color: var(--muted); text-align: center; overflow-wrap: anywhere; }
+      #bar {
+        position: relative;
+        width: 148px;
+        height: 2px;
+        margin-top: 18px;
+        overflow: hidden;
+        border-radius: 1px;
+        background: var(--track);
+      }
+      #bar::after {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 40%;
+        border-radius: 1px;
+        background: #8E8CFF;
+        animation: slide 1.3s ease-in-out infinite;
+      }
+      @keyframes slide {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(250%); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #bar::after { animation-duration: 4s; }
+      }
+      #failure { display: flex; flex-direction: column; width: 100%; min-height: 0; flex: 1; margin-top: 12px; }
+      #log {
+        flex: 1;
+        min-height: 0;
+        margin: 0;
+        padding: 8px 10px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--muted);
+        font: 11px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        user-select: text;
+        -webkit-app-region: no-drag;
+      }
+      .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+      button {
+        padding: 5px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        font-size: 12px;
+        -webkit-app-region: no-drag;
+      }
+      button:hover { background: var(--panel); }
+      button.primary { border-color: transparent; background: var(--text); color: var(--bg); }
+      button.primary:hover { background: var(--text); opacity: 0.88; }
+    </style>
+  </head>
+  <body>
+    <svg class="mark" viewBox="100 100 824 824" aria-hidden="true">
+      <defs>
+        <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#2A2A30" />
+          <stop offset="1" stop-color="#17171A" />
+        </linearGradient>
+      </defs>
+      <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#tile)" />
+      <path d="M392 262H582L682 362V712Q682 762 632 762H392Q342 762 342 712V312Q342 262 392 262Z" fill="none" stroke="#F2F2F5" stroke-width="40" stroke-linejoin="round" />
+      <path d="M582 262V332Q582 362 612 362H682" fill="none" stroke="#F2F2F5" stroke-width="40" stroke-linejoin="round" stroke-linecap="round" />
+      <path d="M462 482V642L596 562Z" fill="#8E8CFF" stroke="#8E8CFF" stroke-width="28" stroke-linejoin="round" />
+    </svg>
+    <h1>Paper2Run</h1>
+    <p id="status" role="status">正在启动本地服务…</p>
+    <div id="bar" role="progressbar" aria-label="正在启动"></div>
+    <div id="failure" hidden>
+      <pre id="log"></pre>
+      <div class="actions">
+        <button id="quit" type="button">退出</button>
+        <button id="logs" type="button">打开日志目录</button>
+        <button id="retry" type="button" class="primary">重试</button>
+      </div>
+    </div>
+    <script src="splash.js"></script>
+  </body>
+</html>

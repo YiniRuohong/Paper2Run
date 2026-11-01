@@ -36,3 +36,8 @@ _archive/
 .env.*
 !.env.example
 .DS_Store
+
+# Desktop app build output and caches
+apps/desktop/release/
+apps/desktop/.runtime/
+apps/desktop/.cache/

@@ -1,0 +1,66 @@
+{
+  "name": "paper2run-desktop",
+  "productName": "Paper2Run",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paper2Run desktop app: local FastAPI backend + React UI in Electron",
+  "author": "Paper2Run",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "dist:mac": "python3 ../../scripts/desktop/build_desktop.py --target darwin-arm64",
+    "dist:win": "python3 ../../scripts/desktop/build_desktop.py --target win32-x64"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "run.paper2run.desktop",
+    "productName": "Paper2Run",
+    "artifactName": "Paper2Run-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "buildResources": "resources",
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "splash-preload.cjs",
+      "splash.html",
+      "splash.js",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../web/dist", "to": "web", "filter": ["**/*"] },
+      { "from": "backend", "to": "backend", "filter": ["serve.py"] }
+    ],
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.icns",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "extraResources": [
+        { "from": ".runtime/darwin-${arch}/python", "to": "python", "filter": ["**/*"] }
+      ]
+    },
+    "win": {
+      "target": ["nsis", "zip"],
+      "icon": "resources/icon.ico",
+      "extraResources": [
+        { "from": ".runtime/win32-${arch}/python", "to": "python", "filter": ["**/*"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "multiLanguageInstaller": true,
+      "installerLanguages": ["zh_CN", "en_US"]
+    }
+  }
+}
