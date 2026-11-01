@@ -3,15 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>Paper2Run · 论文复现工作台</title>
+    <!-- Applies data-theme / data-shell before first paint (no flash). External
+         file rather than inline so a strict script-src 'self' CSP still allows it. -->
+    <script src="/theme-boot.js"></script>
   </head>
   <body>
-    <div id="p2r-corners" aria-hidden="true">
-      <span class="c-tl"></span>
-      <span class="c-tr"></span>
-      <span class="c-bl"></span>
-      <span class="c-br"></span>
-    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

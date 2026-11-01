@@ -2,7 +2,11 @@ import { Component, StrictMode, Suspense, lazy, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/tokens.css';
 import './styles/entry.css';
-import './features/guided/guided.css';
+import { applyShell } from './desktop';
+import { startTheme } from './theme';
+
+applyShell();
+startTheme();
 
 const GuidedPage = lazy(() => import('./features/guided/GuidedPage'));
 

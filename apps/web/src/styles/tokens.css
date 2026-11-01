@@ -1,51 +1,122 @@
-/* Paper2Run 设计 tokens · Swiss International Typographic Style
-   色板唯一来源：黑白灰阶，零色相，WCAG AA 合规 */
+/* Paper2Run design tokens — native-app look (magpie visual language).
+   Theme is chosen by data-theme on <html> (set before first paint by
+   /theme-boot.js, kept in sync by src/theme.ts). The media query is only a
+   no-JS fallback. Text colours keep >= 4.5:1 against their surfaces;
+   --faint is reserved for icons, separators and decoration, never for text. */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #F7F7F8;
+  --side: #F1F1F3;
+  --surface: #FFFFFF;
+  --raised: #EBEBEE;
+  --nav-on: #E5E5EA;
+  --hover: rgba(0, 0, 0, 0.035);
+  --line: #E4E4E8;
+  --line-soft: #EEEEF1;
+  --text: #1D1D1F;
+  --muted: #66666E;
+  --faint: #A6A6AD;
+  --field: #FFFFFF;
+  --seg-bg: rgba(0, 0, 0, 0.05);
+  --seg-on: #FFFFFF;
+  --seg-on-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.08);
+  --code-bg: #F4F4F6;
+  --accent: #5B5BD6;
+  --accent-text: #4B4BC4;
+  --accent-soft: rgba(91, 91, 214, 0.10);
+  --accent-ink: #FFFFFF;
+  --accent-hover: #4C4CC4;
+  --ok: #136F35;
+  --ok-soft: rgba(19, 111, 53, 0.10);
+  --bad: #BE2A1E;
+  --bad-soft: rgba(217, 45, 32, 0.07);
+  --warn: #94500A;
+  --warn-soft: rgba(196, 116, 12, 0.10);
+  --focus: rgba(91, 91, 214, 0.55);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1C1C1F;
+  --side: #19191C;
+  --surface: #222226;
+  --raised: #2A2A2F;
+  --nav-on: #2A2A2F;
+  --hover: rgba(255, 255, 255, 0.04);
+  --line: #2E2E34;
+  --line-soft: #29292E;
+  --text: #ECECF0;
+  --muted: #94949C;
+  --faint: #5F5F67;
+  --field: #1A1A1D;
+  --seg-bg: rgba(0, 0, 0, 0.22);
+  --seg-on: #34343A;
+  --seg-on-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --code-bg: #18181B;
+  --accent: #8E8CFF;
+  --accent-text: #9C9AFF;
+  --accent-soft: rgba(142, 140, 255, 0.14);
+  --accent-ink: #15151A;
+  --accent-hover: #A3A1FF;
+  --ok: #32D583;
+  --ok-soft: rgba(50, 213, 131, 0.12);
+  --bad: #FF6B6B;
+  --bad-soft: rgba(255, 107, 107, 0.10);
+  --warn: #F5B544;
+  --warn-soft: rgba(245, 181, 68, 0.11);
+  --focus: rgba(142, 140, 255, 0.6);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --bg: #1C1C1F; --side: #19191C; --surface: #222226; --raised: #2A2A2F; --nav-on: #2A2A2F;
+    --hover: rgba(255, 255, 255, 0.04); --line: #2E2E34; --line-soft: #29292E;
+    --text: #ECECF0; --muted: #94949C; --faint: #5F5F67; --field: #1A1A1D;
+    --seg-bg: rgba(0, 0, 0, 0.22); --seg-on: #34343A; --code-bg: #18181B;
+    --accent: #8E8CFF; --accent-text: #9C9AFF; --accent-soft: rgba(142, 140, 255, 0.14); --accent-ink: #15151A; --accent-hover: #A3A1FF;
+    --ok: #32D583; --ok-soft: rgba(50, 213, 131, 0.12); --bad: #FF6B6B; --bad-soft: rgba(255, 107, 107, 0.10);
+    --warn: #F5B544; --warn-soft: rgba(245, 181, 68, 0.11); --focus: rgba(142, 140, 255, 0.6);
+  }
+}
+
 :root {
-  /* 背景层级 */
-  --bg:       #FFFFFF;
-  --bg-deep:  #FAFAFA;
-  --panel:    #FAFAFA;
-  --panel-2:  #F4F4F4;
-  --panel-3:  #EBEBEB;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --mono: "SF Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
-  /* 线条 */
-  --line:        #E2E2E2;
-  --line-strong: #111111;
+  --r-xs: 5px;
+  --r-s: 7px;
+  --r-m: 9px;
+  --r-l: 13px;
 
-  /* 文字层级 */
-  --ink:   #111111;
-  --muted: #666666;
-  --faint: #999999;
+  --side-w: 240px;
+  --page-w: 1000px;
+  --head-h: 52px;
 
-  /* 纸张预览区（PAPER 标签 + 边框区分，不靠颜色） */
-  --paper:      #FAFAFA;
-  --paper-ink:  #111111;
-  --paper-line: #E2E2E2;
+  --ease: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+}
 
-  /* 语义色 → 灰阶重映射（状态靠符号+边框，不靠色相；WCAG 1.4.1） */
-  --amber:     #111111;
-  --amber-dim: #E2E2E2;
-  --green:     #111111;
-  --green-dim: #E2E2E2;
-  --red:       #111111;
+/* ---------- base ---------- */
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body {
+  font: 14px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+*, *::before, *::after { box-sizing: border-box; }
+button, input, textarea, select { font: inherit; color: inherit; }
+::selection { background: var(--accent-soft); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+code, pre, kbd { font-family: var(--mono); }
 
-  /* 字体栈 */
-  --sans:  "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --serif: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --mono:  'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, 'Courier New', monospace;
-
-  /* 圆角：利落圆润并存 */
-  --radius-s: 6px;
-  --radius-m: 10px;
-  --radius-l: 16px;
-  --radius-xl: 22px;
-  /* ─── 动效 tokens ─── */
-  --ease-expo:  cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-quart: cubic-bezier(0.25, 1, 0.5, 1);
-  --ease-std:   cubic-bezier(0.45, 0, 0.55, 1);
-  --dur-snap:   100ms;
-  --dur-fast:   160ms;
-  --dur-base:   260ms;
-  --dur-slow:   500ms;
-  --dur-cinema: 700ms;
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; animation-iteration-count: 1 !important; }
 }

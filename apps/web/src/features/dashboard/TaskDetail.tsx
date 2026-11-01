@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { GuidedApi } from '../../api-client/guided';
-import { Icon } from './Icon';
-import { buildTasks, MODE_LABEL, RUN_LABEL, VERDICT_LABEL, when, type Task } from './Dashboard';
+import { CardHeader, KV, KVList } from '../../ui/Card';
+import { CopyButton } from '../../ui/Controls';
+import { Disclosure } from '../../ui/Disclosure';
+import { Icon } from '../../ui/Icon';
 import { describeError, loadReport, loadSnapshot, type ErrorInfo, type ReportView } from './data';
+import { buildTasks, MODE_LABEL, RUN_LABEL, VERDICT_LABEL, when, type Task } from './tasks';
 
 // Read-only detail of one task (paper): latest run status and its report.
+//   <TaskDetail api={api} paperId="pap_…" onBack={…} refreshSignal={tick} />
 const EVIDENCE_TEXT: Record<string, string> = {
   real_local_cpu: '真实本机 CPU 实验',
   controlled_smoke: '受控教学 smoke（不是论文复现）',
@@ -12,7 +16,7 @@ const EVIDENCE_TEXT: Record<string, string> = {
   unclassified: '未分类',
 };
 
-export default function TaskDetail({ api, paperId, onBack }: { api: GuidedApi; paperId: string; onBack: () => void }) {
+export default function TaskDetail({ api, paperId, onBack, refreshSignal = 0 }: { api: GuidedApi; paperId: string; onBack: () => void; refreshSignal?: number }) {
   const [task, setTask] = useState<Task | null | undefined>(undefined);
   const [report, setReport] = useState<ReportView | null>(null);
   const [error, setError] = useState<ErrorInfo | null>(null);
@@ -31,56 +35,63 @@ export default function TaskDetail({ api, paperId, onBack }: { api: GuidedApi; p
       setError(describeError(e));
     });
     return () => ctl.abort();
-  }, [api, paperId, rev]);
+  }, [api, paperId, rev, refreshSignal]);
 
   const status = task?.run ? RUN_LABEL[task.run.status] ?? { text: task.run.status, tone: 'idle' as const } : null;
+  const back = <button type="button" className="btn btn-secondary" onClick={onBack}><Icon name="chevron-left" size={14} />返回总览</button>;
   return <div className="detail">
-    <button className="guided-link" onClick={onBack}>← 返回总览</button>
-    {error && <section className="dash-error" role="alert">
-      <div className="dash-error-head"><Icon name="alert" /><b>{error.title}</b></div>
-      <p>{error.hint}</p><code>{error.detail}</code>
-      <div className="dash-error-actions"><button className="btn-black sm" onClick={() => setRev(x => x + 1)}>重试</button></div>
+    {error && <section className="ui-card dash-error" role="alert">
+      <CardHeader icon="alert" title={error.title} status={{ text: '读取失败', tone: 'bad' }} subtitle={error.hint}
+        actions={<button type="button" className="btn btn-secondary" onClick={() => setRev(x => x + 1)}>重试</button>} />
+      <div className="ui-card-section"><Disclosure variant="sub" title="错误详情"><code className="ui-mono">{error.detail}</code></Disclosure></div>
     </section>}
-    {task === undefined && !error && <div className="card detail-card"><span className="skel w60" /><span className="skel w40" /></div>}
-    {task === null && <div className="card empty"><h3>找不到这个任务</h3><p>它可能已被移除，或属于其他用户。</p><button className="btn-ghost" onClick={onBack}>返回总览</button></div>}
+    {task === undefined && !error && <div className="ui-card detail-skel" aria-hidden="true"><span className="ui-skel w60" /><span className="ui-skel w40" /></div>}
+    {task === null && <div className="ui-card ui-empty"><span className="ui-tile"><Icon name="doc" size={18} /></span><h3>找不到这个任务</h3><p>它可能已被移除，或属于其他用户。</p>{back}</div>}
     {task && <>
-      <header className="detail-head">
-        <h1>{task.title}</h1>
-        <div className="detail-meta">
-          {status ? <span className={`pill ${status.tone}`}>{status.text}</span> : <span className="pill">尚未运行</span>}
-          <code>{task.paperId}</code><span>创建于 {when(task.createdAt)}</span>
-        </div>
-      </header>
-      {!task.run && <div className="card empty"><h3>还没有运行</h3><p>这篇论文已上传，但还没有创建运行。到"新建任务"里继续引导流程。</p></div>}
-      {task.run && <div className="detail-cols">
-        <section className="card detail-card">
-          <h2>运行</h2>
-          <dl className="kv">
-            <dt>方式</dt><dd>{MODE_LABEL[task.run.mode ?? ''] ?? task.run.mode ?? '—'}</dd>
-            <dt>结论</dt><dd>{task.run.verdict ? VERDICT_LABEL[task.run.verdict] ?? task.run.verdict : '—'}</dd>
-            <dt>运行次数</dt><dd>{task.runCount}</dd>
-            <dt>最近运行</dt><dd><code>{task.run.id}</code></dd>
-            <dt>时间</dt><dd>{when(task.run.createdAt)}</dd>
-          </dl>
-        </section>
-        <section className="card detail-card">
-          <h2>指标</h2>
+      <section className="ui-card">
+        <CardHeader as="h1" icon="doc" title={task.title} status={status ?? { text: '尚未运行', tone: 'idle' }}
+          subtitle={`创建于 ${when(task.createdAt)} · ${task.runCount > 0 ? `${task.runCount} 次运行` : '未运行'}`} actions={back} />
+        <div className="ui-card-section"><KVList><KV label="论文 ID" value={task.paperId} copy /></KVList></div>
+      </section>
+      {!task.run && <div className="ui-card ui-empty"><h3>还没有运行</h3><p>这篇论文已上传，但还没有创建运行。到"新建任务"里继续引导流程。</p></div>}
+      {task.run && <>
+        <Disclosure variant="card" title="运行" defaultOpen meta={status ? <span className={`ui-status tone-${status.tone}`}>{status.text}</span> : undefined}>
+          <KVList>
+            <KV label="方式" mono={false} value={MODE_LABEL[task.run.mode ?? ''] ?? task.run.mode ?? '—'} />
+            <KV label="结论" mono={false} value={report?.verdict ? VERDICT_LABEL[report.verdict] ?? report.verdict : '报告尚未生成'} />
+            <KV label="运行次数" value={task.runCount} />
+            <KV label="最近运行" value={task.run.id} copy />
+            <KV label="时间" value={when(task.run.createdAt)} />
+          </KVList>
+        </Disclosure>
+        <Disclosure variant="card" title="指标" count={report && report.metrics.length > 0 ? report.metrics.length : null} defaultOpen>
           {report && report.metrics.length > 0
             ? <div className="metrics">{report.metrics.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}</div>
-            : <p className="dash-muted">{report ? '报告中没有指标。' : '报告尚未生成。'}</p>}
-        </section>
-        {report && <section className="card detail-card wide">
-          <h2>证据与可信度</h2>
-          <dl className="kv">
-            <dt>证据等级</dt><dd>{report.evidenceClass ? EVIDENCE_TEXT[report.evidenceClass] ?? report.evidenceClass : '—'}</dd>
-            <dt>Recipe</dt><dd><code>{report.recipe ?? '—'}</code></dd>
-            <dt>评测器</dt><dd><code>{report.evaluator ?? '—'}</code></dd>
-            <dt>Manifest</dt><dd><code>{report.manifestHash ? report.manifestHash.slice(0, 16) + '…' : '—'}</code></dd>
-          </dl>
-          {report.limitations.length > 0 && <><h3>局限性</h3><ul className="limits">{report.limitations.map((l, i) => <li key={i}>{l}</li>)}</ul></>}
-          {report.evidence.length > 0 && <><h3>证据文件</h3><ul className="limits">{report.evidence.map(e => <li key={e.sha256}><code>{e.sha256.slice(0, 16)}…</code> · {e.mediaType ?? '—'}{e.bytes !== null ? ` · ${e.bytes} B` : ''}</li>)}</ul></>}
-        </section>}
-      </div>}
+            : <p className="ui-help detail-none">{report ? '报告中没有指标。' : '报告尚未生成。'}</p>}
+        </Disclosure>
+        {report && <Disclosure variant="card" title="证据与可信度" defaultOpen>
+          <KVList>
+            <KV label="证据等级" mono={false} value={report.evidenceClass ? EVIDENCE_TEXT[report.evidenceClass] ?? report.evidenceClass : '—'} />
+            <KV label="Recipe" value={report.recipe ?? '—'} />
+            <KV label="评测器" value={report.evaluator ?? '—'} />
+            <KV label="Manifest" value={report.manifestHash ? report.manifestHash.slice(0, 16) + '…' : '—'} copy={report.manifestHash ?? false} />
+          </KVList>
+          <div className="detail-nested">
+            <Disclosure title="局限性" count={report.limitations.length} defaultOpen={report.limitations.length > 0}>
+              {report.limitations.length > 0 ? <ul className="limits">{report.limitations.map((l, i) => <li key={i}>{l}</li>)}</ul> : <p className="ui-help">报告未列出局限性。</p>}
+            </Disclosure>
+            <Disclosure title="证据文件" count={report.evidence.length}>
+              {report.evidence.length > 0
+                ? <ul className="ui-list">{report.evidence.map(e => <li key={e.sha256} className="ui-row">
+                  <Icon name="doc" className="ico-lead" />
+                  <span className="ui-row-main"><span className="ui-row-title ui-mono">{e.sha256.slice(0, 16)}…</span><span className="ui-row-sub">{e.mediaType ?? '—'}{e.bytes !== null ? ` · ${e.bytes} B` : ''}</span></span>
+                  <span className="ui-row-end"><CopyButton value={e.sha256} label="复制 SHA-256" /></span>
+                </li>)}</ul>
+                : <p className="ui-help">报告中没有证据文件。</p>}
+            </Disclosure>
+          </div>
+        </Disclosure>}
+      </>}
     </>}
   </div>;
 }

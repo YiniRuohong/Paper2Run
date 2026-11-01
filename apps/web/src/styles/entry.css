@@ -1,10 +1,17 @@
-/* 入口屏 · Swiss 风格 */
-.entry-screen { box-sizing: border-box; max-width: 960px; margin: 24px auto; padding: 32px 36px; background: #FFFFFF; color: #111111; font: 14px/1.7 "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; border: 1px solid #111111; overflow-wrap: anywhere; }
-.entry-screen h1 { font-size: 36px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
-.entry-screen p { color: #666666; }
-.entry-label { color: #666666; font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
-.entry-screen nav { display: flex; flex-wrap: wrap; gap: 16px; margin: 24px 0; }
-.entry-screen a { color: #111111; border-bottom: 1px solid #111111; text-decoration: none; }
-.entry-screen a:focus-visible { outline: 2px solid #111111; outline-offset: 4px; }
-.entry-skeleton { height: 200px; border: 1px solid #E2E2E2; background: #F4F4F4; }
-@media (max-width: 760px) { .entry-screen { margin: 12px; padding: 22px 20px; } .entry-screen h1 { font-size: 28px; } }
+/* Entry screens (lazy-load fallback and error boundary), themed by tokens. */
+.entry-screen {
+  box-sizing: border-box; min-height: 100dvh; display: grid; place-content: center; justify-items: center; gap: 10px;
+  margin: 0; padding: 32px; background: var(--bg); color: var(--text); font: 14px/1.6 var(--sans); text-align: center;
+}
+.entry-screen h1 { margin: 0; font-size: 16px; font-weight: 600; }
+.entry-screen p { margin: 0; color: var(--muted); }
+.entry-screen a {
+  margin-top: 6px; padding: 6px 14px; border: 1px solid var(--line); border-radius: var(--r-m);
+  background: var(--surface); color: var(--text); text-decoration: none; font-size: 13px; font-weight: 500;
+}
+.entry-screen a:hover { background: var(--raised); }
+.entry-screen a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.entry-skeleton {
+  width: min(420px, 80vw); height: 120px; margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-l);
+  background: var(--surface);
+}

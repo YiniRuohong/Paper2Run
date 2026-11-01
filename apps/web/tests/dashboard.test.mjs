@@ -110,3 +110,17 @@ test('loadReport maps a report and treats 409 as not generated', async () => {
   const pending = { async read() { throw new GuidedApiError('n', 409, 'REPORT_NOT_READY'); } };
   assert.equal(await loadReport(pending, 'run_1', signal), null);
 });
+
+test('run.verdict is never shown as a paper comparison: the evaluator does not compare against the paper', async () => {
+  const detail = await readFile(new URL('../src/features/dashboard/TaskDetail.tsx', import.meta.url), 'utf8');
+  const tasks = await readFile(new URL('../src/features/dashboard/tasks.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(dashboard, /run\.verdict/);
+  assert.doesNotMatch(detail, /run\.verdict/);
+  assert.match(detail, /report\?\.verdict/);
+  assert.doesNotMatch(tasks, /与论文吻合/);
+});
+
+test('guided flow stays mounted across navigation and only an explicit restart discards it', () => {
+  assert.match(page, /<div key=\{flowKey\} hidden=\{view !== 'new'\}><RealFlowPanel api=\{api\} \/><\/div>/);
+  assert.match(page, /window\.confirm\(/);
+});
