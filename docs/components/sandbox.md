@@ -28,8 +28,8 @@
 - `unshare` 后端**不限制工作目录之外的写**——选中它时 stderr 会带
   `[p2r_sandbox]` 说明；
 - guest 子进程若自建**新会话**（`setsid`），将逃出进程组击杀范围；
-- Windows 只有墙钟 + 输出封顶 + 一次性 cwd + 直接子进程击杀
-  （`platform_walls=True`），无网络/内存/进程数防线；
+- Windows 由 Job Object 提供内存（提交内存硬上限）/进程数/CPU 时间上限与
+  整树击杀，但**没有网络拒绝和 workdir 外写拒绝**（需 AppContainer，尚未实现）；
 - RSS 内存限制是**反应式**采样（见 §3），不是硬性内核配额；
 - guest 输出/文件在 caps 之内是可信通道之外的唯一数据出口，本组件不
   对其内容做任何语义校验（shape 校验由 `validate_output_files` 负责）。
@@ -79,8 +79,8 @@
 | workdir 外写拒绝 | ✅ | ✅ ro-bind + workdir bind（`/tmp`、`/dev/shm` 只读） | ❌ | ❌ |
 | 敏感路径拒读 | ✅ deny 清单 + `~/.env*` regex | ❌（全盘只读可读） | ❌ | ❌ |
 | stdlib/解释器可读 | ✅（探针验证 import） | ✅ | ✅ | ✅ |
-| 内存 | RSS 树采样（RLIMIT_AS 不可用） | RLIMIT_AS 可用 + RSS 树采样 | RLIMIT_AS 可用 + RSS 树采样 | Windows：无 |
-| 进程组击杀 | ✅ | ✅（`--die-with-parent` 兜底） | ✅ | Windows 仅直接子进程 |
+| 内存 | RSS 树采样（RLIMIT_AS 不可用） | RLIMIT_AS 可用 + RSS 树采样 | RLIMIT_AS 可用 + RSS 树采样 | Windows：Job Object `JobMemoryLimit`（提交内存硬上限，覆盖子孙进程） |
+| 进程组击杀 | ✅ | ✅（`--die-with-parent` 兜底） | ✅ | Windows：`TerminateJobObject` 整树 + `KILL_ON_JOB_CLOSE` |
 | 后端选择顺序 | 1 | 2（darwin 无 bwrap → 跳过） | 3 | 4（兜底） |
 
 后端选择 `_select_backend()`：seatbelt → bwrap → unshare → none；
@@ -114,6 +114,23 @@ bubblewrap 0.12.0，非 root 用户）**：
 去掉，`/dev` 也重挂为只读；③Linux 上 `LC_CTYPE`（PEP 538）和 bwrap 的
 `PWD` 是平台常量，测试白名单相应放宽。
 
+**Windows Job Object（`_winjob.py`）**：guest 以 `CREATE_SUSPENDED` 启动，
+先 `AssignProcessToJobObject` 再 `NtResumeProcess`，因此从第一条指令起就在
+Job 内，不存在"先跑起来再挂进 Job"的竞态窗口；任何一步失败都抛
+`SandboxUnavailable`，绝不无约束运行。Job 设置：`JobMemoryLimit` =
+`max_memory_mb`、`ActiveProcessLimit` = `max_processes`、`PerJobUserTimeLimit`
+= `max_cpu_seconds`、`KILL_ON_JOB_CLOSE`、`DIE_ON_UNHANDLED_EXCEPTION`，以及
+全部 UI 限制（剪贴板、全局原子、桌面切换、显示/系统参数、ExitWindows、外部
+USER 句柄）。超时和 leader 正常退出后都会 `TerminateJobObject`，后台孙进程
+不能存活，也不能占住管道。
+
+**Windows 实跑（2026-11-02，Windows 11 build 26200，AMD64，Python 3.12.7，
+经 WSL interop 启动，supervisor 本身已在一个外层 Job 里）**：`job_object=True`；
+64 MiB 限制下 guest 和其子进程申请 300 MiB 均得到 `MemoryError`；
+`max_processes=4` 时第 4 个子进程创建失败；`DETACHED_PROCESS` 后台孙进程在
+leader 退出后被回收；超时整树击杀；带 `CREATE_BREAKAWAY_FROM_JOB` 启动的子进程
+仍受 Job 约束（嵌套 Job 下 Windows 不拒绝启动，但不脱离限制）。
+
 ## 5. 能力键（`sandbox_capabilities()`）
 
 - `seatbelt`：探针子进程实测网络 + 越权写均被拒；
@@ -123,7 +140,9 @@ bubblewrap 0.12.0，非 root 用户）**：
   `~/Library/Keychains`）；
 - `rlimits` / `platform_walls`：语义与历史版本一致（旧键不改语义）；
 - `bubblewrap` / `unshare_net`：对应 Linux 后端探针结果（二进制不存在
-  的平台恒 False）。
+  的平台恒 False）；
+- `job_object`：仅 Windows，探针 guest 在 64 MiB Job 内申请 256 MiB 必须
+  得到 `MemoryError` 才为 True。
 
 键是**只增不改**的：消费方应把未知键当作新增能力报告，而非固定 schema。
 
@@ -146,8 +165,12 @@ bubblewrap 0.12.0，非 root 用户）**：
 2. `unshare` 后端无写隔离（stderr 注记）；
 3. RSS 限制反应式，短尖峰可能漏记账；树扫描间隔 ~200 ms；
 4. guest 自建新会话的子进程逃出组击杀；
-5. 标准 Docker 默认 seccomp 禁止 userns，此时只能降级为 `none`（如实上报）；需要隔离时，容器须放开 seccomp/apparmor，或在宿主上直接运行；Windows 未实测；workdir 内文件数与磁盘占用无上限；
+5. 标准 Docker 默认 seccomp 禁止 userns，此时只能降级为 `none`（如实上报）；需要隔离时，容器须放开 seccomp/apparmor，或在宿主上直接运行；workdir 内文件数与磁盘占用无上限；
 6. seatbelt 是 Apple 已标记 deprecated 的机制：未来 macOS 移除
    `sandbox-exec` 时会如实降级为 `backend="none"`；
 7. 探针结果按进程缓存一次——运行期间系统环境变化不会重测；
-8. Windows 只有墙钟/输出/临时目录防线。
+8. Windows 有 Job Object 资源防线（内存/进程数/CPU/整树击杀/UI 限制），但
+   **无网络拒绝、无写隔离、无敏感路径拒读**，`network_isolated=False`；补齐需
+   AppContainer（无 `internetClient` 能力即断网，且只有显式授 ACL 的路径可访问），
+   代价是要给 Python 安装目录和 workdir 授 AppContainer SID 的 ACL，尚未实现；
+   Windows 上无 `RLIMIT_FSIZE`，单文件大小不设上限。

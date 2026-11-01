@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _pyproject() -> dict:
-    return tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+    return tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
 def test_every_source_root_holds_one_p2r_package():
@@ -28,7 +28,7 @@ def test_pytest_and_setuptools_and_launcher_agree_on_source_roots():
     cfg = _pyproject()["tool"]
     find_roots = cfg["setuptools"]["packages"]["find"]["where"]
     assert cfg["pytest"]["ini_options"]["pythonpath"] == find_roots
-    launch = ast.parse((PROJECT_ROOT / "scripts" / "launch.py").read_text())
+    launch = ast.parse((PROJECT_ROOT / "scripts" / "launch.py").read_text(encoding="utf-8"))
     launcher_roots = next(
         ast.literal_eval(n.value) for n in ast.walk(launch)
         if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "SOURCE_ROOTS" for t in n.targets)

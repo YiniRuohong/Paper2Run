@@ -32,7 +32,7 @@ def _imports(pkg: Path):
     for f in pkg.rglob("*.py"):
         if "alembic" in f.parts:
             continue
-        for node in ast.walk(ast.parse(f.read_text(), str(f))):
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"), str(f))):
             names = []
             if isinstance(node, ast.Import):
                 names = [a.name for a in node.names]

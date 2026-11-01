@@ -167,7 +167,9 @@ def run_real_cpu_baseline(*, recipe_id: str, recipe_version: str, target: str = 
     log: list[dict[str, Any]] = []
     started = time.monotonic()
     for epoch in range(1, normalized.max_epochs + 1):
-        if time.monotonic() - started > REAL_RECIPE_MAX_SECONDS:
+        # >= so a zero budget trips even when the clock has not ticked yet
+        # (Windows monotonic resolution is ~15.6 ms).
+        if time.monotonic() - started >= REAL_RECIPE_MAX_SECONDS:
             raise RecipeTimeout("real recipe exceeded time budget")
         rng.shuffle(indices)
         for start in range(0, len(indices), normalized.batch_size):

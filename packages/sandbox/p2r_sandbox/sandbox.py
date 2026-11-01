@@ -57,6 +57,11 @@ reported honestly (never silently dropped):
    isolation, reported honestly in ``stderr``). Each backend is enabled only
    after a live probe child proves the claimed denial; if neither backend
    works the run degrades to ``backend="none"`` / ``network_isolated=False``.
+10. **Windows Job Object** (``_winjob``): the guest starts suspended, is
+   assigned to a fresh job (committed-memory, process-count and CPU-time
+   limits, UI restrictions, kill-on-close) and only then resumed; timeouts
+   and the post-exit sweep terminate the whole job. Windows still has no
+   network or write isolation (``backend="none"``, ``network_isolated=False``).
 
 No shell is ever involved: ``Popen`` receives literal argument lists only.
 The chosen backend is reported as ``SandboxResult.backend``:
@@ -88,6 +93,7 @@ except ImportError:  # pragma: no cover - Windows has no resource module
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
+from . import _winjob
 from .errors import SandboxUnavailable
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
@@ -606,6 +612,47 @@ def _rlimit_support() -> dict[str, bool]:
     return _rlimit_support_cache
 
 
+_job_object_cache: bool | None = None
+
+
+def _probe_job_object() -> bool:
+    """True iff a guest inside a 64 MiB Job Object provably cannot commit
+    256 MiB (Windows only). Any launch/assign failure means False."""
+    if sys.platform != "win32":
+        return False
+    try:
+        job = _winjob.GuestJob(memory_bytes=64 * 1024 * 1024, max_processes=4, cpu_seconds=30)
+    except OSError:
+        return False
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-I", "-c",
+             "try:\n x = bytearray(256 * 1024 * 1024)\n print('ALLOCATED')\n"
+             "except MemoryError:\n print('DENIED')\n"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW | _winjob.CREATE_SUSPENDED,
+        )
+        try:
+            job.adopt_suspended(int(proc._handle))
+        except OSError:
+            proc.kill()
+            proc.communicate()
+            return False
+        out, _err = proc.communicate(timeout=30)
+        return b"DENIED" in out and b"ALLOCATED" not in out
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        job.close()
+
+
+def _job_object_available() -> bool:
+    global _job_object_cache
+    if _job_object_cache is None:
+        _job_object_cache = _probe_job_object()
+    return _job_object_cache
+
+
 def sandbox_capabilities() -> dict[str, bool]:
     """Report which isolation layers this host actually provides.
 
@@ -622,7 +669,9 @@ def sandbox_capabilities() -> dict[str, bool]:
     path where walls are wall clock, output caps, a throwaway cwd and a
     direct child kill - with no network, memory or process-count
     enforcement; ``bubblewrap`` / ``unshare_net`` report the Linux backend
-    probes (always False where the binary is missing, e.g. macOS).
+    probes (always False where the binary is missing, e.g. macOS);
+    ``job_object`` is True only on Windows when a guest inside a 64 MiB Job
+    Object was verifiably refused a 256 MiB allocation.
     """
     support = _rlimit_support()
     seatbelt_checks = _seatbelt_probe_result()
@@ -633,6 +682,7 @@ def sandbox_capabilities() -> dict[str, bool]:
         "rlimits": any(support.values()),
         "bubblewrap": _bwrap_available(),
         "unshare_net": _unshare_net_available(),
+        "job_object": _job_object_available(),
     }
 
 
@@ -958,11 +1008,16 @@ def _pump(
 
 
 def _pump_windows(
-    proc: subprocess.Popen, limits: SandboxLimits
+    proc: subprocess.Popen,
+    limits: SandboxLimits,
+    job: "_winjob.GuestJob | None" = None,
 ) -> tuple[bytes, bytes, bool, bool]:
     """Windows reader: select() cannot watch pipes there, so two daemon
     threads drain stdout/stderr under the same byte caps while the main loop
-    enforces the wall clock. Returns ``(stdout, stderr, timed_out, truncated)``.
+    enforces the wall clock. With a Job Object the timeout kill and the
+    post-exit sweep terminate the *whole* job (grandchildren included), so a
+    background child holding the pipes cannot outlive the leader.
+    Returns ``(stdout, stderr, timed_out, truncated)``.
     """
     cap = limits.max_output_bytes
     buffers = {"out": bytearray(), "err": bytearray()}
@@ -989,13 +1044,21 @@ def _pump_windows(
     for thread in threads:
         thread.start()
     timed_out = False
+    swept = False
     deadline = time.monotonic() + limits.max_seconds
     try:
         while any(thread.is_alive() for thread in threads):
             if time.monotonic() >= deadline:
                 timed_out = True
+                if job is not None:
+                    job.terminate(1)
                 _kill_process_group(proc)
                 break
+            if job is not None and not swept and proc.poll() is not None:
+                # Leader exited: reap anything it left in the job so the
+                # pipes close (POSIX equivalent: _sweep_process_group).
+                job.terminate(1)
+                swept = True
             time.sleep(_POLL_INTERVAL_SECONDS)
     finally:
         for thread in threads:
@@ -1086,6 +1149,7 @@ def run_python_sandbox(
     python = python_exe if python_exe is not None else sys.executable
     workdir = tempfile.mkdtemp(prefix="p2r_sbx_")
     notes: list[str] = []
+    job: _winjob.GuestJob | None = None
     try:
         script_path = os.path.join(workdir, "script.py")
         with open(script_path, "w", encoding="utf-8") as fh:
@@ -1103,7 +1167,12 @@ def run_python_sandbox(
             )
 
         rlimit_ok = _rlimit_support()
-        if not rlimit_ok["as"]:
+        if sys.platform == "win32":
+            notes.append(
+                "Windows: memory, process-count and CPU limits enforced by a "
+                "Job Object; network and filesystem writes are NOT isolated"
+            )
+        elif not rlimit_ok["as"]:
             notes.append(
                 "RLIMIT_AS rejected by this platform; memory enforced by "
                 "RSS monitor + process-group kill"
@@ -1134,8 +1203,19 @@ def run_python_sandbox(
                 # output caps, the throwaway cwd and direct child kill.
                 spawn_kwargs = {
                     "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
-                    | subprocess.CREATE_NO_WINDOW,
+                    | subprocess.CREATE_NO_WINDOW
+                    | _winjob.CREATE_SUSPENDED,
                 }
+                try:
+                    job = _winjob.GuestJob(
+                        memory_bytes=limits.max_memory_mb * 1024 * 1024,
+                        max_processes=limits.max_processes,
+                        cpu_seconds=limits.max_cpu_seconds,
+                    )
+                except OSError as exc:
+                    raise SandboxUnavailable(
+                        f"cannot create Windows Job Object: {exc}"
+                    ) from exc
             else:
                 spawn_kwargs = {"start_new_session": True, "preexec_fn": preexec}
             proc = subprocess.Popen(
@@ -1162,7 +1242,16 @@ def run_python_sandbox(
             ) from exc
 
         if sys.platform == "win32":
-            stdout, stderr, timed_out, truncated = _pump_windows(proc, limits)
+            try:
+                # Suspended until it is inside the job: never runs uncontained.
+                job.adopt_suspended(int(proc._handle))
+            except OSError as exc:
+                proc.kill()
+                proc.wait()
+                raise SandboxUnavailable(
+                    f"cannot place guest in Windows Job Object: {exc}"
+                ) from exc
+            stdout, stderr, timed_out, truncated = _pump_windows(proc, limits, job)
             memory_killed = False
             memory_rss_observed = None
         else:
@@ -1181,6 +1270,8 @@ def run_python_sandbox(
         files, file_notes = _collect_files(workdir, collect_files)
         duration_ms = int((time.monotonic() - started) * 1000)
     finally:
+        if job is not None:
+            job.close()
         shutil.rmtree(workdir, ignore_errors=True)
 
     notes.extend(file_notes)

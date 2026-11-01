@@ -117,8 +117,18 @@ def test_seatbelt_profile_denies_sensitive_paths():
 # ---------------------------------------------------------------------------
 
 
+def _pretend_posix(monkeypatch, mod) -> None:
+    """The Linux backends short-circuit on win32 by design; these
+    monkeypatched selection/probe tests exercise the POSIX logic, so pin a
+    POSIX platform there (no-op on macOS/Linux)."""
+    if sys.platform == "win32":
+        monkeypatch.setattr(mod.sys, "platform", "linux")
+
+
 def test_select_backend_preference_order(monkeypatch):
     from p2r_sandbox import sandbox as mod
+
+    _pretend_posix(monkeypatch, mod)
 
     monkeypatch.setattr(mod, "_seatbelt_available", lambda: True)
     monkeypatch.setattr(mod, "_bwrap_available", lambda: True)
@@ -148,6 +158,8 @@ def test_probe_bwrap_requires_binary(monkeypatch):
 def test_probe_bwrap_requires_net_and_write_denial(monkeypatch):
     from p2r_sandbox import sandbox as mod
 
+    _pretend_posix(monkeypatch, mod)
+
     monkeypatch.setattr(
         mod.shutil, "which", lambda name: f"/usr/bin/{name}" if name else None
     )
@@ -167,6 +179,8 @@ def test_probe_bwrap_requires_net_and_write_denial(monkeypatch):
 
 def test_probe_unshare_requires_net_only(monkeypatch):
     from p2r_sandbox import sandbox as mod
+
+    _pretend_posix(monkeypatch, mod)
 
     monkeypatch.setattr(
         mod.shutil, "which", lambda name: f"/usr/bin/{name}" if name else None
