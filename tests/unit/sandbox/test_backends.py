@@ -132,12 +132,16 @@ def test_select_backend_preference_order(monkeypatch):
 
     monkeypatch.setattr(mod, "_seatbelt_available", lambda: True)
     monkeypatch.setattr(mod, "_bwrap_available", lambda: True)
+    monkeypatch.setattr(mod, "_landlock_available", lambda: True)
     monkeypatch.setattr(mod, "_unshare_net_available", lambda: True)
     # seatbelt is only ever chosen on darwin, by design
-    expected_first = "seatbelt" if sys.platform == "darwin" else "bwrap"
+    expected_first = "seatbelt" if sys.platform == "darwin" else "landlock"
     assert mod._select_backend() == (expected_first, True)
 
     monkeypatch.setattr(mod, "_seatbelt_available", lambda: False)
+    assert mod._select_backend() == ("landlock", True)
+
+    monkeypatch.setattr(mod, "_landlock_available", lambda: False)
     assert mod._select_backend() == ("bwrap", True)
 
     monkeypatch.setattr(mod, "_bwrap_available", lambda: False)
@@ -256,3 +260,34 @@ def test_sensitive_probe_path_is_an_existing_directory():
     path = _sensitive_probe_path()
     assert os.path.isdir(path)
     assert any(os.path.expanduser(p) == path for p in SENSITIVE_READ_DENY_PATHS)
+
+
+# ---------------------------------------------------------------------------
+# fail-closed: require_isolation refuses before anything runs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", ["none", "unshare"])
+def test_require_isolation_refuses_weak_backends(monkeypatch, tmp_path, backend):
+    from p2r_sandbox import SandboxUnavailable, run_python_sandbox
+    from p2r_sandbox import sandbox as mod
+
+    monkeypatch.setattr(mod, "_select_backend", lambda: (backend, backend != "none"))
+    marker = tmp_path / "ran"
+    with pytest.raises(SandboxUnavailable, match="refusing to run untrusted code"):
+        run_python_sandbox(f"open({str(marker)!r}, 'w').write('x')", require_isolation=True)
+    assert not marker.exists()
+
+
+def test_require_isolation_default_off_keeps_compatibility(monkeypatch):
+    from p2r_sandbox import run_python_sandbox
+    from p2r_sandbox import sandbox as mod
+
+    monkeypatch.setattr(mod, "_select_backend", lambda: ("none", False))
+    assert run_python_sandbox("print('ok')").exit_code == 0
+
+
+def test_full_isolation_backends_are_exactly_net_and_write_walls():
+    from p2r_sandbox.sandbox import FULL_ISOLATION_BACKENDS
+
+    assert FULL_ISOLATION_BACKENDS == {"seatbelt", "bwrap", "landlock", "appcontainer"}

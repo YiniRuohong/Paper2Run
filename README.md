@@ -13,7 +13,7 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 已知限制：
 
 - 执行面仅在本地：无远程 GPU Runner；SSH 仅用于目标环境核验，不承载远程执行。
-- 沙箱后端按 macOS seatbelt → Linux bwrap → unshare → 无隔离 依次探测，能力由探针实测后才上报；Linux bwrap/unshare 已在容器内实跑验证（默认 Docker seccomp 下会如实降级为无隔离），Windows 由 Job Object 限制内存、进程数、CPU 并整树击杀（已在 Win11 实测），但尚无网络与写隔离。
+- 沙箱后端按平台探测、实测证明后才启用：macOS seatbelt；Linux Landlock+seccomp（标准 Docker 默认配置下即可用，无需特权）→ bwrap → unshare；Windows AppContainer + Job Object（Win11 实测）。没有"网络 + 写"双重隔离时默认拒绝执行模型代码（`P2R_ALLOW_UNISOLATED_SANDBOX=1` 可显式放行）。
 - 本地持久化使用 SQLite；PostgreSQL 是生产目标，尚未在本机验证。
 - 模型调用通过 OpenAI-compatible Provider，需自行配置可用的模型服务。
 

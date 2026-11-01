@@ -184,6 +184,11 @@ class GuestJob:
             self.close()
             raise
 
+    def assign(self, process_handle: int) -> None:
+        """Assign a (suspended) process; the caller resumes it afterwards."""
+        _check(_kernel32().AssignProcessToJobObject(self.handle, process_handle),
+               "AssignProcessToJobObject")
+
     def adopt_suspended(self, process_handle: int) -> None:
         """Assign a ``CREATE_SUSPENDED`` process, then resume it."""
         k32 = _kernel32()

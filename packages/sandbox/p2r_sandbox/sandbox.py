@@ -50,22 +50,28 @@ reported honestly (never silently dropped):
    probe fails, the run still happens but ``network_isolated=False`` and
    ``sandbox_capabilities()["seatbelt"]`` is ``False`` - we never pretend to
    isolate when we cannot.
-9. **Linux backends, probe-gated**: when seatbelt is unavailable the package
-   tries, in order, ``bwrap`` (bubblewrap: fresh network namespace, whole-FS
-   read-only bind, writable workdir bind, private ``/tmp``) and then
-   ``unshare -rn`` (network namespace + uid mapping only - *no* write
-   isolation, reported honestly in ``stderr``). Each backend is enabled only
-   after a live probe child proves the claimed denial; if neither backend
-   works the run degrades to ``backend="none"`` / ``network_isolated=False``.
-10. **Windows Job Object** (``_winjob``): the guest starts suspended, is
-   assigned to a fresh job (committed-memory, process-count and CPU-time
-   limits, UI restrictions, kill-on-close) and only then resumed; timeouts
-   and the post-exit sweep terminate the whole job. Windows still has no
-   network or write isolation (``backend="none"``, ``network_isolated=False``).
+9. **Linux backends, probe-gated**, in order: ``landlock`` (unprivileged
+   Landlock + seccomp-bpf launcher, see ``_landlock_launcher``: works under
+   the default Docker seccomp profile; denies network, writes and reads
+   outside the interpreter/system trees and the workdir, every ``socket()``
+   and ptrace-style reads of other processes), ``bwrap`` (fresh network
+   namespace, read-only root, writable workdir bind) and ``unshare -rn``
+   (network namespace only - *no* write isolation, reported in ``stderr``).
+   Each backend is enabled only after a live probe child proves the claimed
+   denials; otherwise ``backend="none"`` / ``network_isolated=False``.
+10. **Windows**: a Job Object (``_winjob``: committed-memory, process-count,
+   CPU-time limits, UI restrictions, whole-tree kill) always; plus, when the
+   probe proves it, an AppContainer (``_winappc``: per-run profile, no
+   capabilities -> no network, only the interpreter trees and the workdir
+   accessible). The guest is created suspended and resumed only once it is
+   inside the job.
+11. **Fail closed**: ``require_isolation=True`` refuses (before running) on
+   any backend outside :data:`FULL_ISOLATION_BACKENDS`.
 
 No shell is ever involved: ``Popen`` receives literal argument lists only.
 The chosen backend is reported as ``SandboxResult.backend``:
-``"seatbelt"`` / ``"bwrap"`` / ``"unshare"`` / ``"none"``.
+``"seatbelt"`` / ``"landlock"`` / ``"bwrap"`` / ``"unshare"`` /
+``"appcontainer"`` / ``"none"``.
 """
 
 from __future__ import annotations
@@ -93,10 +99,15 @@ except ImportError:  # pragma: no cover - Windows has no resource module
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
-from . import _winjob
+import uuid
+
+from . import _landlock_launcher, _winappc, _winjob
 from .errors import SandboxUnavailable
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+#: Backends that verifiably deny the network AND writes outside the workdir.
+#: ``require_isolation=True`` refuses to run on anything else.
+FULL_ISOLATION_BACKENDS = frozenset({"seatbelt", "bwrap", "landlock", "appcontainer"})
 #: Hard cap for any single collected output file (task contract).
 MAX_COLLECT_FILE_BYTES = 256 * 1024
 #: Guest processes may not create files larger than this (RLIMIT_FSIZE).
@@ -174,9 +185,9 @@ class SandboxResult:
     ``[p2r_sandbox]`` lines). ``files`` maps each successfully collected
     whitelist file name to its bytes. ``duration_ms`` covers process start
     through file collection. ``backend`` names the isolation backend used
-    for this run: ``"seatbelt"`` (macOS), ``"bwrap"`` / ``"unshare"``
-    (Linux, probe-gated) or ``"none"`` (no network/write isolation
-    available).
+    for this run: ``"seatbelt"`` (macOS), ``"landlock"`` / ``"bwrap"`` /
+    ``"unshare"`` (Linux, probe-gated), ``"appcontainer"`` (Windows) or
+    ``"none"`` (no network/write isolation available).
     """
 
     exit_code: int | None
@@ -363,7 +374,7 @@ def _seatbelt_available() -> bool:
 #: None (not checked) or the denied/allowed verdict for a file outside the
 #: sandbox island.
 _NS_PROBE_SCRIPT = r"""
-import errno, json, socket, sys
+import errno, json, os, socket, sys
 
 results = {"net": False}
 net_errnos = (errno.EPERM, errno.EACCES, errno.ENETUNREACH, errno.ENETDOWN)
@@ -390,6 +401,20 @@ if len(sys.argv) > 1:
         results["write"] = False
     except OSError:
         pass
+if len(sys.argv) > 2:
+    # 3) the supervisor's (= parent's) start-up environment must be unreadable
+    results["environ"] = False
+    try:
+        with open("/proc/%d/environ" % os.getppid(), "rb") as fh:
+            fh.read(1)
+    except OSError as exc:
+        results["environ"] = exc.errno in (errno.EPERM, errno.EACCES)
+    # 4) an existing directory outside the granted trees must be unlistable
+    results["read"] = False
+    try:
+        os.listdir(sys.argv[2])
+    except OSError as exc:
+        results["read"] = exc.errno in (errno.EPERM, errno.EACCES)
 print(json.dumps(results))
 sys.exit(0)
 """
@@ -441,6 +466,35 @@ def _unshare_argv(base_argv: Sequence[str]) -> list[str]:
     return ["unshare", "-rn", *base_argv]
 
 
+_launcher_source_cache: str | None = None
+
+
+def _landlock_launcher_source() -> str:
+    global _launcher_source_cache
+    if _launcher_source_cache is None:
+        with open(_landlock_launcher.__file__, encoding="utf-8") as fh:
+            _launcher_source_cache = fh.read()
+    return _launcher_source_cache
+
+
+def _landlock_argv(base_argv: Sequence[str], workdir_real: str) -> list[str]:
+    """argv to run ``base_argv`` under the Landlock+seccomp launcher (pure).
+
+    The launcher runs in the guest process itself (``python -I -c``),
+    confines it, then execs ``base_argv``; ``base_argv[0]`` must be an
+    absolute interpreter path (execv does no PATH lookup).
+    """
+    interpreter = base_argv[0]
+    return [
+        interpreter,
+        "-I",
+        "-c",
+        _landlock_launcher_source(),
+        workdir_real,
+        *base_argv,
+    ]
+
+
 def _wrapped_argv(backend: str, python: str, workdir_real: str) -> list[str]:
     """Full launch argv for ``backend`` (pure; tested without Linux)."""
     base = [python, "-I", "script.py"]
@@ -448,17 +502,25 @@ def _wrapped_argv(backend: str, python: str, workdir_real: str) -> list[str]:
         return [SANDBOX_EXEC, "-p", _seatbelt_profile(workdir_real)] + base
     if backend == "bwrap":
         return _bwrap_argv(base, workdir_real)
+    if backend == "landlock":
+        return _landlock_argv([os.path.abspath(python), "-I", "script.py"], workdir_real)
     if backend == "unshare":
         return _unshare_argv(base)
     return base
 
 
-def _run_ns_probe(argv: list[str], workdir: str, outside_probe: str | None) -> dict:
+def _run_ns_probe(
+    argv: list[str],
+    workdir: str,
+    outside_probe: str | None,
+    extra_args: Sequence[str] = (),
+) -> dict:
     """Run one backend probe child; parse its per-check JSON verdict."""
     script = os.path.join(workdir, "probe.py")
     with open(script, "w", encoding="utf-8") as fh:
         fh.write(_NS_PROBE_SCRIPT)
     child_argv = argv + (["probe.py", outside_probe] if outside_probe else ["probe.py"])
+    child_argv += list(extra_args)
     try:
         proc = subprocess.run(
             child_argv,
@@ -520,6 +582,63 @@ def _probe_unshare() -> bool:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+_landlock_cache: dict[str, bool] | None = None
+
+
+def _landlock_read_probe_dir() -> str | None:
+    """An existing directory the Landlock ruleset does not grant."""
+    for path in (os.path.expanduser("~"), "/root", "/var", "/srv", "/mnt"):
+        if path and path not in ("/",) and os.path.isdir(path):
+            return path
+    return None
+
+
+def _probe_landlock() -> dict[str, bool]:
+    """Live-probe the Landlock+seccomp launcher with one child.
+
+    Enabled only when the child proves: network denied, write outside the
+    workdir denied and the supervisor's ``/proc/<pid>/environ`` unreadable.
+    ``read`` (listing a non-granted directory denied) feeds
+    ``sensitive_read_denied``.
+    """
+    empty = {"net": False, "write": False, "environ": False, "read": False}
+    if not sys.platform.startswith("linux"):
+        return empty
+    workdir = tempfile.mkdtemp(prefix="p2r_ll_probe_")
+    outside_probe = f"/var/tmp/p2r_ll_probe_outside_{os.getpid()}"
+    read_dir = _landlock_read_probe_dir()
+    try:
+        workdir_real = os.path.realpath(workdir)
+        checks = _run_ns_probe(
+            _landlock_argv([os.path.abspath(sys.executable), "-I"], workdir_real),
+            workdir,
+            outside_probe,
+            [read_dir] if read_dir else ["/nonexistent-p2r"],
+        )
+        result = {key: bool(checks.get(key)) for key in empty}
+        if not read_dir:
+            result["read"] = False
+        return result
+    finally:
+        try:
+            os.unlink(outside_probe)
+        except OSError:
+            pass
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _landlock_probe_result() -> dict[str, bool]:
+    global _landlock_cache
+    if _landlock_cache is None:
+        _landlock_cache = _probe_landlock()
+    return _landlock_cache
+
+
+def _landlock_available() -> bool:
+    checks = _landlock_probe_result()
+    return checks["net"] and checks["write"] and checks["environ"]
+
+
 def _bwrap_available() -> bool:
     global _bwrap_cache
     if _bwrap_cache is None:
@@ -534,6 +653,122 @@ def _unshare_net_available() -> bool:
     return _unshare_cache
 
 
+_APPC_PROBE_SCRIPT = r"""
+import ctypes, errno, json, os, socket, sys
+
+port, outside, read_dir, supervisor = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+r = {"net": False, "write": False, "read": False, "environ": False}
+# loopback to a live supervisor listener must not connect; off-host must be
+# refused by the AppContainer firewall (WSAEACCES -> errno 13) or unroutable
+lo_ok = False
+try:
+    socket.create_connection(("127.0.0.1", int(port)), timeout=2).close()
+except OSError:
+    lo_ok = True
+ext_ok = False
+try:
+    socket.create_connection(("1.1.1.1", 53), timeout=3).close()
+except OSError as exc:
+    ext_ok = exc.errno in (errno.EACCES, errno.ENETUNREACH, errno.EHOSTUNREACH)
+r["net"] = lo_ok and ext_ok
+try:
+    with open(outside, "w") as fh:
+        fh.write("x")
+except OSError as exc:
+    r["write"] = exc.errno in (errno.EACCES, errno.EPERM)
+try:
+    os.listdir(read_dir)
+except OSError as exc:
+    r["read"] = exc.errno in (errno.EACCES, errno.EPERM)
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+k32.OpenProcess.restype = ctypes.c_void_p
+handle = k32.OpenProcess(0x0410, False, supervisor)  # QUERY_INFORMATION|VM_READ
+r["environ"] = not handle
+print(json.dumps(r))
+"""
+
+_appcontainer_cache: dict[str, bool] | None = None
+
+
+def _probe_appcontainer() -> dict[str, bool]:
+    """Live-probe the AppContainer launch path (Windows only).
+
+    Enabled only when a child proves: network denied (loopback listener never
+    accepts, off-host refused), write outside the workdir denied, the
+    supervisor process unopenable for memory reads (its environment block)
+    and the user profile unlistable (``read``, feeds
+    ``sensitive_read_denied``). Any setup failure means False everywhere.
+    """
+    empty = {"net": False, "write": False, "read": False, "environ": False}
+    if sys.platform != "win32":
+        return empty
+    import socket as _socket
+
+    workdir = tempfile.mkdtemp(prefix="p2r_appc_probe_")
+    outside = os.path.join(tempfile.gettempdir(), f"p2r_appc_probe_outside_{os.getpid()}")
+    listener = _socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(0.1)
+    job = profile = proc = None
+    try:
+        with open(os.path.join(workdir, "probe.py"), "w", encoding="utf-8") as fh:
+            fh.write(_APPC_PROBE_SCRIPT)
+        job = _winjob.GuestJob(memory_bytes=256 * 1024 * 1024, max_processes=4, cpu_seconds=30)
+        profile = _winappc.Profile(_winappc.profile_name(f"probe.{os.getpid()}.{uuid.uuid4().hex[:8]}"))
+        _winappc.ensure_interpreter_readable(sys.executable)
+        _winappc.grant_workdir(workdir, profile)
+        argv = [sys.executable, "-I", "probe.py", str(listener.getsockname()[1]),
+                outside, os.path.expanduser("~"), str(os.getpid())]
+        proc = _winappc.spawn(argv, cwd=workdir, env=_guest_env(sys.executable, workdir, "appcontainer"),
+                              job=job, profile=profile)
+        out = proc.stdout.read()
+        proc.stderr.read()
+        proc.wait(timeout=30)
+        accepted = False
+        try:
+            conn, _addr = listener.accept()
+            conn.close()
+            accepted = True
+        except OSError:
+            pass
+        data = json.loads(out.decode("utf-8"))
+        result = {key: bool(data.get(key)) for key in empty}
+        if accepted:
+            result["net"] = False
+        return result
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return empty
+    finally:
+        listener.close()
+        if proc is not None:
+            proc.kill()
+            for stream in (proc.stdout, proc.stderr):
+                stream.close()
+            proc.close()
+        if job is not None:
+            job.close()
+        if profile is not None:
+            profile.delete()
+        try:
+            os.unlink(outside)
+        except OSError:
+            pass
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _appcontainer_probe_result() -> dict[str, bool]:
+    global _appcontainer_cache
+    if _appcontainer_cache is None:
+        _appcontainer_cache = _probe_appcontainer()
+    return _appcontainer_cache
+
+
+def _appcontainer_available() -> bool:
+    checks = _appcontainer_probe_result()
+    return checks["net"] and checks["write"] and checks["environ"]
+
+
 def _select_backend() -> tuple[str, bool]:
     """Pick the strongest verified backend: ``(backend, network_isolated)``.
 
@@ -543,9 +778,16 @@ def _select_backend() -> tuple[str, bool]:
     the write gap is reported via a stderr note by the executor.
     """
     if sys.platform == "win32":
+        if _appcontainer_available():
+            return "appcontainer", True
         return "none", False
     if sys.platform == "darwin" and _seatbelt_available():
         return "seatbelt", True
+    # Landlock first: same net/write walls as bwrap plus read confinement
+    # ($HOME, /tmp), every socket() refused and the supervisor's environ
+    # unreadable. bwrap remains the fallback for kernels without Landlock.
+    if _landlock_available():
+        return "landlock", True
     if _bwrap_available():
         return "bwrap", True
     if _unshare_net_available():
@@ -675,9 +917,17 @@ def sandbox_capabilities() -> dict[str, bool]:
     """
     support = _rlimit_support()
     seatbelt_checks = _seatbelt_probe_result()
+    backend, _isolated = _select_backend()
+    sensitive = seatbelt_checks["sensitive"]
+    if backend == "landlock":
+        sensitive = _landlock_probe_result()["read"]
+    elif backend == "appcontainer":
+        sensitive = _appcontainer_probe_result()["read"]
     return {
         "seatbelt": seatbelt_checks["net"] and seatbelt_checks["write"],
-        "sensitive_read_denied": seatbelt_checks["sensitive"],
+        "sensitive_read_denied": sensitive,
+        "landlock": _landlock_available(),
+        "appcontainer": _appcontainer_available(),
         "platform_walls": sys.platform == "win32",
         "rlimits": any(support.values()),
         "bubblewrap": _bwrap_available(),
@@ -824,12 +1074,37 @@ def _group_rss_bytes(pgid: int) -> int | None:
 # --------------------------------------------------------------------------
 
 
-def _guest_env(python_exe: str, workdir: str) -> dict[str, str]:
+#: Windows guest env keys beyond PATH/TMPDIR: SYSTEMROOT (Winsock/crypto
+#: initialisation), TEMP/TMP (= workdir), and LOCALAPPDATA, which
+#: CreateProcess needs to place an AppContainer (it is redirected to the
+#: per-run container folder). None of them carries a secret.
+WINDOWS_GUEST_ENV_KEYS = ("SYSTEMROOT", "TEMP", "TMP", "LOCALAPPDATA")
+
+
+def _guest_env(python_exe: str, workdir: str, backend: str = "none") -> dict[str, str]:
     """Whitelist-constructed guest environment (never a copy of the host's).
 
-    Only PATH and TMPDIR are set. TMPDIR points inside the sandbox workdir so
-    that a guest using ``tempfile`` stays within its writable island.
+    POSIX: only PATH and TMPDIR are set. TMPDIR points inside the sandbox
+    workdir so that a guest using ``tempfile`` stays within its writable
+    island. Windows adds :data:`WINDOWS_GUEST_ENV_KEYS`.
     """
+    if sys.platform == "win32":
+        system_root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+        env = {
+            "PATH": os.pathsep.join(
+                [os.path.dirname(os.path.abspath(python_exe)),
+                 os.path.join(system_root, "System32")]
+            ),
+            "TMPDIR": workdir,
+            "TEMP": workdir,
+            "TMP": workdir,
+            "SYSTEMROOT": system_root,
+        }
+        if backend == "appcontainer":
+            env["LOCALAPPDATA"] = os.environ.get(
+                "LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local")
+            )
+        return env
     path_entries = [
         os.path.dirname(os.path.abspath(python_exe)),
         "/usr/bin",
@@ -1137,25 +1412,35 @@ def run_python_sandbox(
     limits: SandboxLimits | None = None,
     python_exe: str | None = None,
     collect_files: Sequence[str] = ("predictions.json", "labels.json"),
+    require_isolation: bool = False,
 ) -> SandboxResult:
     """Run ``code`` inside the host-isolation stack and collect its outputs.
 
     See the module docstring for the exact isolation layers. Raises
     :class:`SandboxUnavailable` when the child cannot be launched or the
     preexec resource-limit setup fails; guest-side failures are reported via
-    the returned :class:`SandboxResult`.
+    the returned :class:`SandboxResult`. With ``require_isolation=True`` the
+    call fails closed - :class:`SandboxUnavailable` *before* anything runs -
+    unless the selected backend is in :data:`FULL_ISOLATION_BACKENDS`.
     """
     limits = limits if limits is not None else SandboxLimits()
     python = python_exe if python_exe is not None else sys.executable
     workdir = tempfile.mkdtemp(prefix="p2r_sbx_")
     notes: list[str] = []
     job: _winjob.GuestJob | None = None
+    profile: _winappc.Profile | None = None
+    proc = None
     try:
         script_path = os.path.join(workdir, "script.py")
         with open(script_path, "w", encoding="utf-8") as fh:
             fh.write(code)
 
         backend, network_isolated = _select_backend()
+        if require_isolation and backend not in FULL_ISOLATION_BACKENDS:
+            raise SandboxUnavailable(
+                f"no verified network+write isolation on this host "
+                f"(backend={backend!r}); refusing to run untrusted code"
+            )
         workdir_real = os.path.realpath(workdir)
         argv = _wrapped_argv(backend, python, workdir_real)
         if backend == "unshare":
@@ -1168,10 +1453,11 @@ def run_python_sandbox(
 
         rlimit_ok = _rlimit_support()
         if sys.platform == "win32":
-            notes.append(
-                "Windows: memory, process-count and CPU limits enforced by a "
-                "Job Object; network and filesystem writes are NOT isolated"
-            )
+            if backend != "appcontainer":
+                notes.append(
+                    "Windows: memory, process-count and CPU limits enforced by a "
+                    "Job Object; network and filesystem writes are NOT isolated"
+                )
         elif not rlimit_ok["as"]:
             notes.append(
                 "RLIMIT_AS rejected by this platform; memory enforced by "
@@ -1198,6 +1484,7 @@ def run_python_sandbox(
         started = time.monotonic()
         try:
             spawn_kwargs: dict = {}
+            env = _guest_env(python, workdir, backend)
             if sys.platform == "win32":
                 # No fork/setsid/rlimits on Windows: walls are wall clock,
                 # output caps, the throwaway cwd and direct child kill.
@@ -1218,15 +1505,28 @@ def run_python_sandbox(
                     ) from exc
             else:
                 spawn_kwargs = {"start_new_session": True, "preexec_fn": preexec}
-            proc = subprocess.Popen(
-                argv,
-                cwd=workdir,
-                env=_guest_env(python, workdir),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                **spawn_kwargs,
-            )
+            if backend == "appcontainer":
+                # Fresh per-run profile: workdir ACL is private to this run
+                # and the container's own storage dies with the profile.
+                profile = _winappc.Profile(
+                    _winappc.profile_name(f"{os.getpid()}.{uuid.uuid4().hex[:12]}")
+                )
+                _winappc.ensure_interpreter_readable(python)
+                _winappc.grant_workdir(workdir, profile)
+                # Created suspended, placed in the job, then resumed.
+                proc = _winappc.spawn(
+                    argv, cwd=workdir, env=env, job=job, profile=profile
+                )
+            else:
+                proc = subprocess.Popen(
+                    argv,
+                    cwd=workdir,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    **spawn_kwargs,
+                )
         except subprocess.SubprocessError as exc:  # includes preexec failures
             raise SandboxUnavailable(
                 f"failed to launch sandboxed python: {exc}"
@@ -1244,7 +1544,8 @@ def run_python_sandbox(
         if sys.platform == "win32":
             try:
                 # Suspended until it is inside the job: never runs uncontained.
-                job.adopt_suspended(int(proc._handle))
+                if backend != "appcontainer":
+                    job.adopt_suspended(int(proc._handle))
             except OSError as exc:
                 proc.kill()
                 proc.wait()
@@ -1267,11 +1568,26 @@ def run_python_sandbox(
         if sys.platform != "win32":
             # The leader has exited; reap anything it left in its group.
             _sweep_process_group(proc.pid)
+        if (
+            backend == "landlock"
+            and exit_code == _landlock_launcher.FAIL_EXIT_CODE
+            and _landlock_launcher.FAIL_MARKER.encode() in stderr
+        ):
+            # The launcher refused to exec unconfined (a guest faking this
+            # marker only fails its own run).
+            raise SandboxUnavailable(
+                "landlock confinement could not be applied: "
+                + stderr.decode("utf-8", "replace").strip()[-300:]
+            )
         files, file_notes = _collect_files(workdir, collect_files)
         duration_ms = int((time.monotonic() - started) * 1000)
     finally:
         if job is not None:
             job.close()
+        if isinstance(proc, _winappc.AppContainerProcess):
+            proc.close()
+        if profile is not None:
+            profile.delete()
         shutil.rmtree(workdir, ignore_errors=True)
 
     notes.extend(file_notes)

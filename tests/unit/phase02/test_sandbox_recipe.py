@@ -151,3 +151,40 @@ def test_malformed_output_files_are_a_visible_failure(monkeypatch):
     )
     with pytest.raises(FixtureRunnerError, match="invalid output files"):
         run_recipe()
+
+
+# --- fail closed: model code never runs without verified isolation --------
+
+
+def test_runner_requires_isolation_by_default(monkeypatch):
+    seen = {}
+
+    def fake(code, limits=None, **kwargs):
+        seen.update(kwargs)
+        return _fake_outcome()
+
+    monkeypatch.delenv("P2R_ALLOW_UNISOLATED_SANDBOX", raising=False)
+    monkeypatch.setattr("p2r_runner.run_python_sandbox", fake)
+    output = run_recipe()
+    assert seen["require_isolation"] is True
+    assert output["sandbox"]["isolation_required"] is True
+
+
+def test_runner_refuses_when_no_isolating_backend(monkeypatch):
+    from p2r_sandbox import sandbox as sandbox_mod
+
+    monkeypatch.delenv("P2R_ALLOW_UNISOLATED_SANDBOX", raising=False)
+    monkeypatch.setattr(sandbox_mod, "_select_backend", lambda: ("none", False))
+    with pytest.raises(FixtureRunnerError, match="P2R_ALLOW_UNISOLATED_SANDBOX"):
+        run_recipe()
+
+
+def test_runner_explicit_opt_out_runs_and_is_recorded(monkeypatch):
+    from p2r_sandbox import sandbox as sandbox_mod
+
+    monkeypatch.setenv("P2R_ALLOW_UNISOLATED_SANDBOX", "1")
+    monkeypatch.setattr(sandbox_mod, "_select_backend", lambda: ("none", False))
+    output = run_recipe()
+    assert output["sandbox"]["isolation_required"] is False
+    assert output["sandbox"]["backend"] == "none"
+    assert output["sandbox"]["network_isolated"] is False

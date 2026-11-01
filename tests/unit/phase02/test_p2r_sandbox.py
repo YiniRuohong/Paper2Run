@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 
 import pytest
 
@@ -26,8 +27,11 @@ from p2r_sandbox import (
 # Keys the guest process may legitimately see: our whitelist (PATH, TMPDIR)
 # plus constants macOS CoreFoundation injects into every process at startup.
 DARWIN_PLATFORM_ENV_KEYS = {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
+WINDOWS_ENV_KEYS = {"SYSTEMROOT", "TEMP", "TMP", "LOCALAPPDATA"}
 WHITELIST_ENV_KEYS = {"PATH", "TMPDIR"} | (
-    DARWIN_PLATFORM_ENV_KEYS if sys.platform == "darwin" else set()
+    DARWIN_PLATFORM_ENV_KEYS if sys.platform == "darwin"
+    else {"LC_CTYPE"} if sys.platform.startswith("linux")
+    else WINDOWS_ENV_KEYS if sys.platform == "win32" else set()
 )
 
 SEATBELT_EXPECTED = sys.platform == "darwin" and os.path.exists("/usr/bin/sandbox-exec")
@@ -74,10 +78,12 @@ def test_network_denied_and_network_isolated_matches_capability():
         "print('CONNECTED-BAD')\n"
     )
     result = run_python_sandbox(code)
-    assert result.network_isolated is caps["seatbelt"]
+    from p2r_sandbox.sandbox import _select_backend
+
+    assert result.network_isolated is _select_backend()[1]
     assert result.exit_code != 0
     assert b"CONNECTED-BAD" not in result.stdout
-    if result.network_isolated:
+    if result.backend == "seatbelt":
         # seatbelt denials surface as Operation not permitted (EPERM/EACCES)
         assert b"Operation not permitted" in result.stderr
 
@@ -137,7 +143,10 @@ def test_collect_file_over_cap_is_skipped_and_marked():
     assert b"collection cap" in result.stderr  # visible, not silently dropped
 
 
-PROBE_OUTSIDE = "/tmp/p2r_sbx_probe"
+PROBE_OUTSIDE = (
+    os.path.join(tempfile.gettempdir(), "p2r_sbx_probe")
+    if sys.platform == "win32" else "/tmp/p2r_sbx_probe"
+)
 
 
 def test_write_outside_workdir_denied_or_honestly_marked():
@@ -150,11 +159,13 @@ def test_write_outside_workdir_denied_or_honestly_marked():
     )
     try:
         result = run_python_sandbox(code)
-        if caps["seatbelt"]:
+        if result.backend in ("seatbelt", "bwrap", "landlock", "appcontainer"):
             assert result.network_isolated is True
             assert result.exit_code != 0
-            assert b"Operation not permitted" in result.stderr
+            assert b"WROTE-OUTSIDE-BAD" not in result.stdout
             assert not os.path.exists(PROBE_OUTSIDE)
+        elif result.backend == "unshare":
+            assert b"writes outside the workdir are NOT restricted" in result.stderr
         else:
             # Degraded mode must not claim isolation it does not have.
             assert result.network_isolated is False

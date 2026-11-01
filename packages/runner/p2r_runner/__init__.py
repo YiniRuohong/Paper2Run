@@ -3,13 +3,14 @@ from __future__ import annotations
 import csv
 import hashlib
 import math
+import os
 import random
 import re
 import time
 from pathlib import Path
 from typing import Any
 
-from p2r_sandbox import SandboxLimits, run_python_sandbox, validate_output_files
+from p2r_sandbox import SandboxLimits, SandboxUnavailable, run_python_sandbox, validate_output_files
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 FIXTURE_RECIPE_ID = "offline_fixture"
@@ -38,6 +39,15 @@ DATASET_SHA256 = "607d8d8c0cf7c62ebc026554fc4f5b6e7c13f0dc934a1239c4f5e726713498
 # Raw guest output never passes through in full: failure reasons and the
 # success summary both stop at this many bytes of decoded stdout/stderr.
 SANDBOX_STDOUT_SUMMARY_BYTES = 2048
+#: Model-generated code only runs under a backend that verifiably denies the
+#: network AND writes outside the workdir (fail closed). Setting this env var
+#: to 1/true/yes is an explicit operator opt-out for hosts without such a
+#: backend; the run then records ``isolation_required: false``.
+ALLOW_UNISOLATED_ENV = "P2R_ALLOW_UNISOLATED_SANDBOX"
+
+
+def sandbox_isolation_required() -> bool:
+    return os.environ.get(ALLOW_UNISOLATED_ENV, "").strip().lower() not in {"1", "true", "yes"}
 
 
 class FixtureRunnerError(ValueError):
@@ -268,10 +278,15 @@ def run_sandbox_python(
             raise FixtureRunnerError("code sha256 does not match the attempt manifest")
 
     limits = SandboxLimits(max_seconds=normalized.max_seconds)
+    isolation_required = sandbox_isolation_required()
     try:
-        outcome = run_python_sandbox(code, limits=limits)
+        outcome = run_python_sandbox(code, limits=limits, require_isolation=isolation_required)
     except FixtureRunnerError:
         raise
+    except SandboxUnavailable as exc:
+        hint = (f" (no isolating sandbox backend; set {ALLOW_UNISOLATED_ENV}=1 to run "
+                "model code without isolation at your own risk)") if isolation_required else ""
+        raise FixtureRunnerError(f"sandbox execution unavailable: {exc}{hint}") from exc
     except Exception as exc:
         raise FixtureRunnerError(f"sandbox execution unavailable: {type(exc).__name__}") from exc
 
@@ -301,6 +316,8 @@ def run_sandbox_python(
             "timed_out": outcome.timed_out,
             "truncated": outcome.truncated,
             "network_isolated": outcome.network_isolated,
+            "backend": outcome.backend,
+            "isolation_required": isolation_required,
             "duration_ms": outcome.duration_ms,
             "code_sha256": code_sha256,
             "limits": {"max_seconds": limits.max_seconds, "max_output_bytes": limits.max_output_bytes,

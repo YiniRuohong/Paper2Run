@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -23,9 +24,13 @@ DARWIN_PLATFORM_ENV_KEYS = {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 # Linux: CPython coerces the C locale (PEP 538) and sets LC_CTYPE in the
 # guest's own process - a platform constant, not host-inherited.
 LINUX_PLATFORM_ENV_KEYS = {"LC_CTYPE"}
+# Windows: SYSTEMROOT/TEMP/TMP are constructed by us; LOCALAPPDATA is
+# required by CreateProcess for AppContainers (redirected per container).
+WINDOWS_ENV_KEYS = {"SYSTEMROOT", "TEMP", "TMP", "LOCALAPPDATA"}
 WHITELIST_ENV_KEYS = {"PATH", "TMPDIR"} | (
     DARWIN_PLATFORM_ENV_KEYS if sys.platform == "darwin"
-    else LINUX_PLATFORM_ENV_KEYS if sys.platform.startswith("linux") else set()
+    else LINUX_PLATFORM_ENV_KEYS if sys.platform.startswith("linux")
+    else WINDOWS_ENV_KEYS if sys.platform == "win32" else set()
 )
 
 
@@ -102,7 +107,7 @@ def test_network_connect_denied():
         "print('CONNECTED-BAD')\n"
     )
     result = run_python_sandbox(code)
-    isolating = caps["seatbelt"] or caps["bubblewrap"] or caps["unshare_net"]
+    isolating = caps["seatbelt"] or caps["bubblewrap"] or caps["landlock"] or caps["unshare_net"] or caps["appcontainer"]
     assert result.network_isolated is isolating
     assert (result.backend != "none") is isolating
     if isolating:
@@ -112,7 +117,7 @@ def test_network_connect_denied():
 
 def test_external_network_denied_when_isolated():
     caps = sandbox_capabilities()
-    if not (caps["seatbelt"] or caps["bubblewrap"] or caps["unshare_net"]):
+    if not (caps["seatbelt"] or caps["bubblewrap"] or caps["landlock"] or caps["unshare_net"] or caps["appcontainer"]):
         pytest.skip("no network-isolating backend on this host")
     code = (
         "import socket\n"
@@ -130,7 +135,10 @@ def test_external_network_denied_when_isolated():
 # ---------------------------------------------------------------------------
 
 
-PROBE_OUTSIDE = "/tmp/p2r_sbx_escape_probe"
+PROBE_OUTSIDE = (
+    os.path.join(tempfile.gettempdir(), "p2r_sbx_escape_probe")
+    if sys.platform == "win32" else "/tmp/p2r_sbx_escape_probe"
+)
 
 
 def test_write_outside_workdir_denied():
@@ -141,7 +149,7 @@ def test_write_outside_workdir_denied():
     )
     try:
         result = run_python_sandbox(code)
-        if result.backend in ("seatbelt", "bwrap"):
+        if result.backend in ("seatbelt", "bwrap", "landlock", "appcontainer"):
             assert result.network_isolated is True
             assert result.exit_code != 0
             assert b"WROTE-OUTSIDE-BAD" not in result.stdout
@@ -158,11 +166,13 @@ def test_write_outside_workdir_denied():
             os.unlink(PROBE_OUTSIDE)
 
 
-def test_bwrap_ram_backed_paths_not_writable():
-    # /tmp and /dev/shm must not be writable under bwrap: a private tmpfs
+def test_linux_ram_backed_paths_not_writable():
+    # /tmp and /dev/shm must not be writable under bwrap/landlock: tmpfs
     # there would let a guest consume host memory outside RLIMIT_AS.
-    if not sandbox_capabilities()["bubblewrap"]:
-        pytest.skip("bubblewrap backend not available on this host")
+    from p2r_sandbox.sandbox import _select_backend
+
+    if _select_backend()[0] not in ("bwrap", "landlock"):
+        pytest.skip("no Linux write-isolating backend on this host")
     code = (
         "import errno, os\n"
         "for p in ('/tmp/p2r_ram_probe', '/dev/shm/p2r_ram_probe', '/var/tmp/p2r_ram_probe'):\n"
@@ -175,7 +185,7 @@ def test_bwrap_ram_backed_paths_not_writable():
         "print('TMPOK', tempfile.mkstemp()[1].startswith(os.getcwd()))\n"
     )
     result = run_python_sandbox(code)
-    assert result.backend == "bwrap"
+    assert result.backend in ("bwrap", "landlock")
     assert result.exit_code == 0
     assert b"WRITABLE-BAD" not in result.stdout
     assert b"TMPOK True" in result.stdout
@@ -191,12 +201,16 @@ def test_symlink_escape_collect_refused():
     # that a symlink inside the workdir pointing at it must be refused.
     code = (
         "import os\n"
-        "os.symlink('/etc/hosts', 'predictions.json')\n"
+        "try:\n    os.symlink('/etc/hosts', 'predictions.json')\nexcept OSError:\n    print('NO-SYMLINK')\n"
         "print('symlinked')\n"
     )
     result = run_python_sandbox(code, collect_files=("predictions.json",))
     assert result.exit_code == 0
     assert "predictions.json" not in result.files
+    if b"NO-SYMLINK" in result.stdout:
+        # AppContainer tokens cannot create symlinks at all: stronger wall.
+        assert result.backend == "appcontainer"
+        return
     assert result.truncated is True
     assert b"escapes workdir" in result.stderr
 
@@ -204,13 +218,16 @@ def test_symlink_escape_collect_refused():
 def test_symlink_escape_via_glob_collect_refused():
     code = (
         "import os\n"
-        "os.symlink('/etc/hosts', 'evil.json')\n"
+        "try:\n    os.symlink('/etc/hosts', 'evil.json')\nexcept OSError:\n    print('NO-SYMLINK')\n"
         "open('good.json', 'w').write('{}')\n"
         "print('done')\n"
     )
     result = run_python_sandbox(code, collect_files=("*.json",))
     assert result.exit_code == 0
     assert result.files == {"good.json": b"{}"}
+    if b"NO-SYMLINK" in result.stdout:
+        assert result.backend == "appcontainer"
+        return
     assert result.truncated is True
     assert b"escapes workdir" in result.stderr
 

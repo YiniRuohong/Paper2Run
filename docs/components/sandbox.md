@@ -9,10 +9,14 @@
 **防什么**（guest = 被执行的不受信任脚本及其派生的全部子进程）：
 
 - guest 主动外联：网络连接（含 loopback）必须失败；
-- guest 落盘：除沙箱工作目录外不可写（seatbelt/bwrap 后端）；
+- guest 落盘：除沙箱工作目录外不可写（seatbelt/landlock/bwrap/appcontainer 后端）；
 - guest 读取宿主敏感数据：`~/.ssh`、`~/.aws`、`~/.config`、`~/.gnupg`、
   `~/.minimax`、`~/Library/Keychains`、`~/Library/Application Support`、
   `/etc/ssh`、`/private/etc/ssh` 与 `~/.env*` 不可读（seatbelt 后端）；
+  Landlock 与 AppContainer 后端更严：只放行系统目录、解释器目录与 workdir，
+  `$HOME`、`/tmp`、用户 profile 整体不可读；
+- guest 读取 supervisor 的**启动环境变量**（`/proc/<pid>/environ`、Windows
+  PEB 环境块）：Landlock/bwrap/unshare/AppContainer 后端实测拦截（见 §5 泄漏测试）；
 - guest 耗尽宿主资源：CPU、墙钟、进程数、文件大小、内存（含整棵进程树）；
 - guest 洪水攻击：stdout/stderr 各按 `max_output_bytes` 截断，收成的
   单文件上限 256 KB；
@@ -21,15 +25,21 @@
 
 **不防什么**（诚实声明）：
 
-- guest 对非敏感路径的**读**是放开的（seatbelt 上除上述清单外全盘可读；
-  Linux 后端完全不限读）。若运行环境把秘密放在非敏感路径，本组件拦不住；
+- guest 对非敏感路径的**读**：seatbelt 上除上述清单外全盘可读；bwrap
+  （仅在内核无 Landlock 时作为兜底）全盘只读可读。Landlock 下 `/etc`、`/usr`
+  等系统树可读；
+- **macOS seatbelt 无法阻止 guest 经 `sysctl(KERN_PROCARGS2)` 读取同 uid
+  进程（含 supervisor）的启动 argv/环境变量**（2026-11 实测，任何 seatbelt
+  规则都拦不住，全局拒绝 sysctl-read 又会让 Python 起不来）。Paper2Run 的
+  模型 API key 只保存在 provider session 内存中、不进启动环境，因此不受
+  影响；部署时不要把秘密放进 API 进程的启动环境变量；
 - seatbelt 后端的敏感路径清单是**前缀规则**：清单外的位置（例如
   `~/Documents`）可读；
 - `unshare` 后端**不限制工作目录之外的写**——选中它时 stderr 会带
   `[p2r_sandbox]` 说明；
 - guest 子进程若自建**新会话**（`setsid`），将逃出进程组击杀范围；
-- Windows 由 Job Object 提供内存（提交内存硬上限）/进程数/CPU 时间上限与
-  整树击杀，但**没有网络拒绝和 workdir 外写拒绝**（需 AppContainer，尚未实现）；
+- Windows AppContainer 下 guest 可写自己 profile 的私有存储，该 profile
+  每次运行新建、结束即删除，不能跨运行留存数据；
 - RSS 内存限制是**反应式**采样（见 §3），不是硬性内核配额；
 - guest 输出/文件在 caps 之内是可信通道之外的唯一数据出口，本组件不
   对其内容做任何语义校验（shape 校验由 `validate_output_files` 负责）。
@@ -51,6 +61,13 @@
 6. 墙钟超时：输出增量泵送 + deadline，超时整组 `SIGKILL`，
    `timed_out=True`。
 7. 输出封顶：stdout/stderr 各截断到 `max_output_bytes`（`truncated=True`）。
+9. **fail-closed**：`run_python_sandbox(..., require_isolation=True)` 在选中
+   的后端不属于 `FULL_ISOLATION_BACKENDS`（seatbelt/landlock/bwrap/
+   appcontainer，即"网络 + workdir 外写"两道墙都经探针证实）时，**运行前**
+   抛 `SandboxUnavailable`。Paper2Run 执行模型代码的唯一入口
+   `p2r_runner.run_sandbox_python` 默认开启；运维可设
+   `P2R_ALLOW_UNISOLATED_SANDBOX=1` 显式放行，结果里记
+   `sandbox.isolation_required=false` 与实际 `backend`。
 8. OS 级沙箱后端（见 §4）：网络拒绝 + 越权写拒绝 +（seatbelt）敏感路径
    拒读。**每个能力都必须由探针子进程实测证明**才会在
    `sandbox_capabilities()` 里报 True；证不出来就如实降级并上报
@@ -73,19 +90,46 @@
 
 ## 4. 后端矩阵
 
-| 能力 | seatbelt (macOS) | bwrap (Linux) | unshare -rn (Linux) | none |
-| --- | --- | --- | --- | --- |
-| 网络拒绝 | ✅ `(deny network*)` | ✅ `--unshare-net` | ✅ netns | ❌ |
-| workdir 外写拒绝 | ✅ | ✅ ro-bind + workdir bind（`/tmp`、`/dev/shm` 只读） | ❌ | ❌ |
-| 敏感路径拒读 | ✅ deny 清单 + `~/.env*` regex | ❌（全盘只读可读） | ❌ | ❌ |
-| stdlib/解释器可读 | ✅（探针验证 import） | ✅ | ✅ | ✅ |
-| 内存 | RSS 树采样（RLIMIT_AS 不可用） | RLIMIT_AS 可用 + RSS 树采样 | RLIMIT_AS 可用 + RSS 树采样 | Windows：Job Object `JobMemoryLimit`（提交内存硬上限，覆盖子孙进程） |
-| 进程组击杀 | ✅ | ✅（`--die-with-parent` 兜底） | ✅ | Windows：`TerminateJobObject` 整树 + `KILL_ON_JOB_CLOSE` |
-| 后端选择顺序 | 1 | 2（darwin 无 bwrap → 跳过） | 3 | 4（兜底） |
+| 能力 | seatbelt (macOS) | landlock (Linux) | bwrap (Linux) | unshare -rn (Linux) | appcontainer (Windows) | none |
+| --- | --- | --- | --- | --- | --- | --- |
+| 网络拒绝 | ✅ `(deny network*)` | ✅ seccomp 拒 `socket()` + Landlock TCP 规则 | ✅ `--unshare-net` | ✅ netns | ✅ 无任何 capability（含 loopback） | ❌ |
+| workdir 外写拒绝 | ✅ | ✅（`/tmp`、`/dev/shm` 同样拒） | ✅ ro-bind | ❌ | ✅ 仅 workdir 授 ACL | ❌ |
+| 敏感/用户目录拒读 | ✅ 清单 + `~/.env*` | ✅ `$HOME`/`/tmp`/`/var` 整体不可读 | ❌ | ❌ | ✅ 用户 profile 整体不可读 | ❌ |
+| 读 supervisor 启动环境 | ❌（KERN_PROCARGS2，见 §1） | ✅ 拒（Landlock ptrace 作用域） | ✅ 拒（userns） | ✅ 拒（userns） | ✅ 拒（OpenProcess 被拒） | ❌ |
+| 内存 | RSS 树采样 | RLIMIT_AS + RSS 树采样 | RLIMIT_AS + RSS 树采样 | RLIMIT_AS + RSS 树采样 | Job Object 提交内存硬上限（含子孙） | Windows 同左 |
+| 进程树击杀 | ✅ | ✅ | ✅（`--die-with-parent`） | ✅ | `TerminateJobObject` + `KILL_ON_JOB_CLOSE` | Windows 同左 |
+| 需要的条件 | `sandbox-exec` | 内核 ≥5.13 且启用 Landlock LSM；**标准 Docker 默认 seccomp 下可用**，无需特权 | 允许 userns | 允许 userns | Win10+，一次性给解释器目录授 ACL | — |
 
-后端选择 `_select_backend()`：seatbelt → bwrap → unshare → none；
-`SandboxResult.backend` 如实报告本次运行实际使用的后端
-（`"seatbelt"`/`"bwrap"`/`"unshare"`/`"none"`）。
+后端选择 `_select_backend()`：macOS seatbelt；Linux landlock → bwrap →
+unshare；Windows appcontainer；都不可用则 none。`SandboxResult.backend`
+如实报告本次运行实际使用的后端。Landlock 排在 bwrap 前，因为它在相同的
+网络/写墙之外还限制读、拒绝所有 socket（含 UDP/unix）、挡住读 supervisor
+环境；bwrap 作为无 Landlock 内核的兜底。
+
+**Landlock + seccomp 启动器（`_landlock_launcher.py`）**：不依赖用户命名
+空间，也不依赖 preexec（supervisor 是多线程的）。启动 argv 为
+`python -I -c <启动器源码> <workdir> <python> -I script.py`，启动器在 guest
+进程内依次：`PR_SET_NO_NEW_PRIVS` → 按内核 ABI 计算 handled rights 建
+Landlock ruleset（workdir 全权限；`/dev/null` 读写；`/usr`、`/lib*`、`/bin`、
+`/sbin`、`/etc`、`/opt`、`/proc`、`/sys`、`/dev` 与解释器前缀只读+执行；ABI≥4
+TCP bind/connect 无放行规则即拒；ABI≥6 信号与抽象 unix socket 限定在域内）→
+seccomp-bpf（校验 arch，异架构直接 kill；x86_64 拒 x32；`socket`、
+`io_uring_*` 返回 EPERM）→ `execv` 目标。任一步失败打印
+`[p2r_sandbox] landlock launcher failed:` 并以 121 退出，supervisor 将其转成
+`SandboxUnavailable`，**绝不无约束运行**。只放行解释器前缀而不放行
+`sys.path` 任意条目，避免 editable 安装把项目根（含 `.env`）暴露给 guest。
+BPF 程序与 rights 计算是纯函数，由单测里的小型 BPF 解释器逐 syscall 验证。
+
+**Windows AppContainer（`_winappc.py`）**：每次运行新建一个 AppContainer
+profile（`p2r.sbx.<pid>.<随机>`），只带一个自定义 capability
+`p2rSandboxInterpreterRead`，不带任何系统 capability。解释器目录（venv 根
+与 base 安装目录）一次性、幂等地给该 capability SID 授可继承 RX ACL；
+workdir 只授给本次运行的容器 SID，因此并发运行互相看不到对方 workdir。
+进程用 `CreateProcessW` + `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` +
+`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`（只继承三个 stdio 句柄）挂起创建，先
+放入 Job Object 再 `ResumeThread`；结束后删除 profile 及其私有存储。
+`LOCALAPPDATA` 必须出现在环境里（`CreateProcess` 用它定位容器目录，缺失
+返回 ERROR_ENVVAR_NOT_FOUND），内核会把它重定向到容器目录。
 
 **argv 构造是纯函数**（`_bwrap_argv` / `_unshare_argv` /
 `_wrapped_argv`），由单元测试逐字节断言；探针与选择逻辑用 monkeypatch
@@ -142,7 +186,21 @@ leader 退出后被回收；超时整树击杀；带 `CREATE_BREAKAWAY_FROM_JOB`
 - `bubblewrap` / `unshare_net`：对应 Linux 后端探针结果（二进制不存在
   的平台恒 False）；
 - `job_object`：仅 Windows，探针 guest 在 64 MiB Job 内申请 256 MiB 必须
-  得到 `MemoryError` 才为 True。
+  得到 `MemoryError` 才为 True；
+- `landlock`：探针子进程经启动器约束后，外网不通、`/var/tmp` 写被拒、
+  `/proc/<父进程>/environ` 读被拒，三项都成立才为 True；
+- `appcontainer`：探针子进程在 AppContainer 内，supervisor 的 loopback 监听
+  始终未收到连接、外网被拒、`%TEMP%` 写被拒、`OpenProcess(supervisor)` 被拒，
+  才为 True；
+- `sensitive_read_denied`：随选中后端取对应探针的拒读结果（seatbelt：敏感
+  目录；landlock：`$HOME`；appcontainer：用户 profile 根目录）。
+
+**跨进程环境泄漏测试（`tests/unit/sandbox/test_env_leak.py`）**：起一个
+启动环境带随机金丝雀的 supervisor 子进程，让 guest 用平台最强手段读取：
+Linux 扫全部 `/proc/*/environ`，macOS `KERN_PROCARGS2`，Windows
+`OpenProcess` + PEB 环境块 `ReadProcessMemory`。none 后端必须读到（证明
+检测器有效）；landlock、bwrap、unshare、appcontainer 都必须读不到；
+seatbelt 读得到，标记为 xfail（已知限制）。
 
 键是**只增不改**的：消费方应把未知键当作新增能力报告，而非固定 schema。
 
@@ -165,12 +223,17 @@ leader 退出后被回收；超时整树击杀；带 `CREATE_BREAKAWAY_FROM_JOB`
 2. `unshare` 后端无写隔离（stderr 注记）；
 3. RSS 限制反应式，短尖峰可能漏记账；树扫描间隔 ~200 ms；
 4. guest 自建新会话的子进程逃出组击杀；
-5. 标准 Docker 默认 seccomp 禁止 userns，此时只能降级为 `none`（如实上报）；需要隔离时，容器须放开 seccomp/apparmor，或在宿主上直接运行；workdir 内文件数与磁盘占用无上限；
+5. 标准 Docker 默认 seccomp 禁止 userns，bwrap/unshare 不可用，但
+   Landlock 后端照常生效（已实测）；仅当内核不支持 Landlock（<5.13 或 LSM
+   未启用）且不允许 userns 时才会落到 `none`，此时 Paper2Run 拒绝执行模型
+   代码；workdir 内文件数与磁盘占用无上限；
 6. seatbelt 是 Apple 已标记 deprecated 的机制：未来 macOS 移除
    `sandbox-exec` 时会如实降级为 `backend="none"`；
 7. 探针结果按进程缓存一次——运行期间系统环境变化不会重测；
-8. Windows 有 Job Object 资源防线（内存/进程数/CPU/整树击杀/UI 限制），但
-   **无网络拒绝、无写隔离、无敏感路径拒读**，`network_isolated=False`；补齐需
-   AppContainer（无 `internetClient` 能力即断网，且只有显式授 ACL 的路径可访问），
-   代价是要给 Python 安装目录和 workdir 授 AppContainer SID 的 ACL，尚未实现；
-   Windows 上无 `RLIMIT_FSIZE`，单文件大小不设上限。
+8. Windows AppContainer 首次运行会给 guest 解释器的 venv 与 base 安装目录
+   加一条可继承的只读 ACE（授给自定义 capability SID，不影响其他程序）；
+   移除可用 `icacls <目录> /remove *<SID> /T`。supervisor 崩溃时本次运行的
+   AppContainer profile 可能残留（无数据，下次不复用）。Windows 上无
+   `RLIMIT_FSIZE`，单文件大小不设上限；AppContainer 内不能创建符号链接；
+9. macOS seatbelt 下 guest 可读同 uid 进程的启动 argv/环境（`KERN_PROCARGS2`），
+   见 §1；秘密不要放进 supervisor 的启动环境变量。

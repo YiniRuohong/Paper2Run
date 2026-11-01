@@ -21,7 +21,7 @@ from p2r_sandbox.__main__ import build_parser, main
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SANDBOX_PKG_ROOT = REPO_ROOT / "packages" / "sandbox"
 
-VALID_BACKENDS = {"seatbelt", "bwrap", "unshare", "none"}
+VALID_BACKENDS = {"seatbelt", "bwrap", "landlock", "unshare", "appcontainer", "none"}
 
 
 # ---------------------------------------------------------------------------
