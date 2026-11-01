@@ -76,7 +76,7 @@
 | 能力 | seatbelt (macOS) | bwrap (Linux) | unshare -rn (Linux) | none |
 | --- | --- | --- | --- | --- |
 | 网络拒绝 | ✅ `(deny network*)` | ✅ `--unshare-net` | ✅ netns | ❌ |
-| workdir 外写拒绝 | ✅ | ✅ ro-bind + bind + tmpfs | ❌ | ❌ |
+| workdir 外写拒绝 | ✅ | ✅ ro-bind + workdir bind（`/tmp`、`/dev/shm` 只读） | ❌ | ❌ |
 | 敏感路径拒读 | ✅ deny 清单 + `~/.env*` regex | ❌（全盘只读可读） | ❌ | ❌ |
 | stdlib/解释器可读 | ✅（探针验证 import） | ✅ | ✅ | ✅ |
 | 内存 | RSS 树采样（RLIMIT_AS 不可用） | RLIMIT_AS 可用 + RSS 树采样 | RLIMIT_AS 可用 + RSS 树采样 | Windows：无 |
@@ -90,11 +90,29 @@
 **argv 构造是纯函数**（`_bwrap_argv` / `_unshare_argv` /
 `_wrapped_argv`），由单元测试逐字节断言；探针与选择逻辑用 monkeypatch
 测试。bwrap 的挂载策略：`--unshare-net` + `--ro-bind / /` + workdir 可写
-bind + `--tmpfs /tmp` + `--dev /dev` + `--proc /proc` + `--die-with-parent`。
+bind + `--dev /dev --remount-ro /dev` + `--proc /proc` + `--die-with-parent`。
+不挂私有 `/tmp` tmpfs：tmpfs 占用的是宿主内存，不受 RLIMIT_AS 约束；
+guest 的临时文件经 `TMPDIR` 落在 workdir 内。bwrap 会在 child 里自行设置
+`PWD`（值为 workdir），不含宿主数据。
 
-⚠️ 诚实声明：Linux 后端仅在"argv 纯函数 + 探针/选择逻辑"层面被单元测试
-覆盖；本开发机是 macOS，**没有在任何 Linux 主机上实跑过 bwrap/unshare
-后端**。探针在 Linux 上首次运行时会给出真值，那才是行为生效的时刻。
+**Linux 实跑矩阵（2026-11-01，OrbStack，Debian python:3.12-slim，aarch64，
+bubblewrap 0.12.0，非 root 用户）**：
+
+| 容器模式 | 选中后端 | 外网 | 写 `~` | 写 `/tmp` | 沙箱测试 |
+| --- | --- | --- | --- | --- | --- |
+| 默认 seccomp | none（userns 被拦，如实降级 netiso=False） | 通 | 通 | 通 | 40 passed / 5 skipped |
+| seccomp+apparmor unconfined | bwrap | 拒 | 拒 | 拒（EROFS） | 42 passed / 3 skipped |
+| --privileged | bwrap | 拒 | 拒 | 拒（EROFS） | 42 passed / 3 skipped |
+| unconfined 且移除 bwrap | unshare（stderr 注明无写隔离） | 拒 | 拒* | 通 | 41 passed / 4 skipped |
+
+\* unshare 下 `~` 写失败是因为 userns 里 uid 映射为 root 后对宿主 home
+无写权限，属副作用，不是本后端承诺的能力。各模式结束后均无残留进程。
+
+实跑中发现并修复：①探针把 bwrap 私有 loopback 的连接拒绝误判为"网络
+未隔离"，导致 bwrap 被错误跳过，现改为"外网不通且只有 `lo` 网卡"；
+②原 `--tmpfs /tmp` 让 guest 能写 `/tmp`，并可借 tmpfs 消耗宿主内存，现已
+去掉，`/dev` 也重挂为只读；③Linux 上 `LC_CTYPE`（PEP 538）和 bwrap 的
+`PWD` 是平台常量，测试白名单相应放宽。
 
 ## 5. 能力键（`sandbox_capabilities()`）
 
@@ -128,7 +146,7 @@ bind + `--tmpfs /tmp` + `--dev /dev` + `--proc /proc` + `--die-with-parent`。
 2. `unshare` 后端无写隔离（stderr 注记）；
 3. RSS 限制反应式，短尖峰可能漏记账；树扫描间隔 ~200 ms；
 4. guest 自建新会话的子进程逃出组击杀；
-5. Linux 后端未经实机验证（见 §4 声明）；
+5. 标准 Docker 默认 seccomp 禁止 userns，此时只能降级为 `none`（如实上报）；需要隔离时，容器须放开 seccomp/apparmor，或在宿主上直接运行；Windows 未实测；workdir 内文件数与磁盘占用无上限；
 6. seatbelt 是 Apple 已标记 deprecated 的机制：未来 macOS 移除
    `sandbox-exec` 时会如实降级为 `backend="none"`；
 7. 探针结果按进程缓存一次——运行期间系统环境变化不会重测；

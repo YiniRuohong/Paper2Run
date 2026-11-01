@@ -361,16 +361,21 @@ import errno, json, socket, sys
 
 results = {"net": False}
 net_errnos = (errno.EPERM, errno.EACCES, errno.ENETUNREACH, errno.ENETDOWN)
-denied = 0
-for host, port in (("127.0.0.1", 1), ("192.0.2.1", 1)):
-    try:
-        socket.create_connection((host, port), timeout=2).close()
-    except OSError as exc:
-        if exc.errno in net_errnos:
-            denied += 1
-    except OSError:
-        pass
-results["net"] = denied == 2
+# 1) an off-host address must fail with a network errno (not a timeout);
+external_denied = False
+try:
+    socket.create_connection(("192.0.2.1", 1), timeout=2).close()
+except OSError as exc:
+    external_denied = exc.errno in net_errnos
+# 2) the namespace must hold no interface besides loopback. bwrap brings up
+#    a *private* lo (127.0.0.1 answers "connection refused"), which cannot
+#    reach host services, so loopback reachability is not a leak signal;
+#    a real host interface (eth0, ...) is.
+try:
+    names = {name for _idx, name in socket.if_nameindex()}
+except OSError:
+    names = set()
+results["net"] = external_denied and names <= {"lo"}
 if len(sys.argv) > 1:
     results["write"] = True
     try:
@@ -387,10 +392,13 @@ sys.exit(0)
 def _bwrap_argv(base_argv: Sequence[str], workdir_real: str) -> list[str]:
     """argv to run ``base_argv`` under bubblewrap (pure, no probing).
 
-    Mount policy: read-only view of the whole host filesystem, a private
-    ``/tmp``, fresh ``/dev`` and ``/proc``, and the sandbox workdir re-bound
-    writable. Mount order matters: the workdir bind is applied AFTER the
-    ``/tmp`` tmpfs so a workdir under ``/tmp`` is not masked by it.
+    Mount policy: read-only view of the whole host filesystem (``/tmp``
+    included - no private tmpfs, which would let a guest consume host RAM),
+    a fresh ``/dev`` remounted read-only (so ``/dev/shm`` is not a writable
+    RAM-backed escape hatch), a fresh ``/proc``, and the sandbox workdir
+    re-bound writable. ``TMPDIR`` points into the workdir, so ``tempfile``
+    keeps working. Note: bwrap itself sets ``PWD`` (= the workdir) in the
+    child after chdir; it carries no host data.
     ``--unshare-net`` removes the network namespace; ``--die-with-parent``
     reaps the tree if the supervisor dies. Reads outside the workdir stay
     possible by design (documented limitation, matches the seatbelt threat
@@ -402,9 +410,9 @@ def _bwrap_argv(base_argv: Sequence[str], workdir_real: str) -> list[str]:
         "--ro-bind",
         "/",
         "/",
-        "--tmpfs",
-        "/tmp",
         "--dev",
+        "/dev",
+        "--remount-ro",
         "/dev",
         "--proc",
         "/proc",
@@ -472,9 +480,8 @@ def _probe_bwrap() -> bool:
     if shutil.which("bwrap") is None or sys.platform == "win32":
         return False
     workdir = tempfile.mkdtemp(prefix="p2r_bwx_probe_")
-    # /tmp is shadowed by the private tmpfs inside bwrap, so the write probe
-    # targets /var/tmp: read-only under the mount policy, writable on a host
-    # where bwrap failed to apply it (probe then honestly fails).
+    # The write probe targets /var/tmp: read-only under the mount policy,
+    # writable on a host where bwrap failed to apply it (probe then fails).
     outside_probe = f"/var/tmp/p2r_bwx_probe_outside_{os.getpid()}"
     try:
         checks = _run_ns_probe(

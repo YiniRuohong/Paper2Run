@@ -20,8 +20,12 @@ from p2r_sandbox import SandboxLimits, SandboxResult, run_python_sandbox, sandbo
 
 
 DARWIN_PLATFORM_ENV_KEYS = {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
+# Linux: CPython coerces the C locale (PEP 538) and sets LC_CTYPE in the
+# guest's own process - a platform constant, not host-inherited.
+LINUX_PLATFORM_ENV_KEYS = {"LC_CTYPE"}
 WHITELIST_ENV_KEYS = {"PATH", "TMPDIR"} | (
-    DARWIN_PLATFORM_ENV_KEYS if sys.platform == "darwin" else set()
+    DARWIN_PLATFORM_ENV_KEYS if sys.platform == "darwin"
+    else LINUX_PLATFORM_ENV_KEYS if sys.platform.startswith("linux") else set()
 )
 
 
@@ -98,7 +102,25 @@ def test_network_connect_denied():
         "print('CONNECTED-BAD')\n"
     )
     result = run_python_sandbox(code)
-    assert result.network_isolated is caps["seatbelt"]
+    isolating = caps["seatbelt"] or caps["bubblewrap"] or caps["unshare_net"]
+    assert result.network_isolated is isolating
+    assert (result.backend != "none") is isolating
+    if isolating:
+        assert result.exit_code != 0
+        assert b"CONNECTED-BAD" not in result.stdout
+
+
+def test_external_network_denied_when_isolated():
+    caps = sandbox_capabilities()
+    if not (caps["seatbelt"] or caps["bubblewrap"] or caps["unshare_net"]):
+        pytest.skip("no network-isolating backend on this host")
+    code = (
+        "import socket\n"
+        "socket.create_connection(('1.1.1.1', 53), timeout=3)\n"
+        "print('CONNECTED-BAD')\n"
+    )
+    result = run_python_sandbox(code)
+    assert result.network_isolated is True
     assert result.exit_code != 0
     assert b"CONNECTED-BAD" not in result.stdout
 
@@ -119,17 +141,44 @@ def test_write_outside_workdir_denied():
     )
     try:
         result = run_python_sandbox(code)
-        if caps["seatbelt"]:
+        if result.backend in ("seatbelt", "bwrap"):
             assert result.network_isolated is True
             assert result.exit_code != 0
-            assert b"Operation not permitted" in result.stderr
+            assert b"WROTE-OUTSIDE-BAD" not in result.stdout
             assert not os.path.exists(PROBE_OUTSIDE)
+        elif result.backend == "unshare":
+            # network-only backend: must say so instead of claiming write isolation
+            assert result.network_isolated is True
+            assert b"writes outside the workdir are NOT restricted" in result.stderr
         else:
             # Degraded mode must not claim isolation it does not have.
             assert result.network_isolated is False
     finally:
         if os.path.exists(PROBE_OUTSIDE):
             os.unlink(PROBE_OUTSIDE)
+
+
+def test_bwrap_ram_backed_paths_not_writable():
+    # /tmp and /dev/shm must not be writable under bwrap: a private tmpfs
+    # there would let a guest consume host memory outside RLIMIT_AS.
+    if not sandbox_capabilities()["bubblewrap"]:
+        pytest.skip("bubblewrap backend not available on this host")
+    code = (
+        "import errno, os\n"
+        "for p in ('/tmp/p2r_ram_probe', '/dev/shm/p2r_ram_probe', '/var/tmp/p2r_ram_probe'):\n"
+        "    try:\n"
+        "        open(p, 'w').write('x')\n"
+        "        print('WRITABLE-BAD', p)\n"
+        "    except OSError as e:\n"
+        "        print('DENIED', p, e.errno)\n"
+        "import tempfile\n"
+        "print('TMPOK', tempfile.mkstemp()[1].startswith(os.getcwd()))\n"
+    )
+    result = run_python_sandbox(code)
+    assert result.backend == "bwrap"
+    assert result.exit_code == 0
+    assert b"WRITABLE-BAD" not in result.stdout
+    assert b"TMPOK True" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +241,11 @@ def test_guest_env_is_whitelist_no_host_leak(monkeypatch):
     result = run_python_sandbox(code)
     assert result.exit_code == 0
     keys = set(json.loads(result.stdout.decode().strip()))
-    assert keys <= WHITELIST_ENV_KEYS
+    allowed = set(WHITELIST_ENV_KEYS)
+    if result.backend == "bwrap":
+        # bwrap sets PWD itself after chdir into the workdir (not host data).
+        allowed.add("PWD")
+    assert keys <= allowed
     assert b"escape-secret-value" not in result.stdout + result.stderr
 
 
@@ -313,11 +366,16 @@ def test_descendant_memory_bomb_killed_via_tree_monitoring():
         ),
     )
     assert result.exit_code != 0
-    assert result.timed_out is False, (
-        "guest survived to wall clock: tree RSS monitoring did not see the "
-        "grandchild's memory"
-    )
-    assert b"memory limit exceeded" in result.stderr
+    if b"MemoryError" in result.stderr and b"memory limit exceeded" not in result.stderr:
+        # Linux: RLIMIT_AS is inherited by the grandchild, so its allocation
+        # fails up front - the hoard never happens (stronger than RSS kill).
+        assert sandbox_capabilities()["rlimits"] is True
+    else:
+        assert result.timed_out is False, (
+            "guest survived to wall clock: tree RSS monitoring did not see the "
+            "grandchild's memory"
+        )
+        assert b"memory limit exceeded" in result.stderr
     for _ in range(30):
         out = subprocess.run(
             ["ps", "-eo", "args="], capture_output=True, text=True, timeout=15

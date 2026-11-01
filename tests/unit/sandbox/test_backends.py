@@ -39,17 +39,18 @@ BASE = ["/usr/bin/python3", "-I", "script.py"]
 
 
 def test_bwrap_argv_exact():
-    # Mount order matters: the workdir bind must land ON TOP of the private
-    # /tmp tmpfs (a workdir under /tmp would otherwise be masked).
+    # No private /tmp tmpfs (guest could exhaust host RAM through it); /dev
+    # is remounted read-only so /dev/shm is not writable either. The
+    # workdir bind comes last so it lands on top of the read-only root.
     assert _bwrap_argv(BASE, "/tmp/wd") == [
         "bwrap",
         "--unshare-net",
         "--ro-bind",
         "/",
         "/",
-        "--tmpfs",
-        "/tmp",
         "--dev",
+        "/dev",
+        "--remount-ro",
         "/dev",
         "--proc",
         "/proc",
@@ -122,7 +123,9 @@ def test_select_backend_preference_order(monkeypatch):
     monkeypatch.setattr(mod, "_seatbelt_available", lambda: True)
     monkeypatch.setattr(mod, "_bwrap_available", lambda: True)
     monkeypatch.setattr(mod, "_unshare_net_available", lambda: True)
-    assert mod._select_backend() == ("seatbelt", True)
+    # seatbelt is only ever chosen on darwin, by design
+    expected_first = "seatbelt" if sys.platform == "darwin" else "bwrap"
+    assert mod._select_backend() == (expected_first, True)
 
     monkeypatch.setattr(mod, "_seatbelt_available", lambda: False)
     assert mod._select_backend() == ("bwrap", True)
@@ -192,13 +195,22 @@ def test_probe_launch_failure_disables_backend(monkeypatch):
 
 
 def test_ns_probe_script_rejects_loopback_success():
-    # ECONNREFUSED means the loopback route worked: the probe script must
-    # not count it as network isolation.
+    # A refused connection proves a working route: the errno whitelist must
+    # not contain ECONNREFUSED, and the probe must also require "lo only".
     from p2r_sandbox.sandbox import _NS_PROBE_SCRIPT
 
-    assert "ENETUNREACH" in _NS_PROBE_SCRIPT
-    # The errno whitelist cannot contain ECONNREFUSED (its absence is the point).
-    assert "ECONNREFUSED" not in _NS_PROBE_SCRIPT
+    errno_line = next(l for l in _NS_PROBE_SCRIPT.splitlines() if l.startswith("net_errnos"))
+    assert "ENETUNREACH" in errno_line and "ECONNREFUSED" not in errno_line
+    assert "if_nameindex" in _NS_PROBE_SCRIPT
+
+
+def test_ns_probe_reports_unisolated_host_honestly(tmp_path):
+    # Run the probe with NO namespace wrapper: a normal host has non-loopback
+    # interfaces, so the verdict must be net=False (no false positive).
+    from p2r_sandbox.sandbox import _run_ns_probe
+
+    checks = _run_ns_probe([sys.executable, "-I"], str(tmp_path), None)
+    assert checks.get("net") is False
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +235,7 @@ def test_capabilities_json_serializable():
     assert json.loads(json.dumps(caps)) == caps
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="sensitive-path denies are seatbelt-only")
 def test_sensitive_probe_path_is_an_existing_directory():
     from p2r_sandbox.sandbox import _sensitive_probe_path
 
