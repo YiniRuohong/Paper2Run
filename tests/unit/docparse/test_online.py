@@ -1,3 +1,4 @@
+import http.client
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -249,6 +250,42 @@ def test_connection_error_in_one_chunk_is_a_missing_chunk():
     res = parse_online(minimal_pdf([f"p{i}" for i in range(21)]), client=client(flaky, max_retries=1))
     assert res.pages_parsed == 20
     assert res.warnings == ["第 21 页解析失败，未包含"]
+
+
+def test_http_exception_marks_chunk_missing():
+    ok = Fake(states=("done",))
+
+    def flaky(req):
+        if req.url == SUBMIT and b"paper-p21-21" in req.body:
+            raise http.client.IncompleteRead(b"")
+        return ok(req)
+
+    res = parse_online(minimal_pdf([f"p{i}" for i in range(21)]), client=client(flaky, max_retries=1))
+    assert [c["status"] for c in res.chunks] == ["done", "missing"]
+    assert res.pages_parsed == 20
+
+
+def test_invalid_url_from_remote_marks_chunk_missing():
+    fake = Fake(states=("done",), file_url="https://mineru.net/a b")
+    with pytest.raises(DocParseError) as e:
+        parse_online(minimal_pdf(["a"]), client=client(fake))
+    assert e.value.code == "DOCPARSE_REMOTE_FAILED"  # sole chunk missing -> all failed
+    ok = Fake(states=("done",))
+
+    def mixed(req):
+        if req.url == SUBMIT and b"paper-p21-21" in req.body:
+            ok.file_url = "https://mineru.net/a\tb"
+        else:
+            ok.file_url = FILE_URL
+        return ok(req)
+
+    res = parse_online(minimal_pdf([f"p{i}" for i in range(21)]), client=client(mixed))
+    assert [c["status"] for c in res.chunks] == ["done", "missing"]
+
+
+def test_transport_normalizes_invalid_url_to_oserror():
+    with pytest.raises(OSError):
+        urllib_transport(HttpRequest("GET", "http://127.0.0.1/a b", {}, None, 1.0))
 
 
 # --- urllib_transport against a loopback server ---

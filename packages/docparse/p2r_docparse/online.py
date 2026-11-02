@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import time
 from typing import Callable
@@ -44,7 +45,7 @@ class OnlineAgentClient:
                 self._sleep(min(2 ** (attempt - 1), 30))
             try:
                 resp = self._transport(HttpRequest(method, url, dict(headers), body, timeout, max_body))
-            except OSError:
+            except (OSError, http.client.HTTPException, ValueError):
                 last = "DOCPARSE_REMOTE_FAILED"
                 continue
             if resp.status == 429:

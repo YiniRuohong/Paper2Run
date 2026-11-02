@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -32,6 +33,8 @@ Transport = Callable[[HttpRequest], HttpResponse]
 
 def check_remote_url(url: str) -> None:
     """Reject URLs taken from a remote response unless https on an allowed host."""
+    if any(ord(c) <= 0x20 or ord(c) == 0x7F for c in url):
+        raise DocParseError("DOCPARSE_UNSAFE_URL")
     try:
         parts = urlsplit(url)
         host = (parts.hostname or "").lower()
@@ -79,7 +82,8 @@ def _read_capped(fp, max_body: int) -> bytes:
 
 def urllib_transport(req: HttpRequest, *, max_body: int = 8 * 1024 * 1024) -> HttpResponse:
     """Single request; redirects are not followed, 4xx/5xx come back as responses.
-    Connection problems propagate as OSError."""
+    Connection-level problems (including malformed responses and URLs) always
+    surface as a bare OSError so callers can treat them uniformly."""
     limit = req.max_body if req.max_body is not None else max_body
     r = urllib.request.Request(req.url, data=req.body, headers=req.headers, method=req.method)
     try:
@@ -88,5 +92,9 @@ def urllib_transport(req: HttpRequest, *, max_body: int = 8 * 1024 * 1024) -> Ht
     except urllib.error.HTTPError as e:
         try:
             return HttpResponse(e.code, _read_capped(e, limit))
+        except (http.client.HTTPException, ValueError):
+            raise OSError("transport failure") from None
         finally:
             e.close()
+    except (http.client.HTTPException, ValueError):
+        raise OSError("transport failure") from None
