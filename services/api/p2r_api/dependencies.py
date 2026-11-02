@@ -16,8 +16,8 @@ from .auth import IdentityService, SessionRequiredError, csrf_token
 def docparse_root() -> Path:
     configured = os.environ.get("P2R_DOCPARSE_DIR")
     if configured:
-        return Path(configured)
-    return Path(os.environ.get("P2R_DEMO_DIR", ".p2r-demo")) / "docparse"
+        return Path(configured).resolve()
+    return (Path(os.environ.get("P2R_DEMO_DIR", ".p2r-demo")) / "docparse").resolve()
 
 
 def build_runtime(*, db_url: str | None = None, session_factory: Any = None,

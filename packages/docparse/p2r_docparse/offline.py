@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
 import zipfile
 import zlib
@@ -34,7 +35,7 @@ _FALLBACK_WARNING = "未能按页定位内容，引用页码只能精确到全�
 
 def _base_env(root: Path) -> dict[str, str]:
     kit_dir = str(mineru_kit(root).parent)
-    if os.name == "nt":
+    if sys.platform == "win32":
         sysroot = os.environ.get("SYSTEMROOT", r"C:\Windows")
         env = {"PATH": os.pathsep.join([kit_dir, rf"{sysroot}\System32", sysroot])}
         for key in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE"):
@@ -45,6 +46,7 @@ def _base_env(root: Path) -> dict[str, str]:
         for key in ("HOME", "TMPDIR"):
             if key in os.environ:
                 env[key] = os.environ[key]
+    env["PYTHONUTF8"] = "1"
     env["MINERU_HOME"] = str(root / "mineru-home")
     env["MINERU_TELEMETRY_DISABLED"] = "1"
     return env
@@ -248,6 +250,7 @@ def _chunks_and_warnings(outcomes: list[ChunkOutcome], page_count: int) -> tuple
 def parse_offline(pdf: bytes, *, root: Path, tier: str, version: str, timeout: float = 1200.0,
                   run: Callable[..., CompletedRun] = run_tree,
                   cancelled: Callable[[], bool] = lambda: False) -> ParseResult:
+    root = Path(root).resolve()
     page_count = count_pages(pdf)
     with tempfile.TemporaryDirectory(prefix="p2r-offline-") as tmp:
         work = Path(tmp)

@@ -202,3 +202,40 @@ def test_run_tree_keeps_only_tail(tmp_path):
 
 def test_module_exports():
     assert offline.parse_offline is parse_offline
+
+
+def test_base_env_forces_utf8(tmp_path):
+    assert offline_env(tmp_path)["PYTHONUTF8"] == "1"
+    assert install_env(tmp_path)["PYTHONUTF8"] == "1"
+
+
+@posix_only
+def test_kill_tree_survives_taskkill_oserror(tmp_path, monkeypatch):
+    """I14: a failing taskkill must still kill and reap the child."""
+    import subprocess
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(proc.sys, "platform", "win32")
+
+    def no_taskkill(*a, **kw):
+        raise FileNotFoundError("taskkill")
+
+    monkeypatch.setattr(proc.subprocess, "run", no_taskkill)
+    proc._kill_tree(child)
+    assert child.poll() is not None
+
+
+@posix_only
+def test_parse_offline_uses_absolute_kit_path(tmp_path, monkeypatch):
+    """I10: relative roots resolve against the parent, not the child's cwd."""
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    def fake_run(argv, *, env, cwd, timeout, cancelled):
+        seen["argv"], seen["env"] = argv, env
+        return proc.CompletedRun(1, "", "", False)
+
+    with pytest.raises(DocParseError):
+        parse_offline(minimal_pdf(["a"]), root=Path("rel"), tier="basic", version="4.1.3", run=fake_run)
+    assert Path(seen["argv"][0]).is_absolute()
+    assert Path(seen["env"]["MINERU_HOME"]).is_absolute()

@@ -95,7 +95,7 @@ class OfflineInstaller:
                  run: Callable[..., CompletedRun] = run_tree,
                  disk_free: Callable[[Path], int] = lambda p: shutil.disk_usage(p).free,
                  platform: Callable[[], str] = current_platform) -> None:
-        self._root = Path(root)
+        self._root = Path(root).resolve()  # children run with another cwd
         self._base_python = Path(base_python)
         self._run = run
         self._disk_free = disk_free
@@ -120,7 +120,11 @@ class OfflineInstaller:
             raw = None
         if not isinstance(raw, dict) or raw.get("state") not in _STATES:
             return InstallState("not_installed")
-        st = InstallState(raw["state"], raw.get("step"), float(raw.get("progress") or 0.0),
+        try:
+            progress = float(raw.get("progress") or 0.0)
+        except (TypeError, ValueError):
+            progress = 0.0
+        st = InstallState(raw["state"], raw.get("step"), progress,
                           raw.get("tier"), raw.get("version"), 0, raw.get("error"))
         if st.state in ("installing", "broken") and not self._working:
             return InstallState("failed", None, st.progress, st.tier, st.version, 0,
@@ -145,9 +149,12 @@ class OfflineInstaller:
             return InstallState("unsupported")
         with self._lock:
             st = self._read_locked()
-        if st.state in ("ready", "broken"):
-            st.bytes_on_disk = sum(_tree_size(self._root / d) for d in ("venv", "mineru-home"))
+        if st.state not in ("installing", "unsupported"):
+            st.bytes_on_disk = self._disk_use()  # leftovers of a failed install are still removable
         return st
+
+    def _disk_use(self) -> int:
+        return sum(_tree_size(self._root / d) for d in ("venv", "mineru-home"))
 
     # ---- lifecycle -------------------------------------------------------
     def start(self) -> InstallState:
@@ -200,13 +207,18 @@ class OfflineInstaller:
         """True when the venv answers --version; otherwise rebuild venv+packages (models kept)."""
         if self._platform() not in OFFLINE_PLATFORMS:
             return False
-        with self._lock:
-            if self._working or self._uninstalling or self._read_locked().state != "ready":
+        with self._cond:
+            # Another check, rebuild or uninstall owns the venv: wait for it, then re-read the state.
+            self._cond.wait_for(lambda: not self._working and not self._uninstalling)
+            if self._read_locked().state != "ready":
                 return False
             self._working = True
             self._cancel.clear()
         try:
-            if self._version_ok():
+            healthy = self._version_ok()
+            if healthy is None:
+                return False  # unknown (timeout or cancel): leave the install alone
+            if healthy:
                 return True
             self._update(state="broken", step=None)
             shutil.rmtree(self._root / "venv", ignore_errors=True)
@@ -215,13 +227,18 @@ class OfflineInstaller:
             self._end_work()
         return self.state().state == "ready"
 
-    def _version_ok(self) -> bool:
+    def _version_ok(self) -> bool | None:
+        """True/False when the executable answered or is missing; None when the check was inconclusive."""
         try:
             done = self._run([str(mineru_kit(self._root)), "--version"], env=offline_env(self._root),
                              cwd=self._root, timeout=_TIMEOUTS["version"], cancelled=self._cancel.is_set)
-        except OSError:
+        except FileNotFoundError:
             return False
-        return _ok(done)
+        except OSError:
+            return None
+        if done.timed_out or getattr(done, "cancelled", False):
+            return None
+        return done.returncode == 0
 
     # ---- worker ----------------------------------------------------------
     def _work(self, names: tuple[str, ...], rebuild: bool = False) -> None:
@@ -266,7 +283,8 @@ class OfflineInstaller:
     # ---- steps: each returns an error message or None -------------------
     def _step_preflight(self) -> str | None:
         self._root.mkdir(parents=True, exist_ok=True)
-        return None if self._disk_free(self._root) >= MIN_FREE_BYTES else _ERRORS["preflight"]
+        needed = max(0, MIN_FREE_BYTES - _tree_size(self._root / "mineru-home"))  # models already on disk
+        return None if self._disk_free(self._root) >= needed else _ERRORS["preflight"]
 
     def _step_venv(self) -> str | None:
         base = str(self._base_python)

@@ -365,3 +365,44 @@ def test_worker_tick_between_enqueue_and_commit_does_not_strand_paper(tmp_path, 
     assert env.run() is True
     assert env.paper().status == "ready" and env.texts()[0].status == "ready"
     assert len(env.online_calls) == 1
+
+
+def test_worker_stop_cancels_parse_and_requeues_job(tmp_path):
+    """I1: quitting the app cancels the running parse and leaves the job queued, not failed."""
+    stop = threading.Event()
+    seen = {}
+
+    def offline(pdf, cancelled=None, **kw):
+        seen["before"] = cancelled()
+        stop.set()
+        seen["after"] = cancelled()
+        raise DocParseError("DOCPARSE_CANCELLED")
+
+    env = Env(tmp_path, offline=offline, installer=FakeInstaller("ready"))
+    env.enqueue("offline", "k1")
+    assert process_next_parse_job(env.sf, env.store, env.service, stop=stop) is True
+    assert seen == {"before": False, "after": True}
+    with env.sf() as db:
+        job = db.scalar(select(Job))
+        assert job.status == "queued" and job.leased_by is None
+    assert env.paper().status == "parsing" and env.texts()[0].status == "parsing"
+    stop.clear()
+    env.service._parse_offline = lambda pdf, **kw: _result(backend="offline_mineru")
+    assert env.run() is True
+    assert env.paper().status == "ready"
+
+
+def test_worker_stop_requeues_even_if_installer_gave_up(tmp_path):
+    stop = threading.Event()
+
+    class Cancelled(FakeInstaller):
+        def ensure_healthy(self):
+            stop.set()
+            return False  # installer.cancel() made the health check bail out
+
+    env = Env(tmp_path, installer=Cancelled("ready"))
+    env.enqueue("offline", "k1")
+    process_next_parse_job(env.sf, env.store, env.service, stop=stop)
+    with env.sf() as db:
+        assert db.scalar(select(Job)).status == "queued"
+    assert env.paper().status == "parsing"

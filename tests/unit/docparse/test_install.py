@@ -516,3 +516,107 @@ def test_start_racing_uninstall_does_not_interleave(tmp_path, monkeypatch):
     assert events == ["delete-begin", "delete-end"] * 2  # venv and mineru-home
     assert run.count("-m venv") == 2 and len(run.calls) > calls_before
     assert (root / "venv").exists()
+
+
+def test_ensure_healthy_waits_for_concurrent_check(tmp_path):
+    """I2: a second caller must wait for the active check, not report "not ready"."""
+    inst, run, _ = make(tmp_path)
+    inst.start()
+    inst.wait(10)
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_version(argv):
+        entered.set()
+        release.wait(5)
+        return OK
+
+    run.on("--version", slow_version)
+    first: list = []
+    t = threading.Thread(target=lambda: first.append(inst.ensure_healthy()))
+    t.start()
+    assert entered.wait(5)
+    second: list = []
+    t2 = threading.Thread(target=lambda: second.append(inst.ensure_healthy()))
+    t2.start()
+    t2.join(0.3)
+    assert t2.is_alive() and second == []  # waiting, not returning False
+    release.set()
+    t.join(5)
+    t2.join(5)
+    assert first == [True] and second == [True]
+
+
+@pytest.mark.parametrize("done", [CompletedRun(-9, "", "", True), CompletedRun(-9, "", "", False, True)])
+def test_ensure_healthy_timeout_or_cancel_keeps_files(tmp_path, done):
+    """I3: only a missing executable or a non-zero exit counts as broken."""
+    inst, run, root = make(tmp_path)
+    inst.start()
+    inst.wait(10)
+    (root / "venv" / "marker").write_text("keep", encoding="utf-8")
+    run.on("--version", lambda argv: done)
+    assert inst.ensure_healthy() is False
+    assert (root / "venv" / "marker").exists()
+    assert inst.state().state == "ready"
+
+
+def test_ensure_healthy_missing_executable_rebuilds(tmp_path):
+    inst, run, root = make(tmp_path)
+    inst.start()
+    inst.wait(10)
+    n = len(run.calls)
+    calls = {"v": 0}
+
+    def version(argv):
+        calls["v"] += 1
+        if calls["v"] == 1:
+            raise FileNotFoundError("mineru-kit")
+        return OK
+
+    run.on("--version", version)
+    assert inst.ensure_healthy() is True
+    assert any("-m venv" in line for line in run.joined()[n:])
+
+
+def test_failed_install_reports_and_allows_uninstall_of_leftovers(tmp_path):
+    """I9: leftover models of a failed or cancelled install show up in bytes_on_disk."""
+    inst, run, root = make(tmp_path)
+    run.on("models download", lambda argv: (
+        (root / "mineru-home").mkdir(exist_ok=True),
+        (root / "mineru-home" / "part.bin").write_bytes(b"x" * 70), FAIL)[2])
+    inst.start()
+    s = inst.wait(10)
+    assert s.state == "failed" and s.bytes_on_disk == 70
+    assert inst.uninstall().bytes_on_disk == 0
+
+
+def test_not_installed_with_leftovers_reports_bytes(tmp_path):
+    inst, _, root = make(tmp_path)
+    (root / "mineru-home").mkdir(parents=True)
+    (root / "mineru-home" / "m.bin").write_bytes(b"y" * 30)
+    assert inst.state().bytes_on_disk == 30
+
+
+def test_preflight_counts_existing_models_against_requirement(tmp_path):
+    inst, run, root = make(tmp_path, free=5 * GB)
+    assert inst.start() and inst.wait(10).state == "failed"  # 5 GB free, nothing downloaded yet
+    (root / "mineru-home").mkdir(exist_ok=True)
+    with open(root / "mineru-home" / "big.bin", "wb") as fh:
+        fh.truncate(2 * GB)  # sparse
+    inst2, run2, _ = make(tmp_path, free=5 * GB)
+    inst2.start()
+    assert inst2.wait(10).state == "ready"
+
+
+def test_relative_root_is_resolved(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    inst = OfflineInstaller(Path("rel-docparse"), platform=lambda: "darwin-arm64")
+    assert inst._root.is_absolute() and inst._root == (tmp_path / "rel-docparse").resolve()
+
+
+@pytest.mark.parametrize("progress", ["abc", [1], {"a": 1}])
+def test_corrupt_progress_does_not_raise(tmp_path, progress):
+    inst, _, root = make(tmp_path)
+    root.mkdir(parents=True)
+    (root / "install-state.json").write_text(
+        json.dumps({"state": "ready", "progress": progress, "tier": "basic"}), encoding="utf-8")
+    assert inst.state().state == "ready" and inst.state().progress == 0.0

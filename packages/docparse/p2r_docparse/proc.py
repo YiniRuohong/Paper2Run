@@ -43,7 +43,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         else:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
+    except OSError:  # includes a missing taskkill and ProcessLookupError/PermissionError
         pass
     try:
         proc.kill()

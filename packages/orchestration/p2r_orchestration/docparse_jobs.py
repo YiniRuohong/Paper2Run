@@ -89,7 +89,8 @@ def _record_progress(session_factory, text_id: str):
 
 
 def process_next_parse_job(session_factory, artifact_store, service: DocParseService, *,
-                           worker_id: str = "docparse", heartbeat_seconds: float = 20.0) -> bool:
+                           worker_id: str = "docparse", heartbeat_seconds: float = 20.0,
+                           stop: threading.Event | None = None) -> bool:
     with session_factory() as db:
         connection = db.connection()
         if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
@@ -106,14 +107,14 @@ def process_next_parse_job(session_factory, artifact_store, service: DocParseSer
     try:
         _run_claimed(session_factory, artifact_store, service, job_id=job_id, token=token,
                      paper_id=paper_id, mode=mode, worker_id=worker_id,
-                     heartbeat_seconds=heartbeat_seconds)
+                     heartbeat_seconds=heartbeat_seconds, worker_stop=stop)
     except Exception:
         _fail_cleanup(session_factory, job_id, worker_id, token, paper_id, mode)
     return True
 
 
 def _run_claimed(session_factory, artifact_store, service, *, job_id, token, paper_id, mode,
-                 worker_id, heartbeat_seconds) -> None:
+                 worker_id, heartbeat_seconds, worker_stop=None) -> None:
     with session_factory() as db:
         paper = db.get(PaperRecord, paper_id)
         text = _latest_parsing(db, paper_id) if paper is not None else None
@@ -135,7 +136,8 @@ def _run_claimed(session_factory, artifact_store, service, *, job_id, token, pap
             pdf = artifact_store.open_bytes(sha)
             result = service.parse(pdf, mode=mode, previous_markdown=previous,
                                    on_progress=_record_progress(session_factory, text_id),
-                                   cancelled=lost.is_set)
+                                   cancelled=lambda: lost.is_set() or (
+                                       worker_stop is not None and worker_stop.is_set()))
         except DocParseError as e:
             code = e.code
     finally:
@@ -143,7 +145,19 @@ def _run_claimed(session_factory, artifact_store, service, *, job_id, token, pap
         beat.join()
     if lost.is_set():
         return  # lease taken over or expired; periodic recovery requeues it
+    if worker_stop is not None and worker_stop.is_set() and result is None:
+        _requeue(session_factory, job_id, worker_id, token)  # app is quitting: run it next launch
+        return
     _finish(session_factory, job_id, worker_id, token, paper_id, text_id, code, result, artifact_store)
+
+
+def _requeue(session_factory, job_id, worker_id, token) -> None:
+    try:
+        with session_factory() as db:
+            JobRepository(db).requeue_owned(job_id, worker_id=worker_id, fencing_token=token)
+            db.commit()
+    except Exception:
+        pass  # lease expiry requeues it
 
 
 def _fail_cleanup(session_factory, job_id, worker_id, token, paper_id, mode) -> None:
@@ -212,7 +226,7 @@ def start_docparse_worker(session_factory, artifact_store, service: DocParseServ
                     pass
             try:
                 worked = process_next_parse_job(session_factory, artifact_store, service,
-                                                heartbeat_seconds=heartbeat_seconds)
+                                                heartbeat_seconds=heartbeat_seconds, stop=stop)
             except Exception:
                 worked = False
             if not worked:

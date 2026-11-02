@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from p2r_api.main import create_app
+from p2r_api.main import create_app, create_demo_app
 from p2r_artifacts.store import LocalArtifactStore
 from p2r_docparse.install import OfflineInstaller
 from p2r_docparse.testing import minimal_pdf
@@ -266,3 +266,40 @@ def test_parse_new_key_after_failure_starts_new_parse(app, ids):
     with app.state.runtime["session_factory"]() as db:
         assert db.get(PaperRecord, paper_id).status == "parsing"
         assert sorted(t.status for t in db.scalars(select(PaperTextRecord).where(PaperTextRecord.paper_id == paper_id))) == ["failed", "parsing"]
+
+
+def test_docparse_root_is_absolute(monkeypatch, tmp_path):
+    from p2r_api.dependencies import docparse_root
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("P2R_DOCPARSE_DIR", raising=False)
+    monkeypatch.setenv("P2R_DEMO_DIR", "rel-demo")
+    assert docparse_root().is_absolute()
+    monkeypatch.setenv("P2R_DOCPARSE_DIR", "rel-dp")
+    assert docparse_root() == (tmp_path / "rel-dp").resolve()
+
+
+def test_corrupt_state_file_does_not_fail_startup(tmp_path):
+    svc = _service(tmp_path, platform="darwin-arm64")
+    svc.root.mkdir(parents=True, exist_ok=True)
+    (svc.root / "install-state.json").write_text(
+        '{"state": "ready", "progress": "oops"}', encoding="utf-8")
+    app = create_demo_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(),
+        artifact_store=LocalArtifactStore(tmp_path / "store"), docparse_service=svc,
+    )
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+
+
+def test_shutdown_cancels_installer(tmp_path):
+    """I1: leaving the lifespan cancels any running install or health check."""
+    svc = _service(tmp_path, platform="darwin-arm64")
+    called = []
+    svc.installer.cancel = lambda: called.append(True)
+    app = create_demo_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(),
+        artifact_store=LocalArtifactStore(tmp_path / "store"), docparse_service=svc,
+    )
+    with TestClient(app):
+        assert called == []
+    assert called == [True]

@@ -56,13 +56,23 @@ def _install_docparse_worker_lifespan(app: FastAPI) -> None:
             )
             runtime['docparse_worker_stop'] = stop
             runtime['docparse_worker_thread'] = thread
+            def self_heal():
+                # After the app was moved or upgraded; reads the state here so it never blocks startup.
+                try:
+                    if service.installer.state().state == 'ready':
+                        service.installer.ensure_healthy()
+                except Exception:
+                    pass
+
             try:
-                if service.installer.state().state == 'ready':
-                    # Self-heal after the app was moved or upgraded; never blocks startup.
-                    threading.Thread(target=service.installer.ensure_healthy,
-                                     name='docparse-health', daemon=True).start()
+                threading.Thread(target=self_heal, name='docparse-health', daemon=True).start()
                 yield
             finally:
+                stop.set()  # the worker requeues its running job instead of failing it
+                try:
+                    service.installer.cancel()  # kill a running install or health check
+                except Exception:
+                    pass
                 stop_docparse_worker(stop, thread)
 
     app.router.lifespan_context = docparse_lifespan
