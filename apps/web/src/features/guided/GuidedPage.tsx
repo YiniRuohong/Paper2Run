@@ -86,7 +86,7 @@ export default function GuidedPage() {
             : view === 'overview'
             ? <Suspense fallback={<p role="status" className="page-loading">加载总览…</p>}><Dashboard api={api} onNew={goNew} refreshSignal={refreshTick} onBusy={setBusy} /></Suspense>
             : view === 'settings'
-            ? <Suspense fallback={<p role="status" className="page-loading">加载设置…</p>}><Settings health={health} host={host} /></Suspense>
+            ? <Suspense fallback={<p role="status" className="page-loading">加载设置…</p>}><Settings health={health} host={host} api={api} /></Suspense>
             : null}
           {flowOpened.current && <div key={flowKey} hidden={view !== 'new'}><RealFlowPanel api={api} /></div>}
         </div>

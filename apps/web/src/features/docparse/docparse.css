@@ -1,0 +1,50 @@
+/* PDF parsing UI: mode dialog, parse progress, settings rows. Design tokens only. */
+.dp-overlay {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px;
+  background: color-mix(in srgb, var(--text) 38%, transparent);
+}
+.dp-dialog {
+  display: grid; gap: 14px; width: min(560px, 100%); max-height: calc(100dvh - 40px); overflow: auto; padding: 20px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: var(--r-l);
+  box-shadow: var(--shadow-pop); animation: dp-enter var(--dur-base) var(--ease-expo) both;
+}
+.dp-dialog:focus-visible { outline: none; }
+.dp-dialog-title { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.005em; }
+.dp-dialog-intro { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.dp-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.dp-choice { display: grid; align-content: space-between; gap: 14px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--r-m); background: var(--bg); }
+.dp-choice h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.dp-choice p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.65; overflow-wrap: anywhere; }
+.dp-dialog-foot { display: flex; justify-content: flex-end; }
+
+.dp-progress { display: grid; gap: 10px; min-width: 0; }
+.dp-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
+.dp-meta { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.dp-bar {
+  appearance: none; -webkit-appearance: none; width: 100%; max-width: 360px; height: 6px; border: 0;
+  border-radius: 999px; background: var(--raised); overflow: hidden;
+}
+.dp-bar::-webkit-progress-bar { background: var(--raised); }
+.dp-bar::-webkit-progress-value { background: var(--accent); border-radius: 999px; transition: width var(--dur-base) var(--ease); }
+.dp-bar::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+.dp-warnings { display: grid; gap: 4px; min-width: 0; }
+.dp-warnings ul { margin: 0; padding-left: 18px; }
+.dp-warnings li { overflow-wrap: anywhere; }
+
+.dp-offline { display: grid; gap: 8px; justify-items: end; min-width: 0; }
+.dp-offline .dp-line { justify-content: flex-end; }
+.dp-hint { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; text-align: right; }
+
+@keyframes dp-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dp-dialog { animation: none; }
+  .dp-bar::-webkit-progress-value { transition: none; }
+}
+@media (max-width: 640px) {
+  .dp-offline { justify-items: start; }
+  .dp-offline .dp-line { justify-content: flex-start; }
+  .dp-hint { text-align: left; }
+}

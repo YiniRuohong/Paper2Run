@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
+import type { GuidedApi } from '../../api-client/guided';
 import { getDesktop } from '../../desktop';
 import type { Health } from '../../shell/hooks';
 import { StatusWord } from '../../ui/Card';
@@ -6,6 +7,8 @@ import { CopyButton, Segmented } from '../../ui/Controls';
 import { Icon } from '../../ui/Icon';
 import { useTheme } from '../../ui/useTheme';
 import { THEME_PREF_LABELS, type ThemePref } from '../../theme';
+import DocParseSettings from '../docparse/DocParseSettings';
+import { Group, Row } from './SettingsParts';
 import './settings.css';
 
 // Settings: grouped rows (macOS / magpie style). The theme preference is the
@@ -16,7 +19,7 @@ const THEME_OPTIONS = (['system', 'light', 'dark'] as const).map(value => ({ val
 const HEALTH = { up: { text: '已连接', tone: 'ok' }, down: { text: '未连接', tone: 'bad' }, checking: { text: '正在检查', tone: 'idle' } } as const;
 const PLATFORM: Record<string, string> = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
 
-export default function Settings({ health, host }: { health: Health; host: string }) {
+export default function Settings({ health, host, api }: { health: Health; host: string; api: GuidedApi }) {
   const { pref, theme, setPref } = useTheme();
   const desktop = getDesktop();
   const address = desktop?.backendUrl?.replace(/\/+$/, '') || `${window.location.protocol}//${host}`;
@@ -32,6 +35,8 @@ export default function Settings({ health, host }: { health: Health; host: strin
       <Row label="状态"><StatusWord tone={HEALTH[health].tone}>{HEALTH[health].text}</StatusWord></Row>
     </Group>
 
+    <DocParseSettings api={api} />
+
     {desktop && <Group title="桌面应用">
       <Row label="版本"><span className="ui-mono">{desktop.appVersion}</span><span className="settings-muted">{PLATFORM[desktop.platform] ?? desktop.platform}</span></Row>
       <PathRow label="数据目录" path={desktop.dataDir} onOpen={() => desktop.openPath('data')} />
@@ -44,21 +49,6 @@ export default function Settings({ health, host }: { health: Health; host: strin
         <p className="settings-muted">全部在本机运行；不是“复现任意论文”的通用产品，也不做 GPU 级复现承诺。证据等级由程序判定，不由模型给出。</p>
       </div>
     </Group>
-  </div>;
-}
-
-function Group({ title, help, children }: { title: string; help?: string; children: ReactNode }) {
-  return <section className="settings-group" aria-label={title}>
-    <h2 className="settings-title">{title}</h2>
-    <div className="settings-card">{children}</div>
-    {help && <p className="ui-help settings-help">{help}</p>}
-  </section>;
-}
-
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return <div className="settings-row">
-    <div className="settings-label"><span>{label}</span>{hint && <small>{hint}</small>}</div>
-    <div className="settings-value">{children}</div>
   </div>;
 }
 

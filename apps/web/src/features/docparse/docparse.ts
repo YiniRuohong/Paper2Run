@@ -48,3 +48,42 @@ export function docParseLabel(status: DocParseStatus | null, text: PaperText | n
   if (text?.status === 'failed') return '解析失败';
   return '读取解析状态…';
 }
+
+// Fixed public error codes map to one specific reason each. Anything else,
+// including null, gets the generic line: raw server text is never shown.
+const ERROR_REASONS = new Map<string, string>([
+  ['DOCPARSE_OFFLINE_NOT_READY', '离线组件未就绪，请先完成安装'],
+  ['DOCPARSE_OFFLINE_FAILED', '离线解析失败'],
+  ['DOCPARSE_OFFLINE_UNSUPPORTED', '本机不支持离线解析'],
+  ['DOCPARSE_RATE_LIMITED', '在线服务请求过于频繁，请稍后重试'],
+  ['DOCPARSE_REMOTE_FAILED', '在线解析服务失败'],
+  ['DOCPARSE_TIMEOUT', '解析超时'],
+  ['DOCPARSE_PDF_INVALID', 'PDF 无法读取（可能已加密或损坏）'],
+  ['DOCPARSE_PAGE_TOO_LARGE', '单页体积过大，在线解析无法处理，可改用离线解析'],
+  ['DOCPARSE_UNSAFE_URL', '在线服务返回了不安全或过大的内容，已拒绝'],
+  ['DOCPARSE_RESPONSE_TOO_LARGE', '在线服务返回了不安全或过大的内容，已拒绝'],
+  ['DOCPARSE_CANCELLED', '解析已取消'],
+  ['DOCPARSE_MODE_UNSET', '尚未选择解析方式'],
+]);
+const UNKNOWN_ERROR_REASON = '解析失败（未知原因）';
+
+export function docParseErrorReason(code: string | null): string {
+  return (code !== null && ERROR_REASONS.get(code)) || UNKNOWN_ERROR_REASON;
+}
+
+// Disk usage of the offline component, MB below one GB, GB above.
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+  const gb = bytes / 1024 ** 3;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+}
+
+// The mode a user could switch to from the current one, or null when there is
+// no current mode or the other backend is unavailable on this platform. Used
+// only to decide which explicit button to show; nothing switches by itself.
+export function otherParseMode(status: DocParseStatus | null): DocParseMode | null {
+  if (status === null || status.mode === null) return null;
+  if (status.mode === 'online') return status.offline.state === 'unsupported' ? null : 'offline';
+  return 'online';
+}

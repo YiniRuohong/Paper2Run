@@ -9,6 +9,9 @@ import { Badge, KV, KVList, StatusWord, type Tone } from '../../ui/Card';
 import { CopyButton, Switch } from '../../ui/Controls';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
+import ModeDialog from '../docparse/ModeDialog';
+import ParseProgress from '../docparse/ParseProgress';
+import { canExtract } from '../docparse/docparse';
 
 // Real article flow panel: 文章输入 → Provider → 抽取 → 方案 → 环境检查 → 执行。
 // sandbox_python 候选在环境与执行之间多出「复现代码」步骤（生成复现代码 → 沙箱执行）。
@@ -90,6 +93,8 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
   const [titleHint, setTitleHint] = useState('');
   const [providerForm, setProviderForm] = useState({ baseUrl: '', modelId: '', apiKey: '', endpointAlias: '' });
   const [budget, setBudget] = useState(false);
+  // 「稍后选择」 closes the mode dialog for one paper without choosing; needsChoice stays true.
+  const [laterFor, setLaterFor] = useState<string | null>(null);
   const [sshForm, setSshForm] = useState({ host: '', port: '22', user: '', workdir: '', authType: 'agent' as 'agent' | 'key_reference', agentId: '', keyReference: '' });
   const card = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -154,6 +159,7 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
           <KV label="page_count" value={state.paper.page_count ?? 0} />
         </KVList>
         {state.paper.error && <p className="ui-callout tone-bad" role="alert">{state.paper.error.code}: {state.paper.error.message}</p>}
+        <ParseProgress docparse={state.docparse} busy={busy || state.busy} onRetry={() => void call(() => controller.retryParse())} onChoose={mode => void call(() => controller.switchParseMode(mode))} onReopenChoice={() => setLaterFor(null)} onRefresh={() => void call(() => controller.pollPaperText())} />
         <Disclosure variant="sub" title={TECH_TITLE}>
           <KVList>
             <KV label="paper_id" value={state.paper.paper_id} copy />
@@ -192,7 +198,8 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
     </>}
     {state.step === 'extract' && <>
       {!state.paper && <p role="alert">需要先上传文章。</p>}
-      {state.paper && <div className="flow-actions"><button disabled={busy} className="btn btn-primary" onClick={() => void call(() => controller.runExtraction())}>{state.extractionPhase === 'ready' ? '重新抽取（新记录）' : '开始抽取'}</button></div>}
+      {state.paper && !canExtract(state) && <p className="ui-callout tone-warn" role="status"><Icon name="alert" /><span>PDF 需要先解析完成才能抽取；解析状态见「上传论文」步骤。</span></p>}
+      {state.paper && <div className="flow-actions"><button disabled={busy || !canExtract(state)} className="btn btn-primary" onClick={() => void call(() => controller.runExtraction())}>{state.extractionPhase === 'ready' ? '重新抽取（新记录）' : '开始抽取'}</button></div>}
       {state.extractionPhase === 'loading' && <p role="status">抽取请求进行中…</p>}
       {state.extractionPhase === 'error' && <p className="ui-callout tone-bad" role="alert">抽取失败：{state.error ?? '未知错误'}。可显式重试；写入结果未知时用同 key 重放。</p>}
       {state.extractionPhase === 'ready' && state.extraction && <ExtractionView extraction={state.extraction} selectedId={state.selectedCandidateId} onSelect={key => controller.selectCandidate(key)} />}
@@ -346,6 +353,7 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
       <button disabled={busy} className="btn btn-ghost" onClick={() => void call(async () => { try { await controller.pollRun(); await controller.pollReport(); } finally { setReadRev(x => x + 1); } })}><Icon name="refresh" size={14} />刷新（只读）</button>
       {state.note && <span role="note">{state.note}</span>}
     </footer>
+    {state.docparse.needsChoice && laterFor !== (state.paper?.paper_id ?? null) && <ModeDialog status={state.docparse.status} busy={busy || state.busy} onChoose={mode => void call(() => controller.chooseParseMode(mode))} onLater={() => setLaterFor(state.paper?.paper_id ?? '')} />}
   </section>;
 }
 
