@@ -13,6 +13,9 @@ from sqlalchemy import select
 
 from sqlalchemy.orm import object_session
 from p2r_artifacts.store import LocalArtifactStore, ArtifactIntegrityError, ArtifactNotFoundError
+from p2r_docparse.errors import DocParseError
+from p2r_docparse.pdf import count_pages
+from p2r_orchestration.docparse_jobs import enqueue_paper_parse
 from p2r_orchestration.service import ServiceError
 from p2r_persistence.models import OperationRecord, PaperRecord, PaperVersionRecord, ExtractionRecord, SourceRefRecord
 from p2r_persistence.repositories import IdempotencyRepository
@@ -22,7 +25,6 @@ from ..extraction_payload import ExtractionPayloadError, build_extraction_payloa
 
 router = APIRouter()
 _PDF_MAGIC = b"%PDF-"
-_PAGE_RE = re.compile(rb"/Type\s*/Page(?:\s|/|>)")
 # ExtractionRequest: the only body fields create_extraction accepts. Unknown
 # keys are refused so an api_key (or any credential) can never ride along.
 _ALLOWED_EXTRACTION_KEYS = {"reason", "provider_session_id", "prompt_version", "policy_version"}
@@ -108,7 +110,10 @@ async def upload_paper(project_id: str, request: Request):
         max_pages = int(os.getenv("P2R_PAPER_MAX_PAGES", "500"))
         if not file_name or not data.startswith(_PDF_MAGIC): _error("PDF_REQUIRED", "file must be a PDF")
         if len(data) > max_bytes: _error("PDF_TOO_LARGE", "PDF exceeds configured byte limit", details={"max_bytes": max_bytes})
-        pages = len(_PAGE_RE.findall(data))
+        try:
+            pages = count_pages(data)
+        except DocParseError:
+            _error("PDF_INVALID", "PDF could not be read")
         if pages < 1: _error("PDF_INVALID", "PDF contains no pages")
         if pages > max_pages: _error("PDF_TOO_MANY_PAGES", "PDF exceeds configured page limit", details={"max_pages": max_pages})
         digest = hashlib.sha256(data).hexdigest()
@@ -121,7 +126,12 @@ async def upload_paper(project_id: str, request: Request):
         version = PaperVersionRecord(paper_id=paper.id, version=1, sha256=digest, artifact_key=str(address.path), bytes=len(data), page_count=pages)
         operation = OperationRecord(kind="paper_ingestion", resource_id=paper.id, status="succeeded")
         db.add_all([version, operation]); db.flush()
-        payload = {"paper_id": paper.id, "operation_id": operation.id, "status": "uploaded"}
+        status = "uploaded"
+        mode = runtime["docparse_service"].mode()
+        if mode is not None:
+            enqueue_paper_parse(db, paper_id=paper.id, mode=mode, idempotency_key=f"paper_parse:{paper.id}:upload")
+            status = "parsing"
+        payload = {"paper_id": paper.id, "operation_id": operation.id, "status": status}
         claim.record.response_json = payload; db.commit()
         return _envelope(request, payload)
 

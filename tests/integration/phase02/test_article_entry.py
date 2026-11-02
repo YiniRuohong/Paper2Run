@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from p2r_api.main import create_app
 from p2r_artifacts.store import LocalArtifactStore
+from p2r_docparse.testing import minimal_pdf
 from p2r_persistence.models import (
     IdempotencyKey, PaperRecord, PaperVersionRecord, ProjectRecord,
     UserRecord, MembershipRecord,
@@ -192,7 +193,7 @@ def test_invalid_utf8_text_rejected(seeded):
 
 def test_pdf_upload_still_works(seeded):
     app, ids = seeded
-    pdf = b"%PDF-1.4\n/Type /Page\n(Real PDF text)\n%%EOF"
+    pdf = minimal_pdf(["Real PDF text"]).rstrip(b"\r\n")
     with TestClient(app) as client:
         result = client.post(
             f"/api/v1/projects/{ids['project']}/papers",

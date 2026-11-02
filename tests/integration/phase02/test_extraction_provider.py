@@ -18,6 +18,7 @@ from p2r_api.extraction_payload import (
 )
 from p2r_api.main import create_app
 from p2r_artifacts.store import LocalArtifactStore
+from p2r_docparse.testing import minimal_pdf
 from p2r_orchestration.extraction_service import ExtractionService
 from p2r_orchestration.providers import (
     Capabilities,
@@ -130,7 +131,7 @@ def test_mapping_rejects_foreign_source_refs():
 
 # ---------------------------------------------------------------- HTTP fixtures
 
-PDF = b"%PDF-1.4\n/Type /Page\n(P seam source text)\n%%EOF"
+PDF = minimal_pdf(["P seam source text"]).rstrip(b"\r\n").replace(b"\xe2\xe3\xcf\xd3", b"ABCD")  # utf-8 safe, xref offsets unchanged
 
 
 def openai_body(text: str, model_id: str = "model-a") -> bytes:

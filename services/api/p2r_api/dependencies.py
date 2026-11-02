@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import Request
@@ -12,10 +13,17 @@ from p2r_persistence.models import AuthSessionRecord
 from .auth import IdentityService, SessionRequiredError, csrf_token
 
 
+def docparse_root() -> Path:
+    configured = os.environ.get("P2R_DOCPARSE_DIR")
+    if configured:
+        return Path(configured)
+    return Path(os.environ.get("P2R_DEMO_DIR", ".p2r-demo")) / "docparse"
+
+
 def build_runtime(*, db_url: str | None = None, session_factory: Any = None,
                   supervisor: Any = None, artifact_store: Any = None,
                   allowed_origin: str | None = None, secure_cookies: bool = True,
-                  development_auth: bool = False) -> dict[str, Any]:
+                  development_auth: bool = False, docparse_service: Any = None) -> dict[str, Any]:
     if session_factory is None:
         engine = create_engine(db_url or os.getenv("P2R_DATABASE_URL", "sqlite:///p2r.sqlite3"))
         init_db(engine)
@@ -25,10 +33,14 @@ def build_runtime(*, db_url: str | None = None, session_factory: Any = None,
     from p2r_orchestration.session_extraction import SessionExtractionService
     from p2r_orchestration.ssh_executor import FakeSSHVerifier
 
+    if docparse_service is None:
+        from p2r_orchestration.docparse_service import DocParseService
+        docparse_service = DocParseService(docparse_root())
     store = ProviderSecretStore()
     return {"session_factory": session_factory, "supervisor": supervisor, "artifact_store": artifact_store,
             "allowed_origin": allowed_origin, "secure_cookies": secure_cookies,
             "development_auth": development_auth,
+            "docparse_service": docparse_service,
             # Runtime-only: never persisted, never serialized into DTOs.
             "provider_secret_store": store,
             # Real OpenAI-compatible extraction seam; resolves live sessions

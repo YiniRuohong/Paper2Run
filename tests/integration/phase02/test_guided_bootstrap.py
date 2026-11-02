@@ -7,6 +7,7 @@ from sqlalchemy import delete, func, select
 
 from p2r_api.main import create_app, create_demo_app
 from p2r_artifacts.store import LocalArtifactStore
+from p2r_docparse.testing import minimal_pdf
 from p2r_persistence.models import (
     DemoWriteReceiptRecord, ExtractionRecord, MembershipRecord, PaperRecord,
     PaperVersionRecord, ProjectRecord, SourceRefRecord,
@@ -170,7 +171,7 @@ def test_receipt_reader_rejects_non_allowlisted_records(demo, target):
 def test_pdf_upload_content_and_extraction_unchanged(demo):
     client, _ = demo
     data = bootstrap(client)
-    pdf = b'%PDF-1.4\n/Type /Page\n(Real PDF text)\n%%EOF'
+    pdf = minimal_pdf(["Real PDF text"]).rstrip(b"\r\n")
     result = client.post('/api/v1/projects/' + data['project_id'] + '/papers',
                          files={'file': ('paper.pdf', pdf, 'application/pdf')},
                          data={'source_processing_consent': 'true'},

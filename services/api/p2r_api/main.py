@@ -38,12 +38,42 @@ def _install_demo_worker_lifespan(app: FastAPI) -> None:
     app.router.lifespan_context = demo_lifespan
 
 
-def create_app(*, db_url: str | None = None, session_factory=None, supervisor=None, artifact_store=None, allowed_origin: str | None = None, secure_cookies: bool = True, development_auth: bool = False) -> FastAPI:
+def _install_docparse_worker_lifespan(app: FastAPI) -> None:
+    import threading
+    from contextlib import asynccontextmanager
+
+    from p2r_orchestration.docparse_jobs import start_docparse_worker, stop_docparse_worker
+
+    previous_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def docparse_lifespan(fastapi_app):
+        async with previous_lifespan(fastapi_app):
+            runtime = fastapi_app.state.runtime
+            service = runtime['docparse_service']
+            stop, thread = start_docparse_worker(
+                runtime['session_factory'], runtime['artifact_store'], service,
+            )
+            runtime['docparse_worker_stop'] = stop
+            runtime['docparse_worker_thread'] = thread
+            try:
+                if service.installer.state().state == 'ready':
+                    # Self-heal after the app was moved or upgraded; never blocks startup.
+                    threading.Thread(target=service.installer.ensure_healthy,
+                                     name='docparse-health', daemon=True).start()
+                yield
+            finally:
+                stop_docparse_worker(stop, thread)
+
+    app.router.lifespan_context = docparse_lifespan
+
+
+def create_app(*, db_url: str | None = None, session_factory=None, supervisor=None, artifact_store=None, allowed_origin: str | None = None, secure_cookies: bool = True, development_auth: bool = False, docparse_service=None) -> FastAPI:
     app = FastAPI(title="p2r-api")
     # Preserve the explicit demo/supervisor test harness while keeping the
     # production default (create_app() with no arguments) authenticated.
     compatibility_auth = development_auth or (supervisor is not None and allowed_origin is None)
-    app.state.runtime = build_runtime(db_url=db_url, session_factory=session_factory, supervisor=supervisor, artifact_store=artifact_store, allowed_origin=allowed_origin, secure_cookies=secure_cookies, development_auth=compatibility_auth)
+    app.state.runtime = build_runtime(db_url=db_url, session_factory=session_factory, supervisor=supervisor, artifact_store=artifact_store, allowed_origin=allowed_origin, secure_cookies=secure_cookies, development_auth=compatibility_auth, docparse_service=docparse_service)
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
@@ -78,7 +108,7 @@ def create_app(*, db_url: str | None = None, session_factory=None, supervisor=No
     return app
 
 
-def create_demo_app(*, db_url=None, session_factory=None, artifact_store=None, supervisor=None) -> FastAPI:
+def create_demo_app(*, db_url=None, session_factory=None, artifact_store=None, supervisor=None, docparse_service=None) -> FastAPI:
     """Opt-in, loopback-only development runtime; not a hostile-code sandbox.
 
     Start with uvicorn p2r_api.main:create_demo_app --factory --host 127.0.0.1.
@@ -105,11 +135,13 @@ def create_demo_app(*, db_url=None, session_factory=None, artifact_store=None, s
         db_url=db_url, session_factory=session_factory, supervisor=supervisor,
         artifact_store=artifact_store,
         development_auth=True, allowed_origin='http://127.0.0.1:8000', secure_cookies=False,
+        docparse_service=docparse_service,
     )
     from .routes.demo import router as demo_router
     app.state.runtime['demo_enabled'] = True
     app.include_router(demo_router, prefix='/api/v1')
     _install_demo_worker_lifespan(app)
+    _install_docparse_worker_lifespan(app)
     _mount_web_dist(app)
     return app
 

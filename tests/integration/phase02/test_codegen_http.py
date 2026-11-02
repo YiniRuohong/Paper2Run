@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parents[3] / "packages" / "persistence"))
 
 from p2r_api.main import create_app  # noqa: E402
 from p2r_artifacts.store import LocalArtifactStore  # noqa: E402
+from p2r_docparse.testing import minimal_pdf  # noqa: E402
 from p2r_orchestration.codegen_service import CodegenService  # noqa: E402
 from p2r_orchestration.extraction_service import ExtractionService  # noqa: E402
 from p2r_orchestration.providers import (  # noqa: E402
@@ -39,7 +40,7 @@ from p2r_persistence.models import (  # noqa: E402
     UserRecord,
 )
 
-PDF = b"%PDF-1.4\n/Type /Page\n(Codegen seam source text)\n%%EOF"
+PDF = minimal_pdf(["Codegen seam source text"]).rstrip(b"\r\n").replace(b"\xe2\xe3\xcf\xd3", b"ABCD")  # utf-8 safe, xref offsets unchanged
 SECRET = "sk-codegen-secret-abcdef123456"
 ENDPOINT = "codegen-endpoint"
 MODEL_ID = "model-codegen"
