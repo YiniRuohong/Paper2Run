@@ -13,7 +13,7 @@ dependencies = [
   "pydantic>=2,<3",
   "sqlalchemy>=2,<3",
   "alembic>=1.13,<2",
-  "pypdf>=6.21,<7",
+  "pypdf[crypto]>=6.21,<7",
 ]
 
 [project.optional-dependencies]

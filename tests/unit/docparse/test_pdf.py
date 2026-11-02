@@ -70,3 +70,28 @@ def test_object_stream_pdf():
     data = minimal_pdf(["a", "b", "c"], object_streams=True)
     assert b"/Type /Page" not in data and b"/Type/Page" not in data
     assert count_pages(data) == 3
+
+
+def _encrypted(pages: int, algorithm: str) -> bytes:
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(minimal_pdf([str(i) for i in range(pages)]))))
+    writer.encrypt(user_password="", owner_password="owner-pw", algorithm=algorithm)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def _check_opens(data: bytes) -> None:
+    assert count_pages(data) == 21
+    chunks = plan_chunks(data)
+    assert [(c.first_page, c.last_page) for c in chunks] == [(1, 20), (21, 21)]
+    for c in chunks:
+        assert count_pages(c.data) == c.last_page - c.first_page + 1
+        assert not PdfReader(io.BytesIO(c.data)).is_encrypted
+
+
+def test_empty_password_aes128_pdf_opens():
+    _check_opens(_encrypted(21, "AES-128"))
+
+
+def test_empty_password_aes256_pdf_opens():
+    _check_opens(_encrypted(21, "AES-256"))
