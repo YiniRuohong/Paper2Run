@@ -33,6 +33,8 @@ def enqueue_paper_parse(db, *, paper_id: str, mode: str, idempotency_key: str):
         return active
     job = JobRepository(db).enqueue(kind=PARSE_JOB_KIND, payload_ref=f"{paper_id}:{mode}",
                                     idempotency_key=idempotency_key)
+    if job.status not in ("queued", "running"):
+        return job  # reused key of a finished job: nothing to parse, leave state alone
     if _latest_parsing(db, paper_id) is None:
         db.add(PaperTextRecord(paper_id=paper_id, source_sha256=paper.sha256, page_count=paper.page_count,
                                status="parsing"))

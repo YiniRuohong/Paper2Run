@@ -213,3 +213,56 @@ def test_docparse_requires_session_without_dev_auth(tmp_path):
     with TestClient(prod) as client:
         assert client.get("/api/v1/docparse/status").status_code == 401
         assert client.put("/api/v1/docparse/mode", json={"mode": "online"}).status_code == 401
+
+
+def _finish_parse(app, paper_id, outcome):
+    with app.state.runtime["session_factory"].begin() as db:
+        for job in db.scalars(select(Job).where(Job.kind == "paper_parse")):
+            job.status = "succeeded" if outcome == "ready" else "failed"
+        for rec in db.scalars(select(PaperTextRecord).where(PaperTextRecord.paper_id == paper_id)):
+            rec.status = outcome
+        db.get(PaperRecord, paper_id).status = outcome
+
+
+def _start_parse(client, ids, key):
+    paper_id = _upload(client, ids["project"], minimal_pdf(["x"]), key="up").json()["data"]["paper_id"]
+    return paper_id
+
+
+def test_parse_replay_same_key_returns_same_response(app, ids):
+    with TestClient(app) as client:
+        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        paper_id = _start_parse(client, ids, "up")
+        _finish_parse(app, paper_id, "ready")
+        url = f"/api/v1/papers/{paper_id}/parse"
+        first = client.post(url, headers={**H, "Idempotency-Key": "k1"})
+        assert first.status_code == 202
+        # first call after the upload job finished started a new job; finish it too
+        _finish_parse(app, paper_id, "ready")
+        replay = client.post(url, headers={**H, "Idempotency-Key": "k1"})
+        assert replay.status_code == 202
+        assert replay.json()["data"] == first.json()["data"]
+        diff = client.post(url, content=b'{"x":1}', headers={**H, "Idempotency-Key": "k1"})
+        assert diff.status_code == 409 and diff.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+    with app.state.runtime["session_factory"]() as db:
+        assert db.get(PaperRecord, paper_id).status == "ready"
+        texts = db.scalars(select(PaperTextRecord).where(PaperTextRecord.paper_id == paper_id)).all()
+        assert [t.status for t in texts] == ["ready", "ready"]
+    assert len(_jobs(app)) == 2
+
+
+def test_parse_new_key_after_failure_starts_new_parse(app, ids):
+    with TestClient(app) as client:
+        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        paper_id = _start_parse(client, ids, "up")
+        _finish_parse(app, paper_id, "failed")
+        url = f"/api/v1/papers/{paper_id}/parse"
+        r = client.post(url, headers={**H, "Idempotency-Key": "retry"})
+        assert r.status_code == 202
+        job_id = r.json()["data"]["job_id"]
+    jobs = _jobs(app)
+    assert len(jobs) == 2 and job_id in {j.id for j in jobs}
+    assert next(j for j in jobs if j.id == job_id).status == "queued"
+    with app.state.runtime["session_factory"]() as db:
+        assert db.get(PaperRecord, paper_id).status == "parsing"
+        assert sorted(t.status for t in db.scalars(select(PaperTextRecord).where(PaperTextRecord.paper_id == paper_id))) == ["failed", "parsing"]

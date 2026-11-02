@@ -270,6 +270,17 @@ def test_duplicate_enqueue_collapses_and_ready_not_flipped(tmp_path):
     assert env.texts()[0].status == "ready"
 
 
+def test_enqueue_reused_key_after_finish_is_noop(tmp_path):
+    env = Env(tmp_path)
+    first = env.enqueue("online", "k1")
+    assert env.run() is True
+    again = env.enqueue("online", "k1")
+    assert again == first
+    assert env.paper().status == "ready"
+    assert len(env.texts()) == 1 and env.texts()[0].status == "ready"
+    assert env.run() is False
+
+
 def test_noop_when_no_parsing_record(tmp_path):
     env = Env(tmp_path)
     job_id = env.enqueue("online", "k1")

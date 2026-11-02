@@ -7,6 +7,7 @@ from p2r_docparse.errors import DocParseError
 from p2r_docparse.platform import current_platform
 from p2r_orchestration.docparse_jobs import enqueue_paper_parse
 from p2r_persistence.models import PaperRecord, PaperTextRecord
+from p2r_persistence.repositories import IdempotencyRepository
 
 from ..auth import require_project_access
 from ..dependencies import actor_id
@@ -73,7 +74,7 @@ def uninstall_offline(request: Request):
 
 
 @router.post("/papers/{paper_id}/parse", status_code=202)
-def parse_paper(paper_id: str, request: Request):
+async def parse_paper(paper_id: str, request: Request):
     runtime = request.app.state.runtime
     user_id = actor_id(request)
     with runtime["session_factory"]() as db:
@@ -87,10 +88,17 @@ def parse_paper(paper_id: str, request: Request):
         mode = _service(request).mode()
         if mode is None:
             _error("DOCPARSE_MODE_UNSET", "choose online or offline parsing first", status=409)
+        body = await request.body()
+        claim = IdempotencyRepository(db).claim(scope=f"paper-parse:{user_id}:{paper_id}", key=key, body=body)
+        if claim.conflict: _error("IDEMPOTENCY_CONFLICT", "idempotency key was used with a different request body", status=409)
+        if claim.record.response_json is not None: return _envelope(request, claim.record.response_json)
+        if not claim.claimed: _error("IDEMPOTENCY_IN_PROGRESS", "idempotency key is already in progress", status=409)
         job = enqueue_paper_parse(db, paper_id=paper_id, mode=mode,
                                   idempotency_key=f"paper_parse:{paper_id}:{key}")
+        payload = {"paper_id": paper_id, "job_id": job.id, "status": "parsing"}
+        claim.record.response_json = payload
         db.commit()
-        return _envelope(request, {"paper_id": paper_id, "job_id": job.id, "status": "parsing"})
+        return _envelope(request, payload)
 
 
 @router.get("/papers/{paper_id}/text")
