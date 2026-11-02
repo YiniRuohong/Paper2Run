@@ -1,4 +1,8 @@
 import type {
+  DocParseAccepted,
+  DocParseMode,
+  DocParseOfflineState,
+  DocParseStatus,
   GuidedAttempt,
   GuidedAttemptCode,
   GuidedBootstrap,
@@ -31,6 +35,10 @@ import type {
   GuidedSSHVerification,
   GuidedSourceRef,
   GuidedTextChunk,
+  PaperText,
+  PaperTextBackend,
+  PaperTextChunk,
+  PaperTextStatus,
   WriteIntent,
 } from './guided-types';
 
@@ -76,6 +84,15 @@ export interface GuidedApi {
   createSshVerification(environmentCheckId: string, input: { host: string; port: number; user: string; workdir: string; auth: { type: 'agent'; agent_id: string } | { type: 'key_reference'; key_reference: string }; key?: string }): Promise<GuidedSSHVerification>;
   createCodegen(experimentId: string, input: { provider_session_id: string | null; reason: string; prompt_version?: string; key?: string }): Promise<GuidedCodegenAccepted>;
   readAttemptCode(experimentId: string, attemptIndex: number, signal?: AbortSignal): Promise<GuidedAttemptCode>;
+  // --- MinerU PDF parsing. Only parsePaper carries an Idempotency-Key; the
+  // mode/installer commands are idempotent by nature and send none. ---
+  getDocParseStatus(signal?: AbortSignal): Promise<DocParseStatus>;
+  setDocParseMode(mode: DocParseMode): Promise<DocParseStatus>;
+  startOfflineInstall(): Promise<DocParseStatus>;
+  cancelOfflineInstall(): Promise<DocParseStatus>;
+  uninstallOffline(): Promise<DocParseStatus>;
+  parsePaper(paperId: string, key: string): Promise<DocParseAccepted>;
+  getPaperText(paperId: string, signal?: AbortSignal): Promise<PaperText>;
 }
 
 export const GUIDED_PATHS = {
@@ -113,6 +130,13 @@ export const GUIDED_PATHS = {
   operation: (operationId: string) => `/operations/${encodeURIComponent(operationId)}`,
   text: (artifactId: string) => `/artifacts/${encodeURIComponent(artifactId)}/text`,
   download: (artifactId: string) => `/artifacts/${encodeURIComponent(artifactId)}/download`,
+  docparseStatus: '/docparse/status',
+  docparseMode: '/docparse/mode',
+  docparseOfflineInstall: '/docparse/offline/install',
+  docparseOfflineCancel: '/docparse/offline/cancel',
+  docparseOffline: '/docparse/offline',
+  paperParse: (paperId: string) => `/papers/${encodeURIComponent(paperId)}/parse`,
+  paperText: (paperId: string) => `/papers/${encodeURIComponent(paperId)}/text`,
 } as const;
 
 const BASE = '/api/v1';
@@ -652,6 +676,79 @@ export function validateAttemptCode(value: unknown): GuidedAttemptCode {
   return { code: item.code, code_sha256: codeSha256, notes: nullableStr(item.notes ?? null, 'attempt code.notes') };
 }
 
+// --- MinerU PDF parsing (docparse) ---------------------------------------
+
+const DOCPARSE_MODES = new Set<DocParseMode>(['online', 'offline']);
+const DOCPARSE_OFFLINE_STATES = new Set<DocParseOfflineState>(['not_installed', 'installing', 'ready', 'broken', 'failed', 'unsupported']);
+const PAPER_TEXT_STATUS = new Set<PaperTextStatus>(['none', 'parsing', 'ready', 'failed']);
+const PAPER_TEXT_BACKENDS = new Set<PaperTextBackend>(['online_agent', 'offline_mineru']);
+
+export function validateDocParseStatus(value: unknown): DocParseStatus {
+  const item = record(value, 'docparse status must be an object');
+  if (item.mode !== null && !DOCPARSE_MODES.has(item.mode as DocParseMode)) invalid('docparse status.mode is unsupported');
+  const offline = record(item.offline, 'docparse status.offline must be an object');
+  if (!DOCPARSE_OFFLINE_STATES.has(offline.state as DocParseOfflineState)) invalid('docparse status.offline.state is unsupported');
+  const progress = offline.progress;
+  if (typeof progress !== 'number' || !Number.isFinite(progress) || progress < 0 || progress > 1) invalid('docparse status.offline.progress must be a number in [0, 1]');
+  // Installer free text (step/tier/version/error) may legitimately be empty;
+  // only its type is enforced.
+  const text = (value: unknown, path: string): string | null => {
+    if (value !== null && typeof value !== 'string') invalid(`${path} must be a string or null`);
+    return value as string | null;
+  };
+  return {
+    mode: item.mode as DocParseMode | null,
+    offline: {
+      state: offline.state as DocParseOfflineState,
+      step: text(offline.step, 'docparse status.offline.step'),
+      progress,
+      tier: text(offline.tier, 'docparse status.offline.tier'),
+      version: text(offline.version, 'docparse status.offline.version'),
+      bytes_on_disk: nonNegativeInt(offline.bytes_on_disk, 'docparse status.offline.bytes_on_disk'),
+      error: text(offline.error, 'docparse status.offline.error'),
+    },
+    platform: str(item.platform, 'docparse status.platform'),
+  };
+}
+
+export function validateDocParseAccepted(value: unknown): DocParseAccepted {
+  const item = record(value, 'parse accepted must be an object');
+  if (item.status !== 'parsing') invalid('parse accepted.status must be parsing');
+  return {
+    paper_id: str(item.paper_id, 'parse accepted.paper_id'),
+    job_id: str(item.job_id, 'parse accepted.job_id'),
+    status: 'parsing',
+  };
+}
+
+function validatePaperTextChunk(value: unknown, index: number): PaperTextChunk {
+  const item = record(value, `paper text.chunks[${index}] must be an object`);
+  const chunk: PaperTextChunk = { status: str(item.status, `paper text.chunks[${index}].status`) };
+  if (item.first_page !== undefined) chunk.first_page = nonNegativeInt(item.first_page, `paper text.chunks[${index}].first_page`);
+  if (item.last_page !== undefined) chunk.last_page = nonNegativeInt(item.last_page, `paper text.chunks[${index}].last_page`);
+  return chunk;
+}
+
+export function validatePaperText(value: unknown): PaperText {
+  const item = record(value, 'paper text must be an object');
+  if (!PAPER_TEXT_STATUS.has(item.status as PaperTextStatus)) invalid('paper text.status is unsupported');
+  if (item.backend !== null && !PAPER_TEXT_BACKENDS.has(item.backend as PaperTextBackend)) invalid('paper text.backend is unsupported');
+  if (!Array.isArray(item.chunks)) invalid('paper text.chunks must be an array');
+  if (!Array.isArray(item.warnings) || item.warnings.some(w => typeof w !== 'string')) invalid('paper text.warnings must be an array of strings');
+  // An empty Markdown preview is still a real preview, so only the type is checked.
+  if (item.preview !== null && typeof item.preview !== 'string') invalid('paper text.preview must be a string or null');
+  return {
+    status: item.status as PaperTextStatus,
+    backend: item.backend as PaperTextBackend | null,
+    page_count: nonNegativeInt(item.page_count, 'paper text.page_count'),
+    pages_parsed: nonNegativeInt(item.pages_parsed, 'paper text.pages_parsed'),
+    chunks: item.chunks.map(validatePaperTextChunk),
+    warnings: [...item.warnings as string[]],
+    error_code: nullableStr(item.error_code, 'paper text.error_code'),
+    preview: item.preview as string | null,
+  };
+}
+
 function isAbort(error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true
     || (error instanceof DOMException && error.name === 'AbortError')
@@ -1010,5 +1107,59 @@ export function createGuidedApi(actorId: string, fetcher: Fetcher = fetch): Guid
     return read(GUIDED_PATHS.attemptCode(experimentId, attemptIndex), validateAttemptCode, signal);
   }
 
-  return { read, readArray, write, receipt, download, runEvents, createProject, uploadPaperPdf, createTextPaper, getPaper, createProviderSession, deleteProviderSession, createExtraction, getExtraction, createEnvironmentCheck, createSshVerification, createCodegen, readAttemptCode };
+  // Docparse mode/installer commands: idempotent by nature, so no
+  // Idempotency-Key. A 4xx is a proven rejection; a 5xx, network failure or an
+  // unverifiable 2xx is an unknown outcome (same rule as write()).
+  async function docParseCommand(method: 'PUT' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<DocParseStatus> {
+    const init: RequestInit = body === undefined
+      ? { method }
+      : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    const response = await send(path, init);
+    const requestId = response.headers.get('X-Request-ID') ?? undefined;
+    if (!response.ok) throw errorEnvelope(await responsePayload(response, response.status >= 500), response);
+    try {
+      const parsed = envelopeData(await responsePayload(response, true), response.status, requestId, true) as { data: unknown };
+      return validateDocParseStatus(parsed.data);
+    } catch (error) {
+      throw asUnknown(error, `解析设置已返回成功状态但响应无法验证；请重新查询解析状态。(${response.status})`, response.status, 'UNKNOWN_WRITE_RESULT', requestId);
+    }
+  }
+
+  async function getDocParseStatus(signal?: AbortSignal): Promise<DocParseStatus> {
+    return read(GUIDED_PATHS.docparseStatus, validateDocParseStatus, signal);
+  }
+
+  async function setDocParseMode(mode: DocParseMode): Promise<DocParseStatus> {
+    if (!DOCPARSE_MODES.has(mode)) invalid('docparse mode must be online or offline');
+    return docParseCommand('PUT', GUIDED_PATHS.docparseMode, { mode });
+  }
+
+  async function startOfflineInstall(): Promise<DocParseStatus> {
+    return docParseCommand('POST', GUIDED_PATHS.docparseOfflineInstall);
+  }
+
+  async function cancelOfflineInstall(): Promise<DocParseStatus> {
+    return docParseCommand('POST', GUIDED_PATHS.docparseOfflineCancel);
+  }
+
+  async function uninstallOffline(): Promise<DocParseStatus> {
+    return docParseCommand('DELETE', GUIDED_PATHS.docparseOffline);
+  }
+
+  async function parsePaper(paperId: string, key: string): Promise<DocParseAccepted> {
+    return write({ key, path: GUIDED_PATHS.paperParse(paperId), body: '{}', state: 'prepared' }, value => {
+      const accepted = validateDocParseAccepted(value);
+      if (accepted.paper_id !== paperId) invalid('parse accepted does not match the requested paper');
+      return accepted;
+    });
+  }
+
+  async function getPaperText(paperId: string, signal?: AbortSignal): Promise<PaperText> {
+    return read(GUIDED_PATHS.paperText(paperId), validatePaperText, signal);
+  }
+
+  return {
+    read, readArray, write, receipt, download, runEvents, createProject, uploadPaperPdf, createTextPaper, getPaper, createProviderSession, deleteProviderSession, createExtraction, getExtraction, createEnvironmentCheck, createSshVerification, createCodegen, readAttemptCode,
+    getDocParseStatus, setDocParseMode, startOfflineInstall, cancelOfflineInstall, uninstallOffline, parsePaper, getPaperText,
+  };
 }

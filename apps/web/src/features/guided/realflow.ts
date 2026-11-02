@@ -1,6 +1,7 @@
 import { GUIDED_PATHS as P, GuidedApiError, validateBootstrap, validateConfirmation, validateExperiment, validateExportAccepted, validateReportBuildAccepted, validateReportStatus, validateRevision, validateRun, validateRunAccepted } from '../../api-client/guided.ts';
 import type { GuidedApi } from '../../api-client/guided.ts';
-import type { GuidedCandidateExperiment, GuidedSSHAuthInput } from '../../api-client/guided-types.ts';
+import type { DocParseMode, DocParseStatus, GuidedCandidateExperiment, GuidedSSHAuthInput, PaperText } from '../../api-client/guided-types.ts';
+import { canExtract, canParseNow, isParsePending } from '../docparse/docparse.ts';
 import { applyTrainingToSpec, candidateBlockedReason, createRealFlowState, findCandidate, isSandboxRecipeSelected, parseTrainingForm, realFlowReducer, type RealFlowState, type RealFlowStep } from './realflow-state.ts';
 
 // Controller for the real article flow (paper upload → provider session →
@@ -13,6 +14,11 @@ import { applyTrainingToSpec, candidateBlockedReason, createRealFlowState, findC
 // outcome the key + command are kept so an explicit retry replays the exact
 // same key and body. A rejected (4xx) or successful submission clears the
 // slot, so the next explicit submission mints a fresh key.
+
+// Docparse polling cadence: paper text while parsing, installer status while
+// the offline component installs. Overridable per controller for tests.
+export const DOCPARSE_TEXT_POLL_MS = 2000;
+export const DOCPARSE_STATUS_POLL_MS = 3000;
 
 const PDF_MAX_BYTES = 64 * 1024 * 1024;
 const TEXT_MAX_BYTES = 2 * 1024 * 1024;
@@ -64,8 +70,17 @@ export class RealFlowController {
   private api: GuidedApi;
   private retry: { slot: string; key: string; perform: (key: string) => Promise<void> } | null = null;
   private reads = new AbortController();
-  constructor(options: { api: GuidedApi }) {
+  // One docparse flow at a time: a new upload, mode choice or retry aborts the
+  // previous flow's reads and timers; dispose() aborts it too. `driving` marks
+  // a flow whose background poll loop is still running.
+  private docParseFlow: { abort: AbortController; driving: boolean } | null = null;
+  private docParsePoll: { text: number; status: number };
+  constructor(options: { api: GuidedApi; docParsePollMs?: { text?: number; status?: number } }) {
     this.api = options.api;
+    this.docParsePoll = {
+      text: options.docParsePollMs?.text ?? DOCPARSE_TEXT_POLL_MS,
+      status: options.docParsePollMs?.status ?? DOCPARSE_STATUS_POLL_MS,
+    };
   }
   getSnapshot = (): RealFlowState => this.state;
   getState = (): RealFlowState => this.state;
@@ -149,6 +164,8 @@ export class RealFlowController {
     if (fileText !== null && fileText.trim().length === 0) throw Error('REALFLOW_EMPTY_FILE');
     const isPdf = hasFile && fileText === null;
     return this.submit('paper', async key => {
+      // Inside the write so a blocked upload keeps the current paper's polling.
+      this.stopDocParseFlow();
       const projectId = await this.ensureProject(key);
       const accepted = isPdf
         ? await this.api.uploadPaperPdf(projectId, input.file!, { titleHint: input.titleHint, key })
@@ -156,8 +173,162 @@ export class RealFlowController {
       if (accepted.paper_id === '') throw Error('INVALID_DTO');
       const paper = await this.api.getPaper(accepted.paper_id, this.reads.signal);
       if (paper.paper_id !== accepted.paper_id || (this.state.projectId !== null && paper.project_id !== this.state.projectId)) throw Error('RESOURCE_MISMATCH');
-      this.dispatch({ type: 'paper', value: paper });
+      this.dispatch({ type: 'paper', value: paper, pdf: isPdf });
+      if (isPdf) await this.startPdfParse(paper.paper_id);
     });
+  }
+
+  // --- 1b) PDF parsing (MinerU) ------------------------------------------
+  // Controller rulings: never pick a mode for the user, never install the
+  // offline component without an explicit choice, never switch between online
+  // and offline on a failure. The server decides what each parse does.
+
+  private pdfPaperId(): string | null {
+    return this.state.docparse.pdf && this.state.paper ? this.state.paper.paper_id : null;
+  }
+  private beginDocParseFlow(): AbortSignal {
+    this.docParseFlow?.abort.abort();
+    this.docParseFlow = { abort: new AbortController(), driving: false };
+    return this.docParseFlow.abort.signal;
+  }
+  private stopDocParseFlow(): void {
+    this.docParseFlow?.abort.abort();
+    this.docParseFlow = null;
+  }
+  private flowLive(signal: AbortSignal): boolean { return !this.disposed && !signal.aborted; }
+  private wait(ms: number, signal: AbortSignal): Promise<boolean> {
+    return new Promise(resolve => {
+      if (signal.aborted) { resolve(false); return; }
+      const onAbort = () => { clearTimeout(timer); resolve(false); };
+      const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(true); }, ms);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+  private async readDocParseStatus(signal: AbortSignal): Promise<DocParseStatus | null> {
+    const status = await this.api.getDocParseStatus(signal);
+    if (!this.flowLive(signal)) return null;
+    this.dispatch({ type: 'docparse-status', value: status });
+    return status;
+  }
+  private async readPaperText(paperId: string, signal: AbortSignal): Promise<PaperText | null> {
+    const text = await this.api.getPaperText(paperId, signal);
+    if (!this.flowLive(signal)) return null;
+    this.dispatch({ type: 'docparse-text', paperId, value: text });
+    return text;
+  }
+  private async requestParse(paperId: string, key: string, signal: AbortSignal): Promise<void> {
+    await this.api.parsePaper(paperId, key);
+    await this.readPaperText(paperId, signal);
+  }
+
+  // Right after a PDF upload: read the global mode and this paper's text, then
+  // take at most one step. Errors surface as the flow error but never undo the
+  // accepted upload.
+  private async startPdfParse(paperId: string): Promise<void> {
+    const signal = this.beginDocParseFlow();
+    try {
+      const status = await this.readDocParseStatus(signal);
+      const text = status && await this.readPaperText(paperId, signal);
+      if (!status || !text) return;
+      let waitFor: DocParseMode | null = null;
+      if (isParsePending(text)) {
+        if (status.mode === null) this.dispatch({ type: 'docparse-needs-choice', value: true });
+        else if (canParseNow(status)) await this.requestParse(paperId, crypto.randomUUID(), signal);
+        else if (status.offline.state === 'installing') waitFor = status.mode;
+        // offline not_installed/failed/broken/unsupported: left to the UI.
+      }
+      this.driveDocParse(paperId, signal, waitFor);
+    } catch (error) {
+      if (this.flowLive(signal)) this.dispatch({ type: 'error', message: messageOf(error) });
+    }
+  }
+
+  // Background loop of one flow: polls the text while parsing and the
+  // installer while installing, both until a terminal state. Started with
+  // `waitFor`, it requests the parse exactly once when that same mode becomes
+  // usable. It never installs and never changes the mode.
+  private driveDocParse(paperId: string | null, signal: AbortSignal, waitFor: DocParseMode | null): void {
+    const flow = this.docParseFlow;
+    if (!flow || flow.abort.signal !== signal || !this.flowLive(signal)) return;
+    flow.driving = true;
+    void this.docParseLoop(paperId, signal, waitFor)
+      .catch(error => { if (this.flowLive(signal)) this.dispatch({ type: 'error', message: messageOf(error) }); })
+      .finally(() => { flow.driving = false; });
+  }
+  private async docParseLoop(paperId: string | null, signal: AbortSignal, waitFor: DocParseMode | null): Promise<void> {
+    let pendingParse = waitFor;
+    while (this.flowLive(signal)) {
+      const { status, text } = this.state.docparse;
+      if (paperId !== null && text?.status === 'parsing') {
+        if (!await this.wait(this.docParsePoll.text, signal)) return;
+        const next = await this.readPaperText(paperId, signal);
+        // A finished failure may stem from the installer: refresh it once for the label.
+        if (next?.status === 'failed') await this.readDocParseStatus(signal);
+        continue;
+      }
+      if (status?.mode === 'offline' && status.offline.state === 'installing') {
+        if (!await this.wait(this.docParsePoll.status, signal)) return;
+        await this.readDocParseStatus(signal);
+        continue;
+      }
+      if (pendingParse !== null && paperId !== null && status !== null && canParseNow(status, pendingParse) && text?.status !== 'ready') {
+        pendingParse = null;
+        await this.requestParse(paperId, crypto.randomUUID(), signal);
+        continue;
+      }
+      return;
+    }
+  }
+
+  // Explicit user choice of the parse backend. Offline starts the installer
+  // unless it is already ready/installing; the parse is requested as soon as
+  // the chosen backend is usable (online: now; offline: once ready).
+  async chooseParseMode(mode: DocParseMode): Promise<void> {
+    if (mode !== 'online' && mode !== 'offline') throw Error('DOCPARSE_MODE_INVALID');
+    return this.submit('docparse-mode', async key => {
+      const signal = this.beginDocParseFlow();
+      let status = await this.api.setDocParseMode(mode);
+      this.dispatch({ type: 'docparse-status', value: status });
+      if (mode === 'offline' && status.offline.state !== 'ready' && status.offline.state !== 'installing') {
+        status = await this.api.startOfflineInstall();
+        this.dispatch({ type: 'docparse-status', value: status });
+      }
+      const paperId = this.pdfPaperId();
+      const text = this.state.docparse.text;
+      const wantParse = paperId !== null && text?.status !== 'parsing' && text?.status !== 'ready';
+      let waitFor: DocParseMode | null = null;
+      if (wantParse && canParseNow(status, mode)) await this.requestParse(paperId, key, signal);
+      else if (wantParse) waitFor = mode;
+      this.driveDocParse(paperId, signal, waitFor);
+    });
+  }
+
+  // Only ever called from an explicit user click: crossing between online and
+  // offline is a user decision, never an automatic fallback.
+  async switchParseMode(mode: DocParseMode): Promise<void> {
+    return this.chooseParseMode(mode);
+  }
+
+  // A new parse request (fresh Idempotency-Key) under whatever mode is set.
+  async retryParse(): Promise<void> {
+    const paperId = this.pdfPaperId();
+    if (!paperId) throw Error('REALFLOW_PDF_PAPER_REQUIRED');
+    return this.submit('docparse-retry', async key => {
+      const signal = this.beginDocParseFlow();
+      await this.requestParse(paperId, key, signal);
+      this.driveDocParse(paperId, signal, null);
+    });
+  }
+
+  // Read-only refresh of the current PDF's text. A running background loop is
+  // left alone; otherwise a parsing text restarts polling.
+  async pollPaperText(): Promise<void> {
+    const paperId = this.pdfPaperId();
+    if (!paperId) return;
+    const running = this.docParseFlow?.driving ? this.docParseFlow.abort.signal : null;
+    const signal = running ?? this.beginDocParseFlow();
+    await this.readPaperText(paperId, signal);
+    if (!running) this.driveDocParse(paperId, signal, null);
   }
 
   // --- 2) provider session --------------------------------------------------
@@ -197,6 +368,9 @@ export class RealFlowController {
   async runExtraction(reason = 'guided-real-flow-article-review'): Promise<void> {
     const paper = this.state.paper;
     if (!paper) throw Error('REALFLOW_PAPER_REQUIRED');
+    // A PDF is extracted from its parsed text only; the server answers the same
+    // PAPER_TEXT_NOT_READY, this fails fast before any write.
+    if (!canExtract(this.state)) throw Error('PAPER_TEXT_NOT_READY');
     const providerSessionId = this.state.provider?.providerSessionId ?? null;
     this.requireNoPendingRetry();
     this.dispatch({ type: 'extraction-phase', phase: 'loading' });
@@ -435,7 +609,7 @@ export class RealFlowController {
     });
   }
 
-  dispose(): void { this.disposed = true; this.reads.abort(); this.listeners.clear(); }
+  dispose(): void { this.disposed = true; this.reads.abort(); this.stopDocParseFlow(); this.listeners.clear(); }
 }
 
 function deriveEndpointAlias(baseUrl: string): string {

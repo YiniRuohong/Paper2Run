@@ -1,4 +1,5 @@
 import type {
+  DocParseStatus,
   GuidedCandidateExperiment,
   GuidedEnvironmentCheck,
   GuidedExtractionReadback,
@@ -8,6 +9,7 @@ import type {
   GuidedRunEvent,
   GuidedSSHVerification,
   GuidedTrainingForm,
+  PaperText,
 } from '../../api-client/guided-types.ts';
 
 // Real article flow state. Deliberately in-memory only: nothing here is
@@ -41,6 +43,17 @@ export interface RealFlowCodegen {
   notes: string | null;
 }
 
+// MinerU PDF parsing for the current paper. status is the global parse setting
+// (mode + offline installer) and survives a new upload; pdf/needsChoice/text
+// belong to the current paper. needsChoice is only set when a PDF waits for
+// the user to pick online/offline — the controller never picks for them.
+export interface RealFlowDocParse {
+  pdf: boolean;
+  needsChoice: boolean;
+  status: DocParseStatus | null;
+  text: PaperText | null;
+}
+
 export interface RealFlowState {
   step: RealFlowStep;
   error: string | null;
@@ -67,6 +80,7 @@ export interface RealFlowState {
   reportStatus: GuidedReportStatus['status'] | null;
   exportId: string | null;
   events: GuidedRunEvent[];
+  docparse: RealFlowDocParse;
 }
 
 export type RealFlowAction =
@@ -75,7 +89,10 @@ export type RealFlowAction =
   | { type: 'note'; message: string | null }
   | { type: 'view'; step: RealFlowStep }
   | { type: 'project'; projectId: string }
-  | { type: 'paper'; value: GuidedPaperInfo }
+  | { type: 'paper'; value: GuidedPaperInfo; pdf?: boolean }
+  | { type: 'docparse-status'; value: DocParseStatus }
+  | { type: 'docparse-text'; paperId: string; value: PaperText }
+  | { type: 'docparse-needs-choice'; value: boolean }
   | { type: 'provider'; value: RealFlowProviderSession }
   | { type: 'provider-clear' }
   | { type: 'extraction-phase'; phase: RealFlowPhase }
@@ -110,6 +127,7 @@ export function createRealFlowState(): RealFlowState {
     envPhase: 'idle', envCheck: null, ssh: null,
     codegenPhase: 'idle', codegen: null,
     runId: null, run: null, report: null, reportStatus: null, exportId: null, events: [],
+    docparse: { pdf: false, needsChoice: false, status: null, text: null },
   };
 }
 
@@ -213,8 +231,19 @@ export function realFlowReducer(s: RealFlowState, a: RealFlowAction): RealFlowSt
   if (a.type === 'project') return { ...s, projectId: a.projectId, error: null };
   if (a.type === 'paper') {
     if (s.projectId !== null && a.value.project_id !== s.projectId) return s;
-    return { ...s, paper: a.value, step: s.step === 'input' ? 'provider' : s.step, error: null };
+    // A new paper starts its own parse story; the global setting (status) stays.
+    const docparse = { ...s.docparse, pdf: a.pdf ?? false, needsChoice: false, text: null };
+    return { ...s, paper: a.value, step: s.step === 'input' ? 'provider' : s.step, error: null, docparse };
   }
+  if (a.type === 'docparse-status') {
+    const needsChoice = a.value.mode === null ? s.docparse.needsChoice : false;
+    return { ...s, docparse: { ...s.docparse, status: a.value, needsChoice } };
+  }
+  if (a.type === 'docparse-text') {
+    if (s.paper?.paper_id !== a.paperId) return s;
+    return { ...s, docparse: { ...s.docparse, text: a.value } };
+  }
+  if (a.type === 'docparse-needs-choice') return { ...s, docparse: { ...s.docparse, needsChoice: a.value } };
   if (a.type === 'provider') return { ...s, provider: a.value, error: null };
   if (a.type === 'provider-clear') return { ...s, provider: null, error: null };
   if (a.type === 'extraction-phase') {

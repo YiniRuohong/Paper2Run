@@ -378,3 +378,54 @@ export interface GuidedAttemptCode {
   code_sha256: string;
   notes: string | null;
 }
+
+// --- MinerU PDF parsing (docparse) ---
+// GET /docparse/status, PUT /docparse/mode and the offline installer routes all
+// answer this DTO. mode null means the user has not chosen a backend yet.
+export type DocParseMode = 'online' | 'offline';
+export type DocParseOfflineState = 'not_installed' | 'installing' | 'ready' | 'broken' | 'failed' | 'unsupported';
+
+export interface DocParseOfflineStatus {
+  state: DocParseOfflineState;
+  step: string | null;
+  progress: number;
+  tier: string | null;
+  version: string | null;
+  bytes_on_disk: number;
+  error: string | null;
+}
+
+export interface DocParseStatus {
+  mode: DocParseMode | null;
+  offline: DocParseOfflineStatus;
+  platform: string;
+}
+
+// POST /papers/{paper_id}/parse (202).
+export interface DocParseAccepted {
+  paper_id: string;
+  job_id: string;
+  status: 'parsing';
+}
+
+// GET /papers/{paper_id}/text. While parsing, chunks are {status} progress
+// markers; once finished they carry the page range and done/missing.
+export type PaperTextStatus = 'none' | 'parsing' | 'ready' | 'failed';
+export type PaperTextBackend = 'online_agent' | 'offline_mineru';
+
+export interface PaperTextChunk {
+  status: string;
+  first_page?: number;
+  last_page?: number;
+}
+
+export interface PaperText {
+  status: PaperTextStatus;
+  backend: PaperTextBackend | null;
+  page_count: number;
+  pages_parsed: number;
+  chunks: PaperTextChunk[];
+  warnings: string[];
+  error_code: string | null;
+  preview: string | null;
+}
