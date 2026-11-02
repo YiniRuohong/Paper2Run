@@ -303,3 +303,67 @@ def test_shutdown_cancels_installer(tmp_path):
     with TestClient(app):
         assert called == []
     assert called == [True]
+
+
+def test_upload_does_not_enqueue_offline_when_component_not_ready(app, ids):
+    with TestClient(app) as client:
+        client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
+        resp = _upload(client, ids["project"], minimal_pdf(["x"]))
+        assert resp.json()["data"]["status"] == "uploaded"
+        paper_id = resp.json()["data"]["paper_id"]
+    assert _jobs(app) == []
+    with app.state.runtime["session_factory"]() as db:
+        assert db.get(PaperRecord, paper_id).status == "uploaded"
+
+
+def test_upload_enqueues_offline_when_component_ready(tmp_path):
+    svc = _service(tmp_path, platform="darwin-arm64")
+    svc.root.mkdir(parents=True, exist_ok=True)
+    (svc.root / "install-state.json").write_text(
+        '{"state": "ready", "tier": "basic", "version": "4.1.3"}', encoding="utf-8")
+    svc.settings.set_mode("offline")
+    app = create_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(), secure_cookies=False,
+        artifact_store=LocalArtifactStore(tmp_path / "store"), development_auth=True, docparse_service=svc,
+    )
+    with app.state.runtime["session_factory"].begin() as db:
+        db.add(UserRecord(id="owner", display_name="Owner", can_create_project=True)); db.flush()
+        project = ProjectRecord(name="P", created_by="owner")
+        db.add(project); db.flush()
+        db.add(MembershipRecord(project_id=project.id, user_id="owner", role="owner"))
+        project_id = project.id
+    with TestClient(app) as client:
+        assert _upload(client, project_id, minimal_pdf(["x"])).json()["data"]["status"] == "parsing"
+    assert len(_jobs(app)) == 1
+
+
+CROSS = {"Sec-Fetch-Site": "cross-site"}
+
+
+def test_cross_site_requests_are_refused(app, ids):
+    with TestClient(app) as client:
+        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        paper_id = _upload(client, ids["project"], minimal_pdf(["x"])).json()["data"]["paper_id"]
+        calls = [
+            client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers={**H, **CROSS}),
+            client.post("/api/v1/docparse/offline/install", headers={**H, **CROSS}),
+            client.post("/api/v1/docparse/offline/cancel", headers={**H, **CROSS}),
+            client.delete("/api/v1/docparse/offline", headers={**H, **CROSS}),
+            client.post(f"/api/v1/papers/{paper_id}/parse", headers={**H, **CROSS, "Idempotency-Key": "x"}),
+        ]
+        for resp in calls:
+            assert resp.status_code == 403 and resp.json()["error"]["code"] == "CROSS_SITE_REFUSED"
+        assert client.get("/api/v1/docparse/status", headers=H).json()["data"]["mode"] == "online"
+        for site in ("same-origin", "same-site", "none"):
+            assert client.put("/api/v1/docparse/mode", json={"mode": "online"},
+                              headers={**H, "Sec-Fetch-Site": site}).status_code == 200
+
+
+def test_parse_job_key_is_scoped_to_user_and_request(app, ids):
+    with TestClient(app) as client:
+        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        paper_id = _start_parse(client, ids, "up")
+        _finish_parse(app, paper_id, "failed")
+        r = client.post(f"/api/v1/papers/{paper_id}/parse", headers={**H, "Idempotency-Key": "k1"})
+        assert r.status_code == 202
+    assert f"paper_parse:{paper_id}:owner:req:k1" in {j.idempotency_key for j in _jobs(app)}

@@ -128,8 +128,10 @@ async def upload_paper(project_id: str, request: Request):
         operation = OperationRecord(kind="paper_ingestion", resource_id=paper.id, status="succeeded")
         db.add_all([version, operation]); db.flush()
         status = "uploaded"
-        mode = runtime["docparse_service"].mode()
-        if mode is not None:
+        service = runtime["docparse_service"]
+        mode = service.mode()
+        # Offline without a ready component would fail at once; leave the paper for the explicit flow.
+        if mode == "online" or (mode == "offline" and service.installer.state().state == "ready"):
             enqueue_paper_parse(db, paper_id=paper.id, mode=mode, idempotency_key=f"paper_parse:{paper.id}:upload")
             status = "parsing"
         payload = {"paper_id": paper.id, "operation_id": operation.id, "status": status}

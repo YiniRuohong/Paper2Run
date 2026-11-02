@@ -14,6 +14,7 @@ packages/            Python 库，每个目录恰好一个 p2r_* 包
   sandbox/           L1 不受信任代码隔离执行（可独立安装，零依赖）
   evaluation/        L1 可信评测器（与被评代码隔离）
   codegen/           L1 修复候选补丁：构建、哈希、路径白名单审计
+  docparse/          L1 PDF 解析（在线 mineru.net / 离线 MinerU），不依赖其他 p2r_* 包
   runner/            L2 执行配方：fixture smoke、real_cpu_baseline、sandbox_python（含数据集）
   kernel/            L2 交互式 cell 执行内核（spawn 子进程）
   orchestration/     L3 业务编排：抽取、生成、运行 worker、报告、导出、受控 runner
@@ -29,14 +30,14 @@ docs/                产品与工程文档（软件代码不放这里）
 L4  p2r_api ──────────────┐
 L3  p2r_orchestration     │   只允许向下依赖
 L2  p2r_runner  p2r_kernel│
-L1  sandbox evaluation codegen artifacts persistence
+L1  sandbox docparse evaluation codegen artifacts persistence
 L0  p2r_contracts
 ```
 
 规则由 `tests/unit/test_architecture.py` 强制：
 
 - 每个包只能 import 层号**严格更低**的包；
-- `p2r_sandbox` 不得 import 任何 `p2r_*`，保证可单独 `pip install packages/sandbox`；
+- `p2r_sandbox` 与 `p2r_docparse` 不得 import 任何 `p2r_*`，保证可单独安装；
 - 新增包必须登记层号，否则测试失败。
 
 `tests/unit/phase01/test_packaging.py` 保证 `pyproject.toml` 的 setuptools 发现路径、pytest `pythonpath` 与 `scripts/launch.py` 的 `SOURCE_ROOTS` 三处一致，且 runner 数据集随包发布。

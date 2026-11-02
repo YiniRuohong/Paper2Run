@@ -1,4 +1,4 @@
-import type { DocParseMode, DocParseStatus, PaperText } from '../../api-client/guided-types.ts';
+import type { DocParseMode, DocParseOfflineStatus, DocParseStatus, PaperText } from '../../api-client/guided-types.ts';
 
 // Pure docparse helpers shared by the guided controller and (next) the UI.
 // Nothing here talks to the network or decides a mode; it only reads DTOs.
@@ -87,4 +87,35 @@ export function otherParseMode(status: DocParseStatus | null): DocParseMode | nu
   if (status === null || status.mode === null) return null;
   if (status.mode === 'online') return status.offline.state === 'unsupported' ? null : 'offline';
   return 'online';
+}
+
+// A finished parse that skipped some page ranges: offer a retry of just those.
+export function hasMissingChunks(text: PaperText | null): boolean {
+  return text?.status === 'ready' && text.chunks.some(chunk => chunk.status === 'missing');
+}
+
+// Leftovers of a failed or cancelled install can still be removed.
+export function canUninstallOffline(offline: DocParseOfflineStatus): boolean {
+  if (offline.state === 'installing' || offline.state === 'unsupported') return false;
+  return offline.state === 'ready' || offline.bytes_on_disk > 0;
+}
+
+export const FLASH_NOTICE = '本机只能用极速解析 (flash)，表格和公式质量较低';
+export const DOWNLOAD_NOTE = '需下载约 1–3 GB';
+export const ONLINE_UPLOAD_NOTE = '论文将上传到 mineru.net';
+
+// Fixed installer reason (set by the server, never raw output) and the flash notice.
+export function offlineNotices(offline: DocParseOfflineStatus): string[] {
+  const notices: string[] = [];
+  if ((offline.state === 'failed' || offline.state === 'broken') && offline.error) notices.push(offline.error);
+  if (offline.tier === 'flash' && offline.state !== 'unsupported') notices.push(FLASH_NOTICE);
+  return notices;
+}
+
+// One-line notes for the explicit buttons that are currently shown.
+export function parseActionNotes(shown: { install: boolean; other: DocParseMode | null }): string[] {
+  const notes: string[] = [];
+  if (shown.install || shown.other === 'offline') notes.push(DOWNLOAD_NOTE);
+  if (shown.other === 'online') notes.push(ONLINE_UPLOAD_NOTE);
+  return notes;
 }

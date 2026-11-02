@@ -3,7 +3,7 @@ import { StatusWord, type Tone } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
 import type { RealFlowDocParse } from '../guided/realflow-state';
-import { docParseErrorReason, docParseLabel, otherParseMode } from './docparse';
+import { docParseErrorReason, docParseLabel, hasMissingChunks, offlineNotices, otherParseMode, parseActionNotes } from './docparse';
 import './docparse.css';
 
 // Parse status of the current PDF inside the upload step. It only renders what
@@ -37,7 +37,10 @@ export default function ParseProgress({ docparse, busy, onRetry, onChoose, onReo
   const total = text?.chunks.length ?? 0;
   const done = text?.chunks.filter(chunk => chunk.status === 'done').length ?? 0;
   const other = otherParseMode(status);
-  const actions = failedText !== null || (stuck && readyText === null && !parsing);
+  const partial = hasMissingChunks(text);
+  const actions = failedText !== null || partial || (stuck && readyText === null && !parsing);
+  const notices = status?.mode === 'offline' && offline ? offlineNotices(offline) : [];
+  const notes = actions ? parseActionNotes({ install: needsInstall, other }) : [];
 
   return <div className="dp-progress">
     <div className="dp-line" role="status" aria-live="polite">
@@ -54,11 +57,14 @@ export default function ParseProgress({ docparse, busy, onRetry, onChoose, onReo
       <span className="dp-meta">{Math.round(offline.progress * 100)}%</span>
     </div>}
     {failedText && <p className="ui-callout tone-bad" role="alert"><Icon name="alert" /><span>{docParseErrorReason(failedText.error_code)}</span></p>}
+    {notices.map(notice => <p key={notice} className="dp-hint" role="status">{notice}</p>)}
     {actions && <div className="flow-actions">
       {failedText && <button type="button" className="btn btn-primary" disabled={busy} onClick={onRetry}>重试</button>}
+      {partial && <button type="button" className="btn btn-secondary" disabled={busy} onClick={onRetry}>重试失败页</button>}
       {needsInstall && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => onChoose('offline')}>安装离线组件</button>}
       {other && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => onChoose(other)}>{other === 'offline' ? '改用离线解析' : '改用在线解析'}</button>}
     </div>}
+    {notes.length > 0 && <p className="dp-hint">{notes.join('；')}</p>}
     {readyText && readyText.warnings.length > 0 && <div className="ui-callout tone-warn" role="status">
       <Icon name="alert" />
       <div className="dp-warnings">

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { docParseErrorReason, formatBytes, otherParseMode } from '../src/features/docparse/docparse.ts';
+import {
+  DOWNLOAD_NOTE, FLASH_NOTICE, ONLINE_UPLOAD_NOTE, canUninstallOffline, docParseErrorReason, formatBytes,
+  hasMissingChunks, offlineNotices, otherParseMode, parseActionNotes,
+} from '../src/features/docparse/docparse.ts';
 
 // Every fixed public docparse error code maps to one specific Chinese reason.
 // Anything else (an unknown code, null) falls back to a generic line and never
@@ -66,4 +69,38 @@ test('otherParseMode offers the opposite mode only when it is available', () => 
   assert.equal(otherParseMode(status('online', 'unsupported')), null);
   assert.equal(otherParseMode(status('offline', 'unsupported')), 'online');
   assert.equal(otherParseMode(status('offline', 'failed')), 'online');
+});
+
+const chunk = (first, last, st) => ({ first_page: first, last_page: last, status: st });
+const textOf = (st, chunks) => ({ status: st, chunks, warnings: [], page_count: 40, pages_parsed: 20 });
+
+test('hasMissingChunks is true only for a ready text with a missing range', () => {
+  assert.equal(hasMissingChunks(null), false);
+  assert.equal(hasMissingChunks(textOf('ready', [chunk(1, 20, 'done'), chunk(21, 40, 'done')])), false);
+  assert.equal(hasMissingChunks(textOf('ready', [chunk(1, 20, 'done'), chunk(21, 40, 'missing')])), true);
+  assert.equal(hasMissingChunks(textOf('parsing', [chunk(1, 20, 'missing')])), false);
+});
+
+const offline = (state, extra = {}) => ({ ...status('offline', state).offline, ...extra });
+
+test('canUninstallOffline offers removal for leftovers but not while installing', () => {
+  assert.equal(canUninstallOffline(offline('ready')), true);
+  assert.equal(canUninstallOffline(offline('failed', { bytes_on_disk: 70 })), true);
+  assert.equal(canUninstallOffline(offline('not_installed', { bytes_on_disk: 5 })), true);
+  assert.equal(canUninstallOffline(offline('failed')), false);
+  assert.equal(canUninstallOffline(offline('installing', { bytes_on_disk: 70 })), false);
+  assert.equal(canUninstallOffline(offline('unsupported', { bytes_on_disk: 70 })), false);
+});
+
+test('offlineNotices shows the install failure reason and the flash notice', () => {
+  assert.deepEqual(offlineNotices(offline('failed', { error: '磁盘空间不足（需要约 6 GB）' })), ['磁盘空间不足（需要约 6 GB）']);
+  assert.deepEqual(offlineNotices(offline('ready', { tier: 'flash', error: 'stale' })), [FLASH_NOTICE]);
+  assert.deepEqual(offlineNotices(offline('ready', { tier: 'standard' })), []);
+  assert.deepEqual(offlineNotices(offline('failed', { tier: 'flash', error: '下载模型失败' })), ['下载模型失败', FLASH_NOTICE]);
+});
+
+test('parseActionNotes warns about the download and the upload', () => {
+  assert.deepEqual(parseActionNotes({ install: true, other: 'online' }), [DOWNLOAD_NOTE, ONLINE_UPLOAD_NOTE]);
+  assert.deepEqual(parseActionNotes({ install: false, other: 'offline' }), [DOWNLOAD_NOTE]);
+  assert.deepEqual(parseActionNotes({ install: false, other: null }), []);
 });

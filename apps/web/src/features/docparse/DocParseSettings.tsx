@@ -4,7 +4,7 @@ import type { DocParseMode, DocParseOfflineState, DocParseStatus } from '../../a
 import { StatusWord, type Tone } from '../../ui/Card';
 import { Segmented } from '../../ui/Controls';
 import { Group, Row } from '../settings/SettingsParts';
-import { formatBytes } from './docparse';
+import { DOWNLOAD_NOTE, canUninstallOffline, formatBytes, offlineNotices } from './docparse';
 import './docparse.css';
 
 // Settings group 「PDF 解析」: the current parse mode and the offline component.
@@ -79,7 +79,8 @@ export default function DocParseSettings({ api }: { api: GuidedApi }) {
   const unsupported = offline.state === 'unsupported';
   const options: Array<{ value: Choice; label: string }> = [{ value: 'online', label: '在线' }, ...(unsupported ? [] : [{ value: 'offline' as const, label: '离线' }])];
   const canInstall = offline.state === 'not_installed' || offline.state === 'failed' || offline.state === 'broken';
-  const canUninstall = offline.state === 'ready' || ((offline.state === 'broken' || offline.state === 'failed') && offline.bytes_on_disk > 0);
+  const canUninstall = canUninstallOffline(offline);
+  const notices = offlineNotices(offline);
   const needsInstallHint = status.mode === 'offline' && !unsupported && offline.state !== 'ready';
   const detail = [offline.tier ? `档位 ${offline.tier}` : null, offline.bytes_on_disk > 0 ? `占用 ${formatBytes(offline.bytes_on_disk)}` : null].filter(Boolean).join(' · ');
 
@@ -96,12 +97,14 @@ export default function DocParseSettings({ api }: { api: GuidedApi }) {
           <StatusWord tone={STATE_TONE[offline.state]}>{STATE_LABEL[offline.state]}</StatusWord>
           {detail && <span className="dp-meta">{detail}</span>}
         </div>
+        {notices.map(notice => <p key={notice} className="dp-hint" role="status">{notice}</p>)}
         {installing && <div className="dp-line">
           <progress className="dp-bar" value={offline.progress} max={1} aria-label="离线组件安装进度" />
           <span className="dp-meta">{Math.round(offline.progress * 100)}%{offline.step ? ` · ${offline.step}` : ''}</span>
         </div>}
         <div className="dp-line">
           {canInstall && <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { void run(() => api.startOfflineInstall()); }}>安装</button>}
+          {canInstall && <span className="dp-meta">{DOWNLOAD_NOTE}</span>}
           {installing && <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { void run(() => api.cancelOfflineInstall()); }}>取消</button>}
           {canUninstall && <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { void run(() => api.uninstallOffline()); }}>卸载</button>}
         </div>

@@ -21,6 +21,12 @@ def _service(request: Request):
     return request.app.state.runtime["docparse_service"]
 
 
+def _same_site_only(request: Request) -> None:
+    """A web page must not trigger a download, mode change or upload through the user's browser."""
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        _error("CROSS_SITE_REFUSED", "cross-site requests are not allowed", status=403)
+
+
 def _status(request: Request) -> dict:
     service = _service(request)
     return {"mode": service.mode(), "offline": service.installer.state().to_json(),
@@ -36,6 +42,7 @@ def docparse_status(request: Request):
 @router.put("/docparse/mode")
 async def set_docparse_mode(request: Request):
     actor_id(request)
+    _same_site_only(request)
     try:
         body = await request.json()
     except ValueError:
@@ -50,6 +57,7 @@ async def set_docparse_mode(request: Request):
 @router.post("/docparse/offline/install", status_code=202)
 def install_offline(request: Request):
     actor_id(request)
+    _same_site_only(request)
     try:
         _service(request).installer.start()
     except DocParseError as exc:
@@ -62,6 +70,7 @@ def install_offline(request: Request):
 @router.post("/docparse/offline/cancel")
 def cancel_offline(request: Request):
     actor_id(request)
+    _same_site_only(request)
     _service(request).installer.cancel()
     return _envelope(request, _status(request))
 
@@ -69,6 +78,7 @@ def cancel_offline(request: Request):
 @router.delete("/docparse/offline")
 def uninstall_offline(request: Request):
     actor_id(request)
+    _same_site_only(request)
     _service(request).installer.uninstall()
     return _envelope(request, _status(request))
 
@@ -77,6 +87,7 @@ def uninstall_offline(request: Request):
 async def parse_paper(paper_id: str, request: Request):
     runtime = request.app.state.runtime
     user_id = actor_id(request)
+    _same_site_only(request)
     with runtime["session_factory"]() as db:
         paper = db.get(PaperRecord, paper_id)
         if paper is None: _error("RESOURCE_NOT_FOUND", "resource not found", status=404)
@@ -94,8 +105,9 @@ async def parse_paper(paper_id: str, request: Request):
         if claim.record.response_json is not None: return _envelope(request, claim.record.response_json)
         if not claim.claimed: _error("IDEMPOTENCY_IN_PROGRESS", "idempotency key is already in progress", status=409)
         job = enqueue_paper_parse(db, paper_id=paper_id, mode=mode,
-                                  idempotency_key=f"paper_parse:{paper_id}:{key}")
-        payload = {"paper_id": paper_id, "job_id": job.id, "status": "parsing"}
+                                  idempotency_key=f"paper_parse:{paper_id}:{user_id}:req:{key}")
+        active = job.status in ("queued", "running")
+        payload = {"paper_id": paper_id, "job_id": job.id, "status": "parsing" if active else paper.status}
         claim.record.response_json = payload
         db.commit()
         return _envelope(request, payload)
