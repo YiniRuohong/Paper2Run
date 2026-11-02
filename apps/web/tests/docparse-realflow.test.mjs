@@ -37,8 +37,11 @@ function setup(initial = {}) {
   const server = {
     mode: null, offline: 'not_installed', installPolls: 2, installEnd: 'ready',
     texts: [textOf('none')], afterParse: [textOf('parsing'), textOf('parsing'), textOf('ready')],
-    paperStatus: 'uploaded', ...initial,
+    paperStatus: 'uploaded', gates: {}, ...initial,
   };
+  // A test may queue promises under gates.text / gates.install to hold the
+  // next matching call open (the call is recorded before it waits).
+  const gate = async (name) => { const g = server.gates[name]?.shift(); if (g) await g; };
   const status = () => ({
     mode: server.mode,
     offline: { state: server.offline, step: server.offline === 'installing' ? 'packages' : null, progress: 0.5, tier: null, version: null, bytes_on_disk: 0, error: null },
@@ -55,17 +58,18 @@ function setup(initial = {}) {
       return status();
     },
     async setDocParseMode(mode) { calls.push(['PUT /docparse/mode', mode]); server.mode = mode; return status(); },
-    async startOfflineInstall() { calls.push(['POST /docparse/offline/install']); server.offline = 'installing'; return status(); },
+    async startOfflineInstall() { calls.push(['POST /docparse/offline/install']); await gate('install'); server.offline = 'installing'; return status(); },
     async cancelOfflineInstall() { calls.push(['POST /docparse/offline/cancel']); server.offline = 'not_installed'; return status(); },
     async uninstallOffline() { calls.push(['DELETE /docparse/offline']); server.offline = 'not_installed'; return status(); },
     async parsePaper(paperId, key) {
-      calls.push([`POST /papers/${paperId}/parse`, key]);
+      calls.push([`POST /papers/${paperId}/parse`, key, server.mode]);
       if (server.mode === null) throw Object.assign(new Error('choose online or offline parsing first'), { status: 409, code: 'DOCPARSE_MODE_UNSET' });
       server.texts = [...server.afterParse];
       return { paper_id: paperId, job_id: 'job', status: 'parsing' };
     },
     async getPaperText(paperId) {
       calls.push([`GET /papers/${paperId}/text`]);
+      await gate('text');
       return server.texts.length > 1 ? server.texts.shift() : server.texts[0];
     },
     async createExtraction(paperId, input) { calls.push([`POST /papers/${paperId}/extractions`, input.key]); return { paper_id: paperId, operation_id: 'op', status: 'ready', extraction_id: 'x1' }; },
@@ -286,6 +290,48 @@ test('pollPaperText re-reads the current text on demand', async (t) => {
   await c.pollPaperText();
   assert.equal(c.getSnapshot().docparse.text.status, 'ready');
   assert.equal(canExtract(c.getSnapshot()), true);
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+test('pollPaperText during upload keeps the choice dialog', async (t) => {
+  const held = deferred();
+  const f = setup({ gates: { text: [held.promise] } }); t.after(f.dispose);
+  const c = f.create();
+  const upload = c.uploadArticle({ consent: true, file: pdf() });
+  await until(() => f.count('GET /papers/paper/text') === 1, 'upload text read is in flight');
+  await c.pollPaperText();
+  held.resolve();
+  await upload;
+  await settle();
+  const s = c.getSnapshot();
+  assert.equal(s.docparse.needsChoice, true, 'the refresh must not cancel the upload flow');
+  assert.equal(s.error, null);
+  assert.equal(f.count('POST /papers/paper/parse'), 0);
+});
+
+test('pollPaperText during offline chooseParseMode keeps waiting for install', async (t) => {
+  const held = deferred();
+  const f = setup({ installPolls: 3, gates: { install: [held.promise] } }); t.after(f.dispose);
+  const c = f.create();
+  await c.uploadArticle({ consent: true, file: pdf() });
+  const choose = c.chooseParseMode('offline');
+  await until(() => f.count('POST /docparse/offline/install') === 1, 'install request is in flight');
+  await c.pollPaperText();
+  held.resolve();
+  await choose;
+  assert.equal(c.getSnapshot().docparse.status.offline.state, 'installing');
+  await until(() => f.count('POST /papers/paper/parse') === 1, 'parse once the installer reports ready');
+  await until(() => c.getSnapshot().docparse.text.status === 'ready', 'text polling reaches ready');
+  await settle();
+  const parses = f.calls.filter(x => x[0] === 'POST /papers/paper/parse');
+  assert.equal(parses.length, 1, 'parsed exactly once');
+  assert.equal(parses[0][2], 'offline', 'parsed under the chosen offline mode');
+  assert.deepEqual(f.calls.filter(x => x[0] === 'PUT /docparse/mode').map(x => x[1]), ['offline']);
 });
 
 test('dispose stops background polling', async (t) => {

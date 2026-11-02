@@ -73,7 +73,9 @@ export class RealFlowController {
   // One docparse flow at a time: a new upload, mode choice or retry aborts the
   // previous flow's reads and timers; dispose() aborts it too. `driving` marks
   // a flow whose background poll loop is still running.
-  private docParseFlow: { abort: AbortController; driving: boolean } | null = null;
+  // `driven` flips once the flow's loop has been started; before that the flow
+  // is still in its setup reads/writes and belongs to its starter.
+  private docParseFlow: { abort: AbortController; driving: boolean; driven: boolean } | null = null;
   private docParsePoll: { text: number; status: number };
   constructor(options: { api: GuidedApi; docParsePollMs?: { text?: number; status?: number } }) {
     this.api = options.api;
@@ -188,7 +190,7 @@ export class RealFlowController {
   }
   private beginDocParseFlow(): AbortSignal {
     this.docParseFlow?.abort.abort();
-    this.docParseFlow = { abort: new AbortController(), driving: false };
+    this.docParseFlow = { abort: new AbortController(), driving: false, driven: false };
     return this.docParseFlow.abort.signal;
   }
   private stopDocParseFlow(): void {
@@ -250,6 +252,7 @@ export class RealFlowController {
   private driveDocParse(paperId: string | null, signal: AbortSignal, waitFor: DocParseMode | null): void {
     const flow = this.docParseFlow;
     if (!flow || flow.abort.signal !== signal || !this.flowLive(signal)) return;
+    flow.driven = true;
     flow.driving = true;
     void this.docParseLoop(paperId, signal, waitFor)
       .catch(error => { if (this.flowLive(signal)) this.dispatch({ type: 'error', message: messageOf(error) }); })
@@ -320,15 +323,24 @@ export class RealFlowController {
     });
   }
 
-  // Read-only refresh of the current PDF's text. A running background loop is
-  // left alone; otherwise a parsing text restarts polling.
+  // Read-only refresh of the current PDF's text. A live flow is never replaced
+  // or aborted: the read uses that flow's signal. A flow still in setup (upload,
+  // mode choice, retry) starts its own loop later, so it is left alone; a flow
+  // whose loop already finished gets polling restarted. Only with no live flow
+  // does a refresh begin one.
   async pollPaperText(): Promise<void> {
     const paperId = this.pdfPaperId();
     if (!paperId) return;
-    const running = this.docParseFlow?.driving ? this.docParseFlow.abort.signal : null;
-    const signal = running ?? this.beginDocParseFlow();
+    const live = this.docParseFlow && !this.docParseFlow.abort.signal.aborted ? this.docParseFlow : null;
+    if (live) {
+      const signal = live.abort.signal;
+      await this.readPaperText(paperId, signal);
+      if (live.driven && !live.driving) this.driveDocParse(paperId, signal, null);
+      return;
+    }
+    const signal = this.beginDocParseFlow();
     await this.readPaperText(paperId, signal);
-    if (!running) this.driveDocParse(paperId, signal, null);
+    this.driveDocParse(paperId, signal, null);
   }
 
   // --- 2) provider session --------------------------------------------------
