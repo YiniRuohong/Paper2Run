@@ -26,7 +26,10 @@ MIN_FREE_BYTES = 6 * 1024**3
 STEPS = ("preflight", "venv", "packages", "tier", "models", "smoke")
 
 _TIERS = frozenset({"flash", "basic", "standard", "advanced"})
-_TIER_KEYS = (("recommended_tier",), ("tier",), ("recommendation", "tier"), ("recommended", "tier"))
+# MinerU 4.1.3 `hardware detect --json` reports `default_request_tier` (its own pick) and `ceiling`
+# (highest tier the machine opens); the earlier keys are kept for other versions.
+_TIER_KEYS = (("recommended_tier",), ("tier",), ("recommendation", "tier"), ("recommended", "tier"),
+              ("default_request_tier",), ("ceiling",))
 _TIMEOUTS = {"venv": 300.0, "pip": 1800.0, "detect": 600.0, "download": 3600.0,
              "verify": 600.0, "smoke": 600.0, "version": 30.0}
 _ERRORS = {

@@ -1,0 +1,23 @@
+{
+  "ceiling": "advanced",
+  "pdf_image_tiers": [
+    "flash",
+    "basic",
+    "standard",
+    "advanced"
+  ],
+  "default_request_tier": "standard",
+  "reason": "torch_accelerator",
+  "cpu_count": 16,
+  "small_backend": "torch",
+  "vlm_engine": "llama-cpp",
+  "device": "mps",
+  "calibration": {
+    "status": "skipped",
+    "reason": "torch_backend",
+    "evidence": null
+  },
+  "warnings": [],
+  "schema_version": 1,
+  "gpu_memory": null
+}

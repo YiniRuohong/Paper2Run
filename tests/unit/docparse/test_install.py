@@ -198,6 +198,22 @@ def test_pick_tier(stdout, expected):
     assert _pick_tier(stdout) == expected
 
 
+def test_pick_tier_real_mineru_hardware_detect_sample():
+    # Real stdout of `mineru-kit hardware detect --json` (MinerU 4.1.3, darwin-arm64, mps):
+    # it has no recommended_tier key; MinerU's own pick is default_request_tier.
+    sample = Path(__file__).parent / "fixtures" / "hardware_detect_darwin_arm64_4.1.3.json"
+    assert _pick_tier(sample.read_text(encoding="utf-8")) == "standard"
+
+
+@pytest.mark.parametrize("stdout,expected", [
+    ('{"default_request_tier": "basic", "ceiling": "standard"}', "basic"),
+    ('{"ceiling": "advanced"}', "standard"),
+    ('{"ceiling": "flash"}', "flash"),
+])
+def test_pick_tier_mineru_keys(stdout, expected):
+    assert _pick_tier(stdout) == expected
+
+
 def test_models_download_and_verify_failures(tmp_path):
     inst, run, _ = make(tmp_path)
     run.on("models download", lambda argv: FAIL)
