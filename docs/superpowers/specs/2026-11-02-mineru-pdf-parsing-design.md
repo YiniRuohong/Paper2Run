@@ -151,16 +151,16 @@ Paper2Run 的真实链路是「上传论文 → 模型抽取实验协议 → 生
 - 抽取：PDF 论文无解析文本 → 409；有解析文本 → Provider 收到 Markdown，`pdf_sha256` 不变，元数据含 `source_text_sha256`。
 - 两个不变量测试通过；前端 `typecheck` 与 `node --test` 通过。
 
-**真实 Windows 验证（GitHub Actions `windows-latest`，由 Claude 执行）**
+**真实 Windows 验证（tailscale 内网 Windows 机 `win`，由 Claude 经 SSH/WSL 执行）**
 
-无本地 Windows 机器，Windows 验证在 CI 的真实 Windows runner 上完成。新增一个手动触发（`workflow_dispatch`）的工作流 / job，用构建出的 `win32-x64` 内置运行时：
+在用户内网的 Windows 机器 `win`（tailscale `100.90.199.48`，不是 `moer`）上验证。注意 WSL 本身是 Linux：在 WSL 里直接跑 Python 测到的是 Linux 路径，不是 Windows。因此测试必须调用 **Windows 原生**可执行文件（经 WSL 互操作调用 `/mnt/c/.../python.exe` / `powershell.exe`，或直接走 Windows OpenSSH），使用 `win32-x64` 内置运行时（或同版本 Windows CPython 3.12）。步骤：
 
-1. 走真实离线安装器：建 venv → pip 装 MinerU → `hardware detect`（runner 为 4 vCPU 纯 CPU，预期推荐 `basic`，即 ONNX 路径）→ 下载并校验模型 → 冒烟解析。
+1. 走真实离线安装器：建 venv → pip 装 MinerU → `hardware detect`（档位以实机硬件推荐为准）→ 下载并校验模型 → 冒烟解析。
 2. 用安装好的环境解析一篇 >20 页的真实论文 PDF，断言输出含页码标记、页数正确。
-3. 在线 Agent API 的一次真实分段解析（runner 有外网；遇 429 允许退避）。
+3. 在线 Agent API 的一次真实分段解析（遇 429 允许退避）。
 4. 进程树击杀：超时场景下确认无残留 `mineru-kit` 进程。
 
-局限如实记录：CI 只覆盖后端安装与解析链路（通过 API 调用），不覆盖 Windows 上的界面点击；SmartScreen 等桌面交互不在范围内。macOS 侧同样在 `macos-14` runner 上跑同一 job 作为对照。推送分支、触发 CI 属于对外操作，执行前需用户确认。
+局限如实记录：通过 SSH 只覆盖后端安装与解析链路（API 调用），不覆盖 Windows 上的界面点击。测试产物放在该机器上的独立目录，结束后可清理，不改动该机器的全局 Python / 系统配置。
 
 **人工端到端（Apple Silicon 本机，写入 `docs/verification/` 新记录）**
 
