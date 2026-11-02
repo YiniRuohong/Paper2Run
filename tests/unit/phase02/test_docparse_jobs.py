@@ -335,3 +335,33 @@ def test_lost_lease_job_retaken_by_periodic_recovery(tmp_path):
     finally:
         assert stop_docparse_worker(stop, thread, timeout=5.0)
     assert env.paper().status == "ready"
+
+
+def test_worker_tick_between_enqueue_and_commit_does_not_strand_paper(tmp_path, monkeypatch):
+    """C1: a worker tick in the gap before the route commits must not complete the job as a no-op."""
+    import sqlalchemy
+    from sqlalchemy.orm import sessionmaker
+    from p2r_orchestration import docparse_jobs
+
+    env = Env(tmp_path)
+    fast = sessionmaker(sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'p.sqlite3'}",
+                                                 connect_args={"timeout": 0.2}), expire_on_commit=False)
+    real_enqueue = JobRepository.enqueue
+
+    def enqueue_then_tick(self, **kw):
+        job = real_enqueue(self, **kw)
+        try:
+            process_next_parse_job(fast, env.store, env.service)
+        except Exception:
+            pass  # a locked database means the worker could not see the half-written state
+        return job
+
+    monkeypatch.setattr(docparse_jobs.JobRepository, "enqueue", enqueue_then_tick)
+    env.enqueue("online", "k1")
+    monkeypatch.undo()
+    assert env.paper().status == "parsing"
+    with env.sf() as db:
+        assert db.scalar(select(Job)).status == "queued"
+    assert env.run() is True
+    assert env.paper().status == "ready" and env.texts()[0].status == "ready"
+    assert len(env.online_calls) == 1

@@ -31,15 +31,18 @@ def enqueue_paper_parse(db, *, paper_id: str, mode: str, idempotency_key: str):
     ).order_by(Job.created_at))
     if active is not None:
         return active
-    job = JobRepository(db).enqueue(kind=PARSE_JOB_KIND, payload_ref=f"{paper_id}:{mode}",
-                                    idempotency_key=idempotency_key)
-    if job.status not in ("queued", "running"):
-        return job  # reused key of a finished job: nothing to parse, leave state alone
+    reused = db.scalar(select(Job).where(Job.idempotency_key == idempotency_key))
+    if reused is not None and reused.status not in ("queued", "running"):
+        return reused  # reused key of a finished job: nothing to parse, leave state alone
+    # Write the parsing state first: the enqueue SAVEPOINT then nests in a real transaction, so a
+    # worker cannot claim the job before the text row and paper status are committed with it.
     if _latest_parsing(db, paper_id) is None:
         db.add(PaperTextRecord(paper_id=paper_id, source_sha256=paper.sha256, page_count=paper.page_count,
                                status="parsing"))
     paper.status = "parsing"
-    return job
+    db.flush()
+    return JobRepository(db).enqueue(kind=PARSE_JOB_KIND, payload_ref=f"{paper_id}:{mode}",
+                                     idempotency_key=idempotency_key)
 
 
 def _previous_markdown(db, artifact_store, paper: PaperRecord) -> str | None:
