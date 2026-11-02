@@ -105,6 +105,8 @@ def test_page_level_output(tmp_path):
     assert result.backend == "offline_mineru"
     assert result.backend_version == "4.1.3"
     assert result.page_count == 2 and result.pages_parsed == 2
+    assert result.warnings == []
+    assert result.chunks == [{"first_page": 1, "last_page": 2, "status": "done"}]
 
 
 @posix_only
@@ -112,6 +114,25 @@ def test_markdown_only_output(tmp_path):
     _fake_kit(tmp_path, _OUT + "(out / 'sub').mkdir(); (out / 'sub' / 'doc.md').write_text('# Title')")
     result = parse_offline(minimal_pdf(["a", "b"]), root=tmp_path, tier="basic", version="4.1.3")
     assert "<!-- p2r:pages 1-2 -->\n# Title" in result.markdown
+
+
+@posix_only
+def test_plain_md_fallback_warns(tmp_path):
+    _fake_kit(tmp_path, _OUT + "(out / 'doc.md').write_text('# Title')")
+    result = parse_offline(minimal_pdf(["a", "b"]), root=tmp_path, tier="basic", version="4.1.3")
+    assert result.warnings == ["未能按页定位内容，引用页码只能精确到全文"]
+    assert result.pages_parsed == 2
+    assert result.chunks == [{"first_page": 1, "last_page": 2, "status": "done"}]
+    assert result.markdown.startswith("<!-- p2r:pages 1-2 -->\n# Title")
+
+
+@posix_only
+def test_deeply_nested_content_list_is_unusable(tmp_path):
+    _fake_kit(tmp_path, _OUT + "(out / 'content_list.json').write_text('[' * 100000 + ']' * 100000)\n"
+              "(out / 'doc.md').write_text('fallback body')")
+    result = parse_offline(minimal_pdf(["a", "b"]), root=tmp_path, tier="basic", version="4.1.3")
+    assert "fallback body" in result.markdown
+    assert result.warnings == ["未能按页定位内容，引用页码只能精确到全文"]
 
 
 @posix_only

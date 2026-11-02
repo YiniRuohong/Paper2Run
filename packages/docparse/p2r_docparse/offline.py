@@ -29,6 +29,7 @@ _FURNITURE_TYPES = frozenset({"header", "footer", "page_number", "aside_text"})
 _TITLE_TYPES = {"doc_title": 1, "paragraph_title": 2}
 _IMAGE_MARKDOWN = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _BLANK_RUNS = re.compile(r"\n{3,}")
+_FALLBACK_WARNING = "未能按页定位内容，引用页码只能精确到全文"
 
 
 def _base_env(root: Path) -> dict[str, str]:
@@ -76,7 +77,7 @@ def _item_text(item: dict) -> str | None:
 def _read_content_list(path: Path, page_count: int) -> list[ChunkOutcome] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     if not isinstance(data, list) or not data or not all(isinstance(i, dict) for i in data):
         return None
@@ -124,7 +125,7 @@ def _structured_outcomes(raw: bytes, page_count: int) -> list[ChunkOutcome] | No
     """One outcome per page that has text; None when the JSON is not usable."""
     try:
         data = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, ValueError):
+    except (UnicodeError, ValueError, RecursionError):
         return None
     pages_raw = data.get("pages") if isinstance(data, dict) else None
     if not isinstance(pages_raw, list):
@@ -163,8 +164,9 @@ def _safe_member_name(name: str) -> bool:
     return bool(parts) and all(part not in ("", "..") for part in parts)
 
 
-def _read_zip(path: Path, page_count: int) -> list[ChunkOutcome]:
-    """Read the two text members in memory. Nothing from the archive touches the disk."""
+def _read_zip(path: Path, page_count: int) -> tuple[list[ChunkOutcome], bool]:
+    """Read the two text members in memory. Nothing from the archive touches the disk.
+    The flag is True when only the whole-document Markdown was usable."""
     wanted: dict[str, bytes] = {}
     try:
         with zipfile.ZipFile(path) as archive:
@@ -191,7 +193,7 @@ def _read_zip(path: Path, page_count: int) -> list[ChunkOutcome]:
     if structured is not None:
         outcomes = _structured_outcomes(structured, page_count)
         if outcomes:
-            return outcomes
+            return outcomes, False
     markdown = wanted.get(_MARKDOWN_MEMBER)
     if markdown is not None:
         try:
@@ -199,29 +201,48 @@ def _read_zip(path: Path, page_count: int) -> list[ChunkOutcome]:
         except UnicodeError:
             outcomes = None
         if outcomes:
-            return outcomes
+            return outcomes, True
     raise DocParseError("DOCPARSE_OFFLINE_FAILED")
 
 
-def _read_output(out_dir: Path, page_count: int) -> list[ChunkOutcome]:
+def _read_output(out_dir: Path, page_count: int) -> tuple[list[ChunkOutcome], bool]:
     """Turn mineru-kit output into per-page outcomes or one whole-document segment.
     The real `-f zip` archive is read first; plain-directory content-list JSON and
-    Markdown stay as fallbacks. Kept in one place so the layout can be adjusted."""
+    Markdown stay as fallbacks. The flag is True for the whole-document Markdown fallback. Kept in one place so the layout can be adjusted."""
     archives = sorted(out_dir.rglob("*.zip"))
     if archives:
         return _read_zip(archives[0], page_count)
     for path in sorted(out_dir.rglob("*.json")):
         outcomes = _read_content_list(path, page_count)
         if outcomes:
-            return outcomes
+            return outcomes, False
     for path in sorted(out_dir.rglob("*.md")):
         try:
             outcomes = _markdown_outcomes(path.read_text(encoding="utf-8"), page_count)
         except (OSError, UnicodeError):
             continue
         if outcomes:
-            return outcomes
+            return outcomes, True
     raise DocParseError("DOCPARSE_OFFLINE_FAILED")
+
+
+def _span(first: int, last: int) -> str:
+    return f"第 {first} 页" if first == last else f"第 {first}–{last} 页"
+
+
+def _chunks_and_warnings(outcomes: list[ChunkOutcome], page_count: int) -> tuple[list[dict], list[str]]:
+    """Contiguous done/missing ranges over 1..page_count, one warning per missing range."""
+    have = {p for o in outcomes for p in range(o.first_page, o.last_page + 1)}
+    chunks: list[dict] = []
+    for page in range(1, page_count + 1):
+        status = "done" if page in have else "missing"
+        if chunks and chunks[-1]["status"] == status:
+            chunks[-1]["last_page"] = page
+        else:
+            chunks.append({"first_page": page, "last_page": page, "status": status})
+    warnings = [f"{_span(c['first_page'], c['last_page'])}未提取到文字（可能是空白页或纯图页）"
+                for c in chunks if c["status"] == "missing"]
+    return chunks, warnings
 
 
 def parse_offline(pdf: bytes, *, root: Path, tier: str, version: str, timeout: float = 1200.0,
@@ -245,10 +266,15 @@ def parse_offline(pdf: bytes, *, root: Path, tier: str, version: str, timeout: f
             raise DocParseError("DOCPARSE_TIMEOUT")
         if done.returncode != 0:
             raise DocParseError("DOCPARSE_OFFLINE_FAILED")
-        outcomes = _read_output(out_dir, page_count)
-    markdown = merge_outcomes(outcomes)
+        outcomes, whole_document = _read_output(out_dir, page_count)
+    if whole_document:
+        pages_parsed = page_count
+        chunks = [{"first_page": 1, "last_page": page_count, "status": "done"}]
+        warnings = [_FALLBACK_WARNING]
+    else:
+        chunks, warnings = _chunks_and_warnings(outcomes, page_count)
+        pages_parsed = sum(c["last_page"] - c["first_page"] + 1 for c in chunks if c["status"] == "done")
     return ParseResult(
-        markdown=markdown, backend="offline_mineru", backend_version=version,
-        page_count=page_count, pages_parsed=page_count,
-        chunks=[{"first_page": 1, "last_page": page_count, "status": "done"}], warnings=[],
+        markdown=merge_outcomes(outcomes), backend="offline_mineru", backend_version=version,
+        page_count=page_count, pages_parsed=pages_parsed, chunks=chunks, warnings=warnings,
     )

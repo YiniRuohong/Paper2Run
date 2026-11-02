@@ -92,7 +92,8 @@ def test_real_structured_content_fixture(tmp_path):
     assert "images/" not in md and "![" not in md
     assert "WRONG-SOURCE" not in md
     assert result.backend == "offline_mineru"
-    assert result.page_count == 6 and result.pages_parsed == 6
+    assert result.page_count == 6 and result.pages_parsed == 4
+    assert [c["status"] for c in result.chunks] == ["done", "missing", "done", "missing", "done"]
 
 
 @posix_only
@@ -121,7 +122,10 @@ def test_titles_equations_tables_and_furniture(tmp_path):
         "<!-- p2r:page 1 -->\n# Title\n\n### 1.1 Sub\n\n$$\nE = mc^2\n$$\n\n"
         "| a | b |\n| --- | --- |\n| 1 | 2 |\n\nTable 9: caption\n\nnote"
     )
-    assert result.page_count == 2 and result.pages_parsed == 2
+    assert result.page_count == 2 and result.pages_parsed == 1
+    assert result.chunks == [{"first_page": 1, "last_page": 1, "status": "done"},
+                             {"first_page": 2, "last_page": 2, "status": "missing"}]
+    assert result.warnings == ["第 2 页未提取到文字（可能是空白页或纯图页）"]
 
 
 @posix_only
@@ -178,3 +182,85 @@ def test_corrupt_zip_fails(tmp_path):
     with pytest.raises(DocParseError) as e:
         parse_offline(minimal_pdf(["p"]), root=root, tier="standard", version="4.1.3")
     assert e.value.code == "DOCPARSE_OFFLINE_FAILED"
+
+
+_FALLBACK_WARNING = "未能按页定位内容，引用页码只能精确到全文"
+
+
+@posix_only
+def test_pages_without_text_are_not_counted(tmp_path):
+    members = {"structured_content.json": FIXTURE.read_text(encoding="utf-8")}
+    result = _run(tmp_path, members, pages=6)
+    assert result.page_count == 6 and result.pages_parsed == 4
+    assert result.chunks == [
+        {"first_page": 1, "last_page": 1, "status": "done"},
+        {"first_page": 2, "last_page": 2, "status": "missing"},
+        {"first_page": 3, "last_page": 3, "status": "done"},
+        {"first_page": 4, "last_page": 4, "status": "missing"},
+        {"first_page": 5, "last_page": 6, "status": "done"},
+    ]
+    assert result.warnings == [
+        "第 2 页未提取到文字（可能是空白页或纯图页）",
+        "第 4 页未提取到文字（可能是空白页或纯图页）",
+    ]
+    assert "missing" not in result.markdown
+
+
+@posix_only
+def test_missing_range_warning_uses_dash(tmp_path):
+    pages = [{"page_idx": 0, "blocks": [{"type": "text", "content": "a"}]},
+             {"page_idx": 3, "blocks": [{"type": "text", "content": "d"}]}]
+    result = _run(tmp_path, {"structured_content.json": _structured(pages)}, pages=5)
+    assert result.pages_parsed == 2
+    assert result.chunks == [
+        {"first_page": 1, "last_page": 1, "status": "done"},
+        {"first_page": 2, "last_page": 3, "status": "missing"},
+        {"first_page": 4, "last_page": 4, "status": "done"},
+        {"first_page": 5, "last_page": 5, "status": "missing"},
+    ]
+    assert result.warnings == [
+        "第 2–3 页未提取到文字（可能是空白页或纯图页）",
+        "第 5 页未提取到文字（可能是空白页或纯图页）",
+    ]
+
+
+@posix_only
+def test_all_pages_with_text_no_warning(tmp_path):
+    pages = [{"page_idx": i, "blocks": [{"type": "text", "content": f"p{i}"}]} for i in range(3)]
+    result = _run(tmp_path, {"structured_content.json": _structured(pages)}, pages=3)
+    assert result.pages_parsed == 3
+    assert result.warnings == []
+    assert result.chunks == [{"first_page": 1, "last_page": 3, "status": "done"}]
+
+
+@posix_only
+def test_markdown_fallback_warns(tmp_path):
+    result = _run(tmp_path, {"markdown.md": "# T\n\nbody"}, pages=3)
+    assert result.warnings == [_FALLBACK_WARNING]
+    assert result.pages_parsed == 3
+    assert result.chunks == [{"first_page": 1, "last_page": 3, "status": "done"}]
+    assert result.markdown.startswith("<!-- p2r:pages 1-3 -->\n# T")
+
+
+@posix_only
+def test_markdown_fallback_warns_single_page(tmp_path):
+    result = _run(tmp_path, {"markdown.md": "# T"}, pages=1)
+    assert result.warnings == [_FALLBACK_WARNING]
+    assert result.chunks == [{"first_page": 1, "last_page": 1, "status": "done"}]
+
+
+@posix_only
+def test_unusable_structured_json_falls_back_with_warning(tmp_path):
+    members = {"structured_content.json": '{"pages": "nope"}', "markdown.md": "body"}
+    result = _run(tmp_path, members, pages=2)
+    assert result.warnings == [_FALLBACK_WARNING]
+    assert result.markdown.startswith("<!-- p2r:pages 1-2 -->")
+
+
+@posix_only
+def test_deeply_nested_json_is_unusable(tmp_path):
+    nested = "[" * 100000 + "]" * 100000
+    members = {"structured_content.json": nested, "markdown.md": "fallback body"}
+    result = _run(tmp_path, members, pages=2)
+    assert "fallback body" in result.markdown
+    assert result.warnings == [_FALLBACK_WARNING]
