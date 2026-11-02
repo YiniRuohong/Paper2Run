@@ -37,7 +37,7 @@ function setup(initial = {}) {
   const server = {
     mode: null, offline: 'not_installed', installPolls: 2, installEnd: 'ready',
     texts: [textOf('none')], afterParse: [textOf('parsing'), textOf('parsing'), textOf('ready')],
-    paperStatus: 'uploaded', gates: {}, ...initial,
+    paperStatus: 'uploaded', gates: {}, failures: {}, ...initial,
   };
   // A test may queue promises under gates.text / gates.install to hold the
   // next matching call open (the call is recorded before it waits).
@@ -49,7 +49,7 @@ function setup(initial = {}) {
   });
   const api = {
     async createProject(name, key) { calls.push(['POST /projects', key]); return project; },
-    async uploadPaperPdf(projectId, file, options) { calls.push([`POST /projects/${projectId}/papers`, options.key]); return { paper_id: 'paper', operation_id: null, status: server.paperStatus }; },
+    async uploadPaperPdf(projectId, file, options) { calls.push([`POST /projects/${projectId}/papers`, options.key]); const fail = server.failures.upload?.shift(); if (fail) throw fail; return { paper_id: 'paper', operation_id: null, status: server.paperStatus }; },
     async createTextPaper(projectId, input) { calls.push([`POST /projects/${projectId}/papers/text`, input.key]); return { paper_id: 'paper', operation_id: null, status: 'uploaded' }; },
     async getPaper(paperId) { calls.push([`GET /papers/${paperId}`]); return paperInfo(server.paperStatus); },
     async getDocParseStatus() {
@@ -63,6 +63,7 @@ function setup(initial = {}) {
     async uninstallOffline() { calls.push(['DELETE /docparse/offline']); server.offline = 'not_installed'; return status(); },
     async parsePaper(paperId, key) {
       calls.push([`POST /papers/${paperId}/parse`, key, server.mode]);
+      const fail = server.failures.parse?.shift(); if (fail) throw fail;
       if (server.mode === null) throw Object.assign(new Error('choose online or offline parsing first'), { status: 409, code: 'DOCPARSE_MODE_UNSET' });
       server.texts = [...server.afterParse];
       return { paper_id: paperId, job_id: 'job', status: 'parsing' };
@@ -70,6 +71,7 @@ function setup(initial = {}) {
     async getPaperText(paperId) {
       calls.push([`GET /papers/${paperId}/text`]);
       await gate('text');
+      const fail = server.failures.text?.shift(); if (fail) throw fail;
       return server.texts.length > 1 ? server.texts.shift() : server.texts[0];
     },
     async createExtraction(paperId, input) { calls.push([`POST /papers/${paperId}/extractions`, input.key]); return { paper_id: paperId, operation_id: 'op', status: 'ready', extraction_id: 'x1' }; },
@@ -332,6 +334,59 @@ test('pollPaperText during offline chooseParseMode keeps waiting for install', a
   assert.equal(parses.length, 1, 'parsed exactly once');
   assert.equal(parses[0][2], 'offline', 'parsed under the chosen offline mode');
   assert.deepEqual(f.calls.filter(x => x[0] === 'PUT /docparse/mode').map(x => x[1]), ['offline']);
+});
+
+const boom = () => Object.assign(new Error('transient failure'), { status: 503, code: 'TRANSIENT' });
+const textReady = (c) => c.getSnapshot().docparse.text?.status === 'ready';
+
+test('after a failed text read during upload, a later pollPaperText resumes polling', async (t) => {
+  const f = setup({ mode: 'online', failures: { text: [boom()] } }); t.after(f.dispose);
+  const c = f.create();
+  await c.uploadArticle({ consent: true, file: pdf() });
+  f.server.texts = [textOf('parsing'), textOf('parsing'), textOf('ready')];
+  await c.pollPaperText();
+  await until(() => textReady(c), 'polling resumes until ready');
+  assert.equal(f.count('POST /papers/paper/parse'), 0, 'a refresh never requests a parse');
+});
+
+test('after a failed parse request in chooseParseMode, a later pollPaperText resumes polling', async (t) => {
+  const f = setup({ failures: { parse: [boom()] } }); t.after(f.dispose);
+  const c = f.create();
+  await c.uploadArticle({ consent: true, file: pdf() });
+  await assert.rejects(c.chooseParseMode('online'));
+  f.server.texts = [textOf('parsing'), textOf('parsing'), textOf('ready')];
+  await c.pollPaperText();
+  await until(() => textReady(c), 'polling resumes until ready');
+  assert.equal(f.count('POST /papers/paper/parse'), 1, 'only the failed request; polling never re-requests');
+});
+
+test('after a failed parse request in retryParse, a later pollPaperText resumes polling', async (t) => {
+  const f = setup({ mode: 'online', afterParse: [textOf('failed')] }); t.after(f.dispose);
+  const c = f.create();
+  await c.uploadArticle({ consent: true, file: pdf() });
+  await until(() => c.getSnapshot().docparse.text?.status === 'failed', 'first parse ends failed');
+  f.server.failures.parse = [boom()];
+  await assert.rejects(c.retryParse());
+  f.server.texts = [textOf('parsing'), textOf('parsing'), textOf('ready')];
+  await c.pollPaperText();
+  await until(() => textReady(c), 'polling resumes until ready');
+  assert.equal(f.count('POST /papers/paper/parse'), 2, 'the first parse plus the failed retry only');
+});
+
+test('after a failed read in the no-live-flow branch, a second pollPaperText resumes polling', async (t) => {
+  const f = setup({ mode: 'online', afterParse: [textOf('failed')] }); t.after(f.dispose);
+  const c = f.create();
+  await c.uploadArticle({ consent: true, file: pdf() });
+  await until(() => c.getSnapshot().docparse.text?.status === 'failed', 'first parse ends failed');
+  // A second upload that fails before the paper is replaced leaves the old PDF
+  // current and no live flow behind.
+  f.server.failures.upload = [boom()];
+  await assert.rejects(c.uploadArticle({ consent: true, file: pdf() }));
+  f.server.failures.text = [boom()];
+  await c.pollPaperText().catch(() => {});
+  f.server.texts = [textOf('parsing'), textOf('parsing'), textOf('ready')];
+  await c.pollPaperText();
+  await until(() => textReady(c), 'polling resumes until ready');
 });
 
 test('dispose stops background polling', async (t) => {

@@ -73,9 +73,10 @@ export class RealFlowController {
   // One docparse flow at a time: a new upload, mode choice or retry aborts the
   // previous flow's reads and timers; dispose() aborts it too. `driving` marks
   // a flow whose background poll loop is still running.
-  // `driven` flips once the flow's loop has been started; before that the flow
-  // is still in its setup reads/writes and belongs to its starter.
-  private docParseFlow: { abort: AbortController; driving: boolean; driven: boolean } | null = null;
+  // `settling` is true from creation until the starter (upload, mode choice,
+  // retry, or a refresh that began the flow) leaves its setup reads/writes,
+  // whether it succeeded or failed; only then may pollPaperText drive the flow.
+  private docParseFlow: { abort: AbortController; driving: boolean; settling: boolean } | null = null;
   private docParsePoll: { text: number; status: number };
   constructor(options: { api: GuidedApi; docParsePollMs?: { text?: number; status?: number } }) {
     this.api = options.api;
@@ -190,8 +191,14 @@ export class RealFlowController {
   }
   private beginDocParseFlow(): AbortSignal {
     this.docParseFlow?.abort.abort();
-    this.docParseFlow = { abort: new AbortController(), driving: false, driven: false };
+    this.docParseFlow = { abort: new AbortController(), driving: false, settling: true };
     return this.docParseFlow.abort.signal;
+  }
+  // Called from the `finally` of every starter, so a failed setup never leaves
+  // a live flow stuck in `settling`.
+  private endSetup(signal: AbortSignal): void {
+    const flow = this.docParseFlow;
+    if (flow && flow.abort.signal === signal) flow.settling = false;
   }
   private stopDocParseFlow(): void {
     this.docParseFlow?.abort.abort();
@@ -242,6 +249,8 @@ export class RealFlowController {
       this.driveDocParse(paperId, signal, waitFor);
     } catch (error) {
       if (this.flowLive(signal)) this.dispatch({ type: 'error', message: messageOf(error) });
+    } finally {
+      this.endSetup(signal);
     }
   }
 
@@ -252,7 +261,6 @@ export class RealFlowController {
   private driveDocParse(paperId: string | null, signal: AbortSignal, waitFor: DocParseMode | null): void {
     const flow = this.docParseFlow;
     if (!flow || flow.abort.signal !== signal || !this.flowLive(signal)) return;
-    flow.driven = true;
     flow.driving = true;
     void this.docParseLoop(paperId, signal, waitFor)
       .catch(error => { if (this.flowLive(signal)) this.dispatch({ type: 'error', message: messageOf(error) }); })
@@ -290,19 +298,23 @@ export class RealFlowController {
     if (mode !== 'online' && mode !== 'offline') throw Error('DOCPARSE_MODE_INVALID');
     return this.submit('docparse-mode', async key => {
       const signal = this.beginDocParseFlow();
-      let status = await this.api.setDocParseMode(mode);
-      this.dispatch({ type: 'docparse-status', value: status });
-      if (mode === 'offline' && status.offline.state !== 'ready' && status.offline.state !== 'installing') {
-        status = await this.api.startOfflineInstall();
+      try {
+        let status = await this.api.setDocParseMode(mode);
         this.dispatch({ type: 'docparse-status', value: status });
+        if (mode === 'offline' && status.offline.state !== 'ready' && status.offline.state !== 'installing') {
+          status = await this.api.startOfflineInstall();
+          this.dispatch({ type: 'docparse-status', value: status });
+        }
+        const paperId = this.pdfPaperId();
+        const text = this.state.docparse.text;
+        const wantParse = paperId !== null && text?.status !== 'parsing' && text?.status !== 'ready';
+        let waitFor: DocParseMode | null = null;
+        if (wantParse && canParseNow(status, mode)) await this.requestParse(paperId, key, signal);
+        else if (wantParse) waitFor = mode;
+        this.driveDocParse(paperId, signal, waitFor);
+      } finally {
+        this.endSetup(signal);
       }
-      const paperId = this.pdfPaperId();
-      const text = this.state.docparse.text;
-      const wantParse = paperId !== null && text?.status !== 'parsing' && text?.status !== 'ready';
-      let waitFor: DocParseMode | null = null;
-      if (wantParse && canParseNow(status, mode)) await this.requestParse(paperId, key, signal);
-      else if (wantParse) waitFor = mode;
-      this.driveDocParse(paperId, signal, waitFor);
     });
   }
 
@@ -318,16 +330,21 @@ export class RealFlowController {
     if (!paperId) throw Error('REALFLOW_PDF_PAPER_REQUIRED');
     return this.submit('docparse-retry', async key => {
       const signal = this.beginDocParseFlow();
-      await this.requestParse(paperId, key, signal);
-      this.driveDocParse(paperId, signal, null);
+      try {
+        await this.requestParse(paperId, key, signal);
+        this.driveDocParse(paperId, signal, null);
+      } finally {
+        this.endSetup(signal);
+      }
     });
   }
 
   // Read-only refresh of the current PDF's text. A live flow is never replaced
-  // or aborted: the read uses that flow's signal. A flow still in setup (upload,
-  // mode choice, retry) starts its own loop later, so it is left alone; a flow
-  // whose loop already finished gets polling restarted. Only with no live flow
-  // does a refresh begin one.
+  // or aborted: the read uses that flow's signal. A flow still settling (its
+  // starter is mid upload, mode choice or retry) will start its own loop, so it
+  // is left alone; once settling has ended, successfully or not, a flow whose
+  // loop is not running gets polling restarted. Only with no live flow does a
+  // refresh begin one, and it ends its own setup even when the read fails.
   async pollPaperText(): Promise<void> {
     const paperId = this.pdfPaperId();
     if (!paperId) return;
@@ -335,11 +352,15 @@ export class RealFlowController {
     if (live) {
       const signal = live.abort.signal;
       await this.readPaperText(paperId, signal);
-      if (live.driven && !live.driving) this.driveDocParse(paperId, signal, null);
+      if (!live.settling && !live.driving) this.driveDocParse(paperId, signal, null);
       return;
     }
     const signal = this.beginDocParseFlow();
-    await this.readPaperText(paperId, signal);
+    try {
+      await this.readPaperText(paperId, signal);
+    } finally {
+      this.endSetup(signal);
+    }
     this.driveDocParse(paperId, signal, null);
   }
 
