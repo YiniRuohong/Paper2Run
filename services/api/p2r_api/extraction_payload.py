@@ -24,6 +24,8 @@ PAYLOAD_KEYS = (
 PROJECTION_METADATA_KEYS = (
     "provider_config_id", "model_id", "prompt_version", "policy_version",
     "content_sha256", "context_hash",
+    # PDF papers only: which parsed-text artifact was sent and which backend made it.
+    "source_text_sha256", "parse_backend",
 )
 
 # article_schema.ExtractionDocument field names that belong in payload_json["fields"].

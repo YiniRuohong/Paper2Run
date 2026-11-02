@@ -22,6 +22,7 @@ from p2r_persistence.repositories import IdempotencyRepository
 from ..auth import csrf_token, validate_csrf, validate_origin, require_project_access
 from ..dependencies import actor_id
 from ..extraction_payload import ExtractionPayloadError, build_extraction_payload
+from ..paper_text import latest_paper_text
 
 router = APIRouter()
 _PDF_MAGIC = b"%PDF-"
@@ -270,6 +271,18 @@ def _source_bytes(runtime, row):
     return data
 
 
+def _paper_text_bytes(runtime, record) -> bytes:
+    store = runtime.get('artifact_store')
+    if store is None:
+        _error('PAPER_CONTENT_UNAVAILABLE', 'paper content is unavailable', status=404)
+    try:
+        return store.open_bytes(record.text_sha256)
+    except (OSError, ArtifactNotFoundError):
+        _error('PAPER_CONTENT_UNAVAILABLE', 'paper content is unavailable', status=404)
+    except ArtifactIntegrityError:
+        _error('PAPER_CONTENT_INTEGRITY', 'paper content integrity check failed')
+
+
 @router.get("/papers/{paper_id}/content")
 def paper_content(paper_id: str, request: Request):
     with request.app.state.runtime["session_factory"]() as db:
@@ -406,6 +419,16 @@ async def create_extraction(paper_id: str, request: Request):
         _check_write(request, db, paper.project_id, user_id)
         key = request.headers.get("idempotency-key")
         if not key: _error("VALIDATION_ERROR", "Idempotency-Key is required")
+        use_provider = runtime.get("extraction_service") is not None and provider_session_id is not None
+        text_record = None
+        if use_provider and paper.media_type == "application/pdf":
+            # A PDF reaches the model as its parsed Markdown, never raw bytes.
+            # Checked before the idempotency claim: on SQLite the claim's
+            # SAVEPOINT commits at once, so a 409 raised after it would leave
+            # the key stuck in progress instead of retryable once parsing ends.
+            text_record = latest_paper_text(db, paper, status="ready")
+            if text_record is None or not text_record.text_sha256:
+                _error("PAPER_TEXT_NOT_READY", "parsed paper text is not ready", status=409)
         claim = IdempotencyRepository(db).claim(scope=f"paper-extraction:{user_id}:{paper_id}", key=key, body=body)
         if claim.conflict: _error("IDEMPOTENCY_CONFLICT", "idempotency key was used with a different request body", status=409)
         if claim.record.response_json is not None: return _envelope(request, claim.record.response_json)
@@ -416,15 +439,24 @@ async def create_extraction(paper_id: str, request: Request):
         # (and, for this request, a live provider session is named). The
         # session id is passed through the process-local runtime, never stored
         # on the request object that downstream helpers receive.
-        if runtime.get("extraction_service") is not None and provider_session_id is not None:
+        if use_provider:
             session_store = runtime.get("provider_secret_store")
             if session_store is None or provider_session_id not in session_store:
                 _error("PROVIDER_SESSION_UNAVAILABLE", "provider session is not available", status=409)
+            if text_record is not None:
+                data = _paper_text_bytes(runtime, text_record)
             projection = await _extract_with_injected(runtime, provider_session_id, data, paper, prompt_version, policy_version)
+            if text_record is not None and isinstance(projection, dict):
+                projection = {**projection, "source_text_sha256": text_record.text_sha256,
+                              "parse_backend": text_record.backend}
             try:
                 extracted = build_extraction_payload(projection, paper_id=paper.id, paper_sha256=paper.sha256)
             except ExtractionPayloadError:
                 _error("PROVIDER_INVALID_RESPONSE", "extraction references another source", status=422)
+            if text_record is not None:
+                for warning in text_record.warnings_json or []:
+                    if warning not in extracted["warnings"]:
+                        extracted["warnings"].append(warning)
             operation = OperationRecord(kind="paper_extraction", resource_id=paper.id, status="succeeded")
             db.add(operation); db.flush()
             ext = ExtractionRecord(paper_id=paper.id, content_sha256=paper.sha256, status="ready", payload_json=extracted)

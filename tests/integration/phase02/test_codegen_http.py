@@ -39,8 +39,9 @@ from p2r_persistence.models import (  # noqa: E402
     ProjectRecord,
     UserRecord,
 )
+from tests.integration.phase02.paper_text_seed import seed_paper_text  # noqa: E402
 
-PDF = minimal_pdf(["Codegen seam source text"]).rstrip(b"\r\n").replace(b"\xe2\xe3\xcf\xd3", b"ABCD")  # utf-8 safe, xref offsets unchanged
+PDF = minimal_pdf(["Codegen seam source text"]).rstrip(b"\r\n")  # multipart parser strips trailing CRLF
 SECRET = "sk-codegen-secret-abcdef123456"
 ENDPOINT = "codegen-endpoint"
 MODEL_ID = "model-codegen"
@@ -213,6 +214,8 @@ def setup_flow(app) -> dict:
         )
         assert paper.status_code == 202, paper.text
         paper_id = paper.json()["data"]["paper_id"]
+        # Provider extraction of a PDF reads its parsed Markdown.
+        seed_paper_text(app, paper_id, "<!-- p2r:page 1 -->\n\nCodegen seam source text\n")
 
         session_id = make_session(app)
         paper_sha = hashlib.sha256(PDF).hexdigest()

@@ -15,6 +15,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from p2r_docparse.context import trim_for_context
+
 from .article_schema import ExtractionDocument
 from .providers import CompletionRequest, Message, NormalizedEvent, ProviderError
 
@@ -44,7 +46,10 @@ _SYSTEM_PROMPT = (
     "Never invent unregistered recipe ids. The JSON object must contain "
     "every required top-level key — schema_version, title, task, methods, "
     "formulas, datasets, candidate_experiments, warnings, limitations, "
-    "source_refs — even if a list is empty."
+    "source_refs — even if a list is empty. "
+    "Lines like <!-- p2r:page 7 --> or <!-- p2r:pages 21-40 --> mark the PDF "
+    "page(s) of the text that follows; set source_ref.page to the first page "
+    "of the marked span."
 )
 
 
@@ -204,7 +209,9 @@ class ExtractionService:
             text = content.decode("utf-8")
         except UnicodeDecodeError:
             raise ProviderError("invalid_response") from None
-        context = text[: self._max_context_bytes]
+        # References are dropped and an over-long text is cut; the warning
+        # names which PDF pages actually reached the model.
+        context, trim_warning = trim_for_context(text, self._max_context_bytes)
         context_bytes = context.encode("utf-8")
         context_hash = hashlib.sha256(context_bytes).hexdigest()
         content_sha256 = hashlib.sha256(content).hexdigest()
@@ -277,6 +284,9 @@ class ExtractionService:
                 raise ProviderError("invalid_response")
 
         # 5. Safe projection — metadata plus the validated extraction only.
+        extraction = document.model_dump()
+        if trim_warning is not None and trim_warning not in extraction["warnings"]:
+            extraction["warnings"].append(trim_warning)
         return {
             "paper_id": paper_id,
             "content_sha256": content_sha256,
@@ -285,5 +295,5 @@ class ExtractionService:
             "model_id": model_id,
             "prompt_version": prompt_version,
             "policy_version": policy_version,
-            "extraction": document.model_dump(),
+            "extraction": extraction,
         }

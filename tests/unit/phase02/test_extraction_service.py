@@ -243,3 +243,50 @@ def test_evidence_status_keeps_conflicting_spelling():
         ExtractionDocument.model_validate(payload(
             title=evidence("Deep learning", "conflicted"),
         ))
+
+
+PAGE_SENTENCE = (
+    "Lines like <!-- p2r:page 7 --> or <!-- p2r:pages 21-40 --> mark the PDF page(s) "
+    "of the text that follows; set source_ref.page to the first page of the marked span."
+)
+
+
+def test_system_prompt_explains_page_markers():
+    provider = FakeProvider(completed_events(json.dumps(payload())))
+    run_extract(service(provider))
+    assert provider.last_request.messages[0].content.endswith(" " + PAGE_SENTENCE)
+
+
+def test_trim_warning_in_projection():
+    head = "<!-- p2r:pages 1-20 -->\n\n" + "first part. " * 40 + "\n\n"
+    tail = "<!-- p2r:pages 21-40 -->\n\n" + "second part. " * 400
+    content = (head + tail).encode("utf-8")
+    limit = len(head) + 100
+    provider = FakeProvider(completed_events(json.dumps(payload())))
+    result = run_extract(service(provider, max_context_bytes=limit), content=content)
+
+    warnings = result["extraction"]["warnings"]
+    # The model's own warnings stay first; the trim warning is appended.
+    assert warnings == ["conflicting claims between sections", "仅第 1–20 页发送给模型（超出上下文上限）"]
+    sent_text = (head + tail)[:limit]
+    assert provider.last_request.messages[1].content.endswith(sent_text)
+    assert result["context_hash"] == hashlib.sha256(sent_text.encode("utf-8")).hexdigest()
+    assert result["content_sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_no_trim_warning_when_text_fits():
+    content = "<!-- p2r:page 1 -->\n\nShort paper.\n".encode("utf-8")
+    provider = FakeProvider(completed_events(json.dumps(payload())))
+    result = run_extract(service(provider), content=content)
+    assert result["extraction"]["warnings"] == ["conflicting claims between sections"]
+    assert result["context_hash"] == hashlib.sha256(content).hexdigest()
+
+
+def test_references_section_is_not_sent():
+    body = "<!-- p2r:page 1 -->\n\n# Method\n\nWe train a CNN.\n\n"
+    content = (body + "# References\n\n[1] Some cited work.\n").encode("utf-8")
+    provider = FakeProvider(completed_events(json.dumps(payload())))
+    result = run_extract(service(provider), content=content)
+    sent = provider.last_request.messages[1].content
+    assert sent.endswith(body) and "Some cited work" not in sent
+    assert result["context_hash"] == hashlib.sha256(body.encode("utf-8")).hexdigest()

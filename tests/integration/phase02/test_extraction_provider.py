@@ -28,6 +28,7 @@ from p2r_orchestration.providers import (
     TransportResponse,
 )
 from p2r_persistence.models import ExtractionRecord, MembershipRecord, ProjectRecord, UserRecord
+from tests.integration.phase02.paper_text_seed import seed_paper_text
 
 PAPER_ID = "paper-seam"
 PAPER_SHA256 = "c" * 64
@@ -131,7 +132,9 @@ def test_mapping_rejects_foreign_source_refs():
 
 # ---------------------------------------------------------------- HTTP fixtures
 
-PDF = minimal_pdf(["P seam source text"]).rstrip(b"\r\n").replace(b"\xe2\xe3\xcf\xd3", b"ABCD")  # utf-8 safe, xref offsets unchanged
+PDF = minimal_pdf(["P seam source text"]).rstrip(b"\r\n")  # multipart parser strips trailing CRLF
+# Parsed Markdown of PDF: provider extraction of a PDF sends this, not the PDF bytes.
+PDF_MARKDOWN = "<!-- p2r:page 1 -->\n\nP seam source text\n"
 
 
 def openai_body(text: str, model_id: str = "model-a") -> bytes:
@@ -182,7 +185,7 @@ def headers(key):
     return {"X-Actor-ID": "owner", "Idempotency-Key": key}
 
 
-def upload_pdf(client, project_id, key="pdf-seam"):
+def upload_pdf(client, project_id, key="pdf-seam", *, parsed=True):
     result = client.post(
         f"/api/v1/projects/{project_id}/papers",
         headers=headers(key),
@@ -190,7 +193,10 @@ def upload_pdf(client, project_id, key="pdf-seam"):
         data={"source_processing_consent": "true"},
     )
     assert result.status_code == 202, result.text
-    return result.json()["data"]["paper_id"]
+    paper_id = result.json()["data"]["paper_id"]
+    if parsed:
+        seed_paper_text(client.app, paper_id, PDF_MARKDOWN)
+    return paper_id
 
 
 def inject_service(app, provider):
@@ -258,11 +264,11 @@ def test_injected_fake_provider_extracts_and_persists_safe_payload(seeded, monke
         assert len(transport.calls) == 1
         assert transport.calls[0]["headers"]["Authorization"] == f"Bearer {SECRET}"
         sent_content = json.loads(transport.calls[0]["body"])["messages"][1]["content"]
-        # Provenance block with the exact identifiers, then the article bytes.
+        # Provenance block with the exact identifiers, then the parsed article text.
         assert sent_content.startswith("PROVENANCE (every source_ref must cite these exact values):")
         assert f"paper_id: {paper_id}" in sent_content
         assert f"pdf_sha256: {paper_sha}" in sent_content
-        assert sent_content.endswith(PDF.decode())
+        assert sent_content.endswith(PDF_MARKDOWN)
         assert SECRET not in fetched.text
         replay = client.post(
             f"/api/v1/papers/{paper_id}/extractions",
@@ -371,7 +377,7 @@ def test_source_ref_for_another_paper_is_refused_without_persisting(seeded, monk
 def test_without_injected_service_existing_deterministic_behavior_unchanged(seeded):
     app, ids = seeded
     with TestClient(app) as client:
-        paper_id = upload_pdf(client, ids["project"], key="pdf-det")
+        paper_id = upload_pdf(client, ids["project"], key="pdf-det", parsed=False)
         # No extraction_service injected → provider body fields are irrelevant;
         # request without provider_session_id takes the deterministic PDF path.
         result = client.post(

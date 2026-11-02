@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from sqlalchemy import select
 
 from p2r_docparse.errors import DocParseError
 from p2r_docparse.platform import current_platform
 from p2r_orchestration.docparse_jobs import enqueue_paper_parse
-from p2r_persistence.models import PaperRecord, PaperTextRecord
+from p2r_persistence.models import PaperRecord
 from p2r_persistence.repositories import IdempotencyRepository
 
 from ..auth import require_project_access
 from ..dependencies import actor_id
+from ..paper_text import latest_paper_text
 from .papers import _check_write, _envelope, _error
 
 router = APIRouter()
@@ -108,9 +108,7 @@ def paper_text(paper_id: str, request: Request):
         paper = db.get(PaperRecord, paper_id)
         if paper is None: _error("RESOURCE_NOT_FOUND", "resource not found", status=404)
         require_project_access(db, actor_id(request), paper.project_id)
-        record = db.scalar(select(PaperTextRecord).where(
-            PaperTextRecord.paper_id == paper_id, PaperTextRecord.source_sha256 == paper.sha256,
-        ).order_by(PaperTextRecord.created_at.desc(), PaperTextRecord.id.desc()))
+        record = latest_paper_text(db, paper)
         if record is None:
             return _envelope(request, {"status": "none", "backend": None, "page_count": paper.page_count,
                                        "pages_parsed": 0, "chunks": [], "warnings": [],
