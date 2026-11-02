@@ -33,3 +33,14 @@ def test_trim_no_markers_generic_warning():
     out, warn = trim_for_context("x" * 100, 40)
     assert warn == "文本超出上下文上限，已截断"
     assert len(out) == 40
+
+
+def test_trim_keeps_markers_inside_references():
+    seg1 = "# 1 Intro\nhello\n# References\n[1] ref entry one\n[2] ref entry two\n"
+    seg2 = "# A Appendix\n" + "appendix text " * 20
+    md = merge_outcomes([ChunkOutcome(1, 20, seg1), ChunkOutcome(21, 40, seg2)])
+    cut = md.index("# A Appendix") + 60
+    out, warn = trim_for_context(md, cut)
+    assert "<!-- p2r:pages 21-40 -->" in out
+    assert "ref entry" not in out
+    assert warn == "仅第 1–20 页发送给模型（超出上下文上限）"

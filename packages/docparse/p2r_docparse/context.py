@@ -22,7 +22,9 @@ def _drop_references(markdown: str) -> str:
             if len(h.group(1)) <= level:
                 end = h.start()
                 break
-        markdown = markdown[: m.start()] + markdown[end:]
+        # Page markers inside the removed span must survive for page accounting.
+        kept = "".join(k.group(0) + "\n" for k in _MARKER.finditer(markdown, m.end(), end))
+        markdown = markdown[: m.start()] + kept + markdown[end:]
 
 
 def trim_for_context(markdown: str, max_chars: int) -> tuple[str, str | None]:
