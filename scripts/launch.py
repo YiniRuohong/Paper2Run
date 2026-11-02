@@ -34,8 +34,8 @@ BASE_PORT = 8010
 # Python source roots (keep in sync with pyproject.toml [tool.pytest.ini_options]).
 # Putting them on PYTHONPATH means a stale editable install can never shadow them.
 SOURCE_ROOTS = ("services/api", "packages/contracts", "packages/artifacts", "packages/persistence",
-                "packages/sandbox", "packages/evaluation", "packages/codegen", "packages/runner",
-                "packages/kernel", "packages/orchestration")
+                "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/codegen",
+                "packages/runner", "packages/kernel", "packages/orchestration")
 
 WINDOWS = sys.platform == "win32"
 
