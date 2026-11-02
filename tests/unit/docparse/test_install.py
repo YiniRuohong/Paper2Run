@@ -27,6 +27,7 @@ class FakeRun:
         self.pip_available = pip_available
         self.calls: list[list[str]] = []
         self.envs: list[dict] = []
+        self.cancelled_fns: list = []
         self.rules: list = []  # (predicate(argv) -> bool, handler(argv) -> CompletedRun)
 
     def on(self, needle: str, handler) -> None:
@@ -36,6 +37,7 @@ class FakeRun:
         argv = [str(a) for a in argv]
         self.calls.append(argv)
         self.envs.append(env)
+        self.cancelled_fns.append(cancelled)
         for pred, handler in self.rules:
             if pred(argv):
                 return handler(argv)
@@ -396,3 +398,105 @@ def test_to_json_shape(tmp_path):
     inst, _, _ = make(tmp_path)
     assert set(inst.state().to_json()) == {
         "state", "step", "progress", "tier", "version", "bytes_on_disk", "error"}
+
+
+def _wait_until(fn, timeout=5.0):
+    done = threading.Event()
+    deadline = timeout
+    while deadline > 0 and not fn():
+        done.wait(0.01)
+        deadline -= 0.01
+    return fn()
+
+
+def test_cancel_passes_live_cancelled_callable(tmp_path):
+    inst, run, root = make(tmp_path)
+    reached = threading.Event()
+    seen: dict = {}
+
+    def pip(argv):
+        fn = run.cancelled_fns[-1]
+        seen["before"] = fn()
+        reached.set()
+        seen["after"] = _wait_until(fn)
+        return FAIL  # does NOT claim cancelled: only the live callable signals it
+
+    run.on("install --disable-pip-version-check", pip)
+    inst.start()
+    assert reached.wait(5)
+    s = inst.cancel()
+    assert seen == {"before": False, "after": True}
+    assert s.state == "not_installed"
+    assert not (root / "venv").exists()
+
+
+def test_uninstall_during_ensure_healthy_rebuild(tmp_path):
+    inst, run, root = make(tmp_path)
+    inst.start()
+    assert inst.wait(10).state == "ready"
+    (root / "mineru-home").mkdir(exist_ok=True)
+    reached = threading.Event()
+
+    order: list[str] = []
+
+    def pip(argv):
+        reached.set()
+        _wait_until(run.cancelled_fns[-1])
+        threading.Event().wait(0.2)  # worker lingers after seeing the cancel
+        order.append("worker-exit")
+        return FAIL
+
+    run.on("--version", lambda argv: FAIL)
+    run.on("install --disable-pip-version-check", pip)
+    result: list = []
+    t = threading.Thread(target=lambda: result.append(inst.ensure_healthy()))
+    t.start()
+    assert reached.wait(5)
+    s = inst.uninstall()
+    order.append("uninstall-returned")
+    assert s.state == "not_installed"
+    t.join(5)
+    assert order == ["worker-exit", "uninstall-returned"]
+    assert not t.is_alive() and result == [False]
+    assert inst.state().state == "not_installed"
+    assert not (root / "venv").exists() and not (root / "mineru-home").exists()
+    assert json.loads((root / "install-state.json").read_text(encoding="utf-8"))["state"] == "not_installed"
+
+
+def test_start_racing_uninstall_does_not_interleave(tmp_path, monkeypatch):
+    inst, run, root = make(tmp_path)
+    inst.start()
+    assert inst.wait(10).state == "ready"
+    events: list[str] = []
+    deleting, go = threading.Event(), threading.Event()
+    real_rmtree = install.shutil.rmtree
+
+    def slow_rmtree(path, *a, **kw):
+        if threading.current_thread().name == "uninst":
+            events.append("delete-begin")
+            deleting.set()
+            go.wait(5)
+            real_rmtree(path, *a, **kw)
+            events.append("delete-end")
+        else:
+            real_rmtree(path, *a, **kw)
+
+    monkeypatch.setattr(install.shutil, "rmtree", slow_rmtree)
+    calls_before = len(run.calls)
+    u = threading.Thread(target=inst.uninstall, name="uninst")
+    u.start()
+    assert deleting.wait(5)
+    started: list = []
+    s = threading.Thread(target=lambda: started.append(inst.start()), name="starter")
+    s.start()
+    s.join(0.2)
+    assert s.is_alive()  # start() is fenced off while uninstall deletes
+    assert len(run.calls) == calls_before
+    go.set()
+    u.join(5)
+    s.join(5)
+    assert not u.is_alive() and not s.is_alive()
+    assert inst.wait(10).state == "ready"  # start() ran fully after uninstall finished
+    assert events == ["delete-begin", "delete-end"] * 2  # venv and mineru-home
+    assert run.count("-m venv") == 2 and len(run.calls) > calls_before
+    assert (root / "venv").exists()

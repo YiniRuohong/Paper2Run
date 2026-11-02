@@ -98,6 +98,8 @@ class OfflineInstaller:
         self._disk_free = disk_free
         self._platform = platform
         self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)  # signalled when a worker ends / uninstall ends
+        self._uninstalling = False
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
         self._working = False
@@ -148,7 +150,8 @@ class OfflineInstaller:
     def start(self) -> InstallState:
         if self._platform() not in OFFLINE_PLATFORMS:
             raise DocParseError("DOCPARSE_OFFLINE_UNSUPPORTED")
-        with self._lock:
+        with self._cond:
+            self._cond.wait_for(lambda: not self._uninstalling)
             if self._working:
                 return self._read_locked()
             self._working = True
@@ -160,18 +163,28 @@ class OfflineInstaller:
         return self.state()
 
     def cancel(self) -> InstallState:
+        """Signal the active worker (background install or inline rebuild) and wait for it to end."""
         self._cancel.set()
-        thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join()
+        with self._cond:
+            self._cond.wait_for(lambda: not self._working)
         return self.state()
 
     def uninstall(self) -> InstallState:
-        self.cancel()
-        with self._lock:
+        """cancel -> wait -> delete -> write, with start()/ensure_healthy() fenced off meanwhile."""
+        with self._cond:
+            self._cond.wait_for(lambda: not self._uninstalling)
+            self._uninstalling = True
+            self._cancel.set()
+            self._cond.wait_for(lambda: not self._working)
+        try:
             for name in ("venv", "mineru-home"):
                 shutil.rmtree(self._root / name, ignore_errors=True)
-            self._write_locked(InstallState("not_installed"))
+            with self._lock:
+                self._write_locked(InstallState("not_installed"))
+        finally:
+            with self._cond:
+                self._uninstalling = False
+                self._cond.notify_all()
         return self.state()
 
     def wait(self, timeout: float) -> InstallState:
@@ -185,7 +198,7 @@ class OfflineInstaller:
         if self._platform() not in OFFLINE_PLATFORMS:
             return False
         with self._lock:
-            if self._working or self._read_locked().state != "ready":
+            if self._working or self._uninstalling or self._read_locked().state != "ready":
                 return False
             self._working = True
             self._cancel.clear()
@@ -196,8 +209,7 @@ class OfflineInstaller:
             shutil.rmtree(self._root / "venv", ignore_errors=True)
             self._work(("venv", "packages"), rebuild=True)
         finally:
-            with self._lock:
-                self._working = False
+            self._end_work()
         return self.state().state == "ready"
 
     def _version_ok(self) -> bool:
@@ -226,8 +238,12 @@ class OfflineInstaller:
             self._fail(_ERRORS["unexpected"])
         finally:
             if not rebuild:
-                with self._lock:
-                    self._working = False
+                self._end_work()
+
+    def _end_work(self) -> None:
+        with self._cond:
+            self._working = False
+            self._cond.notify_all()
 
     def _fail(self, message: str) -> None:
         shutil.rmtree(self._root / "venv", ignore_errors=True)
