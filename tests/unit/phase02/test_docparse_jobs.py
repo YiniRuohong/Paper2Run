@@ -183,7 +183,7 @@ def test_unexpected_exception_maps_to_fixed_code(tmp_path):
     (text,) = env.texts()
     assert text.error_json == {"code": "DOCPARSE_REMOTE_FAILED"}
     with env.sf() as db:
-        assert db.scalar(select(Job)).status == "succeeded"
+        assert db.scalar(select(Job)).status == "failed"
 
 
 def test_docparse_error_code_persisted(tmp_path):
@@ -257,3 +257,70 @@ def test_heartbeat_extends_lease(tmp_path):
     finally:
         JobRepository.heartbeat = original
     assert beats and env.paper().status == "ready"
+
+
+def test_duplicate_enqueue_collapses_and_ready_not_flipped(tmp_path):
+    env = Env(tmp_path)
+    first = env.enqueue("online", "k1")
+    second = env.enqueue("online", "k2")
+    assert first == second
+    assert len(env.texts()) == 1
+    assert env.run() is True and env.run() is False
+    assert env.paper().status == "ready"
+    assert env.texts()[0].status == "ready"
+
+
+def test_noop_when_no_parsing_record(tmp_path):
+    env = Env(tmp_path)
+    job_id = env.enqueue("online", "k1")
+    with env.sf() as db:
+        text = db.scalar(select(PaperTextRecord))
+        text.status = "ready"
+        db.get(PaperRecord, env.paper_id).status = "ready"
+        db.commit()
+    assert env.run() is True
+    assert env.online_calls == []
+    paper = env.paper()
+    assert paper.status == "ready" and paper.error_json is None
+    assert env.texts()[0].status == "ready" and env.texts()[0].error_json is None
+    with env.sf() as db:
+        assert db.get(Job, job_id).status == "succeeded"
+
+
+def test_put_bytes_failure_marks_failed(tmp_path):
+    env = Env(tmp_path, installer=FakeInstaller("ready"))
+    env.enqueue("offline", "k1")
+    real = env.store.put_bytes
+
+    def broken(data):
+        raise OSError("disk full")
+
+    env.store.put_bytes = broken
+    assert env.run() is True
+    env.store.put_bytes = real
+    (text,) = env.texts()
+    assert text.status == "failed" and text.error_json == {"code": "DOCPARSE_OFFLINE_FAILED"}
+    paper = env.paper()
+    assert paper.status == "failed" and paper.error_json == {"code": "DOCPARSE_OFFLINE_FAILED"}
+    with env.sf() as db:
+        assert db.scalar(select(Job)).status == "failed"
+
+
+def test_lost_lease_job_retaken_by_periodic_recovery(tmp_path):
+    env = Env(tmp_path)
+    stop, thread = start_docparse_worker(env.sf, env.store, env.service, recover_seconds=0.05)
+    try:
+        job_id = env.enqueue("online", "k1")
+        # Simulate a worker that died right after claiming: running with an expired lease.
+        with env.sf() as db:
+            job = db.get(Job, job_id)
+            job.status, job.leased_by = "running", "dead"
+            job.lease_until = datetime.now(timezone.utc) - timedelta(seconds=30)
+            db.commit()
+        for _ in range(200):
+            if env.paper().status == "ready":
+                break
+            threading.Event().wait(0.05)
+    finally:
+        assert stop_docparse_worker(stop, thread, timeout=5.0)
+    assert env.paper().status == "ready"

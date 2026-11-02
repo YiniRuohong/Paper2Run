@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import threading
+import time
 
 from sqlalchemy import select
 
 from p2r_docparse.errors import DocParseError
 from p2r_persistence.job_repository import JobRepository
-from p2r_persistence.models import PaperRecord, PaperTextRecord
+from p2r_persistence.models import Job, PaperRecord, PaperTextRecord
 
 from .docparse_service import DocParseService
 
@@ -17,15 +18,22 @@ _FALLBACK_CODES = {"online": "DOCPARSE_REMOTE_FAILED", "offline": "DOCPARSE_OFFL
 
 
 def enqueue_paper_parse(db, *, paper_id: str, mode: str, idempotency_key: str):
-    """Queue a parse; the mode is locked into the payload at this moment."""
+    """Queue a parse; the mode is locked into the payload at this moment.
+
+    A paper with a queued or running parse job reuses that job instead of adding another.
+    """
     paper = db.get(PaperRecord, paper_id)
     if paper is None:
         raise KeyError(paper_id)
+    active = db.scalar(select(Job).where(
+        Job.kind == PARSE_JOB_KIND, Job.status.in_(("queued", "running")),
+        Job.payload_ref.like(f"{paper_id}:%"),
+    ).order_by(Job.created_at))
+    if active is not None:
+        return active
     job = JobRepository(db).enqueue(kind=PARSE_JOB_KIND, payload_ref=f"{paper_id}:{mode}",
                                     idempotency_key=idempotency_key)
-    already = db.scalar(select(PaperTextRecord.id).where(
-        PaperTextRecord.paper_id == paper_id, PaperTextRecord.status == "parsing"))
-    if already is None or paper.status != "parsing":
+    if _latest_parsing(db, paper_id) is None:
         db.add(PaperTextRecord(paper_id=paper_id, source_sha256=paper.sha256, page_count=paper.page_count,
                                status="parsing"))
     paper.status = "parsing"
@@ -90,24 +98,33 @@ def process_next_parse_job(session_factory, artifact_store, service: DocParseSer
         db.commit()
 
     paper_id, _, mode = payload_ref.rpartition(":")
-    pdf = previous = text_id = None
-    result = None
-    code = None
+    try:
+        _run_claimed(session_factory, artifact_store, service, job_id=job_id, token=token,
+                     paper_id=paper_id, mode=mode, worker_id=worker_id,
+                     heartbeat_seconds=heartbeat_seconds)
+    except Exception:
+        _fail_cleanup(session_factory, job_id, worker_id, token, paper_id, mode)
+    return True
+
+
+def _run_claimed(session_factory, artifact_store, service, *, job_id, token, paper_id, mode,
+                 worker_id, heartbeat_seconds) -> None:
     with session_factory() as db:
         paper = db.get(PaperRecord, paper_id)
-        if paper is not None:
-            text = _latest_parsing(db, paper_id)
-            text_id = text.id if text is not None else None
-            previous = _previous_markdown(db, artifact_store, paper)
-            sha = paper.sha256
-    if text_id is None:
-        _finish(session_factory, job_id, worker_id, token, paper_id, None, "DOCPARSE_PDF_INVALID")
-        return True
+        text = _latest_parsing(db, paper_id) if paper is not None else None
+        if text is None:
+            # Nothing to parse (already finished or paper gone): complete as a no-op.
+            JobRepository(db).complete(job_id, worker_id=worker_id, fencing_token=token)
+            db.commit()
+            return
+        text_id, sha = text.id, paper.sha256
+        previous = _previous_markdown(db, artifact_store, paper)
 
     stop, lost = threading.Event(), threading.Event()
     beat = threading.Thread(target=_heartbeat_loop, name="docparse-heartbeat", daemon=True,
                             args=(session_factory, job_id, worker_id, token, heartbeat_seconds, stop, lost))
     beat.start()
+    result = code = None
     try:
         try:
             pdf = artifact_store.open_bytes(sha)
@@ -116,15 +133,28 @@ def process_next_parse_job(session_factory, artifact_store, service: DocParseSer
                                    cancelled=lost.is_set)
         except DocParseError as e:
             code = e.code
-        except Exception:
-            code = _FALLBACK_CODES.get(mode, "DOCPARSE_REMOTE_FAILED")
     finally:
         stop.set()
         beat.join()
     if lost.is_set():
-        return True  # lease was taken over; the new owner finishes the job
+        return  # lease taken over or expired; periodic recovery requeues it
     _finish(session_factory, job_id, worker_id, token, paper_id, text_id, code, result, artifact_store)
-    return True
+
+
+def _fail_cleanup(session_factory, job_id, worker_id, token, paper_id, mode) -> None:
+    code = _FALLBACK_CODES.get(mode, "DOCPARSE_REMOTE_FAILED")
+    try:
+        with session_factory() as db:
+            JobRepository(db).fail(job_id, worker_id=worker_id, fencing_token=token, error=code)
+            paper = db.get(PaperRecord, paper_id)
+            if paper is not None and paper.status == "parsing":
+                text = _latest_parsing(db, paper_id)
+                if text is not None:
+                    text.status, text.error_json = "failed", {"code": code}
+                paper.status, paper.error_json = "failed", {"code": code}
+            db.commit()
+    except Exception:
+        pass  # periodic lease recovery is the backstop
 
 
 def _finish(session_factory, job_id, worker_id, token, paper_id, text_id, code, result=None,
@@ -135,7 +165,7 @@ def _finish(session_factory, job_id, worker_id, token, paper_id, text_id, code, 
             db.rollback()
             return
         paper = db.get(PaperRecord, paper_id)
-        text = db.get(PaperTextRecord, text_id) if text_id else None
+        text = db.get(PaperTextRecord, text_id)
         if result is not None:
             text.status = "ready"
             text.text_sha256 = address.sha256
@@ -148,24 +178,33 @@ def _finish(session_factory, job_id, worker_id, token, paper_id, text_id, code, 
             text.error_json = None
             paper.status = "ready"
         else:
-            if text is not None:
-                text.status = "failed"
-                text.error_json = {"code": code}
-            if paper is not None:
-                paper.status = "failed"
-                paper.error_json = {"code": code}
+            text.status = "failed"
+            text.error_json = {"code": code}
+            paper.status = "failed"
+            paper.error_json = {"code": code}
         db.commit()
 
 
-def start_docparse_worker(session_factory, artifact_store, service: DocParseService, *,
-                          heartbeat_seconds: float = 20.0):
-    stop = threading.Event()
+def _recover(session_factory) -> None:
     with session_factory() as db:
         JobRepository(db).requeue_expired(kinds=(PARSE_JOB_KIND,))
         db.commit()
 
+
+def start_docparse_worker(session_factory, artifact_store, service: DocParseService, *,
+                          heartbeat_seconds: float = 20.0, recover_seconds: float = 30.0):
+    stop = threading.Event()
+    _recover(session_factory)
+
     def run():
+        last = time.monotonic()
         while not stop.is_set():
+            if time.monotonic() - last >= recover_seconds:
+                last = time.monotonic()
+                try:
+                    _recover(session_factory)
+                except Exception:
+                    pass
             try:
                 worked = process_next_parse_job(session_factory, artifact_store, service,
                                                 heartbeat_seconds=heartbeat_seconds)
