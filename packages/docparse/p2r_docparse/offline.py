@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
+import zipfile
+import zlib
 from pathlib import Path
 from typing import Callable
 
@@ -14,6 +17,18 @@ from .proc import CompletedRun, mineru_kit, run_tree, venv_python  # noqa: F401 
 
 _TEXT_FIELDS = ("text", "table_body", "latex")
 _PROXY_NAMES = {"http_proxy", "https_proxy", "no_proxy", "all_proxy"}
+
+# mineru-kit 4.1.3 `-f zip` layout: markdown.md, middle_json.json, structured_content.json
+# and images/ at the top level of <output>/<input stem>.zip.
+_STRUCTURED_MEMBER = "structured_content.json"
+_MARKDOWN_MEMBER = "markdown.md"
+_MAX_MEMBER_BYTES = 32 * 1024 * 1024
+_MAX_MEMBERS = 5000
+# Page furniture that is not paper content. Footnotes stay: they carry real text.
+_FURNITURE_TYPES = frozenset({"header", "footer", "page_number", "aside_text"})
+_TITLE_TYPES = {"doc_title": 1, "paragraph_title": 2}
+_IMAGE_MARKDOWN = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_BLANK_RUNS = re.compile(r"\n{3,}")
 
 
 def _base_env(root: Path) -> dict[str, str]:
@@ -76,18 +91,136 @@ def _read_content_list(path: Path, page_count: int) -> list[ChunkOutcome] | None
     return [ChunkOutcome(p, p, "\n\n".join(texts)) for p, texts in sorted(pages.items())]
 
 
+def _text_of(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _block_text(block: dict) -> str | None:
+    """One structured_content block as Markdown text; images are never embedded."""
+    kind = block.get("type")
+    if kind in _FURNITURE_TYPES:
+        return None
+    parts: list[str] = []
+    content = _text_of(block.get("content"))
+    if content:
+        if kind in _TITLE_TYPES:
+            level = block.get("level")
+            if not isinstance(level, int) or isinstance(level, bool):
+                level = _TITLE_TYPES[kind]
+            content = "#" * min(max(level, 1), 6) + " " + " ".join(content.split())
+        elif kind == "equation":
+            content = f"$$\n{content}\n$$"
+        parts.append(content)
+    for key in ("captions", "footnotes"):
+        extra = block.get(key)
+        for sub in extra if isinstance(extra, list) else []:
+            text = _text_of(sub.get("content")) if isinstance(sub, dict) else ""
+            if text:
+                parts.append(text)
+    return "\n\n".join(parts) or None
+
+
+def _structured_outcomes(raw: bytes, page_count: int) -> list[ChunkOutcome] | None:
+    """One outcome per page that has text; None when the JSON is not usable."""
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError):
+        return None
+    pages_raw = data.get("pages") if isinstance(data, dict) else None
+    if not isinstance(pages_raw, list):
+        return None
+    pages: dict[int, list[str]] = {}
+    for page in pages_raw:
+        if not isinstance(page, dict):
+            return None
+        idx, blocks = page.get("page_idx"), page.get("blocks")
+        if not isinstance(idx, int) or isinstance(idx, bool) or not isinstance(blocks, list):
+            return None
+        if not 0 <= idx < page_count:
+            continue
+        for block in blocks:
+            text = _block_text(block) if isinstance(block, dict) else None
+            if text:
+                pages.setdefault(idx + 1, []).append(text)
+    if not pages:
+        return None
+    return [ChunkOutcome(p, p, "\n\n".join(texts)) for p, texts in sorted(pages.items())]
+
+
+def _markdown_outcomes(text: str, page_count: int) -> list[ChunkOutcome] | None:
+    cleaned = _BLANK_RUNS.sub("\n\n", _IMAGE_MARKDOWN.sub("", text)).strip()
+    return [ChunkOutcome(1, page_count, cleaned)] if cleaned else None
+
+
+def _safe_member_name(name: str) -> bool:
+    if not name or "\\" in name or "\x00" in name or name.startswith("/"):
+        return False
+    if len(name) > 1 and name[1] == ":" and name[0].isalpha():
+        return False
+    parts = name.split("/")
+    if parts[-1] == "":  # directory entry
+        parts = parts[:-1]
+    return bool(parts) and all(part not in ("", "..") for part in parts)
+
+
+def _read_zip(path: Path, page_count: int) -> list[ChunkOutcome]:
+    """Read the two text members in memory. Nothing from the archive touches the disk."""
+    wanted: dict[str, bytes] = {}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+            if len(infos) > _MAX_MEMBERS:
+                raise DocParseError("DOCPARSE_OFFLINE_FAILED")
+            for info in infos:
+                if not _safe_member_name(info.filename) or info.file_size > _MAX_MEMBER_BYTES:
+                    raise DocParseError("DOCPARSE_OFFLINE_FAILED")
+            for info in infos:
+                if info.filename not in (_STRUCTURED_MEMBER, _MARKDOWN_MEMBER):
+                    continue
+                if info.filename in wanted:
+                    raise DocParseError("DOCPARSE_OFFLINE_FAILED")
+                with archive.open(info) as member:
+                    data = member.read(_MAX_MEMBER_BYTES + 1)
+                if len(data) > _MAX_MEMBER_BYTES:
+                    raise DocParseError("DOCPARSE_OFFLINE_FAILED")
+                wanted[info.filename] = data
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError, RuntimeError,
+            NotImplementedError, zlib.error):
+        raise DocParseError("DOCPARSE_OFFLINE_FAILED") from None
+    structured = wanted.get(_STRUCTURED_MEMBER)
+    if structured is not None:
+        outcomes = _structured_outcomes(structured, page_count)
+        if outcomes:
+            return outcomes
+    markdown = wanted.get(_MARKDOWN_MEMBER)
+    if markdown is not None:
+        try:
+            outcomes = _markdown_outcomes(markdown.decode("utf-8"), page_count)
+        except UnicodeError:
+            outcomes = None
+        if outcomes:
+            return outcomes
+    raise DocParseError("DOCPARSE_OFFLINE_FAILED")
+
+
 def _read_output(out_dir: Path, page_count: int) -> list[ChunkOutcome]:
-    """Turn mineru-kit output into per-page outcomes (content-list JSON) or one
-    whole-document segment (Markdown). Kept in one place so the layout can be adjusted."""
+    """Turn mineru-kit output into per-page outcomes or one whole-document segment.
+    The real `-f zip` archive is read first; plain-directory content-list JSON and
+    Markdown stay as fallbacks. Kept in one place so the layout can be adjusted."""
+    archives = sorted(out_dir.rglob("*.zip"))
+    if archives:
+        return _read_zip(archives[0], page_count)
     for path in sorted(out_dir.rglob("*.json")):
         outcomes = _read_content_list(path, page_count)
         if outcomes:
             return outcomes
     for path in sorted(out_dir.rglob("*.md")):
         try:
-            return [ChunkOutcome(1, page_count, path.read_text(encoding="utf-8").strip())]
+            outcomes = _markdown_outcomes(path.read_text(encoding="utf-8"), page_count)
         except (OSError, UnicodeError):
             continue
+        if outcomes:
+            return outcomes
     raise DocParseError("DOCPARSE_OFFLINE_FAILED")
 
 
@@ -100,7 +233,8 @@ def parse_offline(pdf: bytes, *, root: Path, tier: str, version: str, timeout: f
         in_pdf, out_dir = work / "in.pdf", work / "out"
         in_pdf.write_bytes(pdf)
         out_dir.mkdir()
-        argv = [str(mineru_kit(root)), "parse", str(in_pdf), "-o", str(out_dir), "--tier", tier]
+        argv = [str(mineru_kit(root)), "parse", str(in_pdf), "-o", str(out_dir), "-f", "zip",
+                "--tier", tier]
         try:
             done = run(argv, env=offline_env(root), cwd=work, timeout=timeout, cancelled=cancelled)
         except OSError:

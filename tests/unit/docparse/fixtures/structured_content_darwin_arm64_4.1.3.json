@@ -1,0 +1,275 @@
+{
+ "pages": [
+  {
+   "page_idx": 0,
+   "blocks": [
+    {
+     "type": "aside_text",
+     "bbox": [
+      0.024,
+      0.275,
+      0.059,
+      0.7
+     ],
+     "content": "arXiv:2010.11929v2 [cs.CV] 3 Jun 2021"
+    },
+    {
+     "type": "header",
+     "bbox": [
+      0.173,
+      0.033,
+      0.48,
+      0.048
+     ],
+     "content": "Published as a conference paper at ICLR 2021"
+    },
+    {
+     "type": "doc_title",
+     "bbox": [
+      0.173,
+      0.099,
+      0.825,
+      0.147
+     ],
+     "level": 1,
+     "content": "AN IMAGE IS WORTH 16X16 WORDS: TRANSFORMERS FOR IMAGE RECOGNITION AT SCALE"
+    },
+    {
+     "type": "text",
+     "bbox": [
+      0.229,
+      0.17,
+      0.799,
+      0.22
+     ],
+     "content": "**Alexey Dosovitskiy**<sup>∗,†</sup>**, Lucas Beyer**<sup>∗</sup>**, Alexander Kolesnikov**<sup>∗</sup>**, Dirk Weissenborn**<sup>∗</sup>, **Xiaohua Zhai**∗**, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer, Georg Heigold, Sylvain "
+    },
+    {
+     "type": "page_number",
+     "bbox": [
+      0.495,
+      0.949,
+      0.504,
+      0.96
+     ],
+     "content": "1"
+    }
+   ]
+  },
+  {
+   "page_idx": 2,
+   "blocks": [
+    {
+     "type": "header",
+     "bbox": [
+      0.173,
+      0.033,
+      0.481,
+      0.048
+     ],
+     "content": "Published as a conference paper at ICLR 2021"
+    },
+    {
+     "type": "image",
+     "bbox": [
+      0.241,
+      0.101,
+      0.765,
+      0.314
+     ],
+     "content": "",
+     "captions": [
+      {
+       "bbox": [
+        0.171,
+        0.335,
+        0.826,
+        0.405
+       ],
+       "content": "Figure 1: Model overview. We split an image into fixed-size patches, linearly embed each of them, add position embeddings, and feed the resulting sequence of vectors to a standard Transformer encoder. In order to perform classification, we "
+      }
+     ],
+     "footnotes": [],
+     "image_source": "images/page_2_image_1.jpg"
+    },
+    {
+     "type": "paragraph_title",
+     "bbox": [
+      0.174,
+      0.452,
+      0.285,
+      0.468
+     ],
+     "level": 2,
+     "content": "3 METHOD"
+    },
+    {
+     "type": "text",
+     "bbox": [
+      0.172,
+      0.498,
+      0.826,
+      0.542
+     ],
+     "content": "In model design we follow the original Transformer (Vaswani et al., 2017) as closely as possible. An advantage of this intentionally simple setup is that scalable NLP Transformer architectures – and their efficient implementations – can be "
+    },
+    {
+     "type": "page_number",
+     "bbox": [
+      0.494,
+      0.949,
+      0.505,
+      0.961
+     ],
+     "content": "3"
+    }
+   ]
+  },
+  {
+   "page_idx": 4,
+   "blocks": [
+    {
+     "type": "header",
+     "bbox": [
+      0.173,
+      0.033,
+      0.481,
+      0.048
+     ],
+     "content": "Published as a conference paper at ICLR 2021"
+    },
+    {
+     "type": "table",
+     "bbox": [
+      0.278,
+      0.103,
+      0.721,
+      0.167
+     ],
+     "content": "| Model | Layers | Hidden size D | MLP size | Heads | Params |\n| --- | --- | --- | --- | --- | --- |\n| ViT-Base | 12 | 768 | 3072 | 12 | 86M |\n| ViT-Large | 24 | 1024 | 4096 | 16 | 307M |\n| ViT-Huge | 32 | 1280 | 5120 | 16 | 632M |",
+     "captions": [
+      {
+       "bbox": [
+        0.317,
+        0.179,
+        0.681,
+        0.194
+       ],
+       "content": "Table 1: Details of Vision Transformer model variants."
+      }
+     ],
+     "footnotes": [],
+     "image_source": "images/page_4_table_1.jpg"
+    },
+    {
+     "type": "text",
+     "bbox": [
+      0.171,
+      0.218,
+      0.827,
+      0.276
+     ],
+     "content": "We also evaluate on the 19-task VTAB classification suite (Zhai et al., 2019b). VTAB evaluates low-data transfer to diverse tasks, using 1 000 training examples per task. The tasks are divided into three groups: Natural – tasks like the abo"
+    },
+    {
+     "type": "paragraph_title",
+     "bbox": [
+      0.172,
+      0.724,
+      0.472,
+      0.739
+     ],
+     "level": 2,
+     "content": "4.2 COMPARISON TO STATE OF THE ART"
+    },
+    {
+     "type": "page_number",
+     "bbox": [
+      0.494,
+      0.949,
+      0.506,
+      0.961
+     ],
+     "content": "5"
+    }
+   ]
+  },
+  {
+   "page_idx": 5,
+   "blocks": [
+    {
+     "type": "header",
+     "bbox": [
+      0.173,
+      0.033,
+      0.481,
+      0.049
+     ],
+     "content": "Published as a conference paper at ICLR 2021"
+    },
+    {
+     "type": "table",
+     "bbox": [
+      0.177,
+      0.1,
+      0.821,
+      0.249
+     ],
+     "content": "|  | Ours-JFT(ViT-H/14) | Ours-JFT(ViT-L/16) | Ours-I21k(ViT-L/16) | BiT-L(ResNet152x4) | Noisy Student (EfficientNet-L2) |\n| --- | --- | --- | --- | --- | --- |\n| ImageNet | 88.55±0.04 | 87.76±0.03 | 85.30±0.02 | 87.54±0.02 | 88.4/88.5<sup",
+     "captions": [
+      {
+       "bbox": [
+        0.171,
+        0.26,
+        0.827,
+        0.345
+       ],
+       "content": "Table 2: Comparison with state of the art on popular image classification benchmarks. We report mean and standard deviation of the accuracies, averaged over three fine-tuning runs. Vision Transformer models pre-trained on the JFT-300M datas"
+      }
+     ],
+     "footnotes": [],
+     "image_source": "images/page_5_table_1.jpg"
+    },
+    {
+     "type": "text",
+     "bbox": [
+      0.171,
+      0.522,
+      0.828,
+      0.622
+     ],
+     "continues_prev": true,
+     "content": "model still took substantially less compute to pre-train than prior state of the art. However, we note that pre-training efficiency may be affected not only by the architecture choice, but also other parameters, such as training schedule, o"
+    },
+    {
+     "type": "paragraph_title",
+     "bbox": [
+      0.172,
+      0.714,
+      0.481,
+      0.729
+     ],
+     "level": 2,
+     "content": "4.3 PRE-TRAINING DATA REQUIREMENTS"
+    },
+    {
+     "type": "page_number",
+     "bbox": [
+      0.494,
+      0.949,
+      0.506,
+      0.961
+     ],
+     "content": "6"
+    }
+   ]
+  }
+ ],
+ "metadata": {
+  "producer": {
+   "name": "mineru",
+   "version": "4.1.3"
+  }
+ },
+ "is_full_document": false
+}
