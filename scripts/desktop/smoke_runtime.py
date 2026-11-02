@@ -4,6 +4,8 @@ Starts ``serve.py`` with the given interpreter exactly like ``main.cjs`` does
 (``-I -B -X utf8``, scrubbed ``PYTHON*`` env, stdin as a pipe, throwaway
 ``P2R_DEMO_DIR``), then checks:
 
+0. ``-m pip --version`` works (same flags/env) and reports pip >= 22.3, which
+   the on-demand MinerU installer needs for ``pip --python <venv python>``;
 1. the ``{"event": "listening", "port": N}`` handshake line arrives;
 2. ``GET /healthz`` answers ``{"status": "ok"}``;
 3. ``GET /api/v1/demo`` (the first call the UI makes) answers 200 JSON;
@@ -19,6 +21,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,6 +32,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SERVE = ROOT / "apps" / "desktop" / "backend" / "serve.py"
+ISOLATED_FLAGS = ("-I", "-B", "-X", "utf8")  # how main.cjs starts the runtime
+# ``pip install --python <interpreter>`` first shipped in pip 22.3.
+PIP_MIN = (22, 3)
 
 
 def clean_env(data_dir: str, web_dist: str | None) -> dict[str, str]:
@@ -38,6 +44,35 @@ def clean_env(data_dir: str, web_dist: str | None) -> dict[str, str]:
     if web_dist:
         env["P2R_WEB_DIST"] = web_dist
     return env
+
+
+def parse_pip_version(stdout: str) -> tuple[int, int] | None:
+    """``(major, minor)`` from ``pip X.Y[.Z] from ...``; None if it is not that line."""
+    match = re.match(r"pip (\d+)\.(\d+)", stdout)
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def check_pip(python: str, data_dir: str) -> str | None:
+    """Run ``-m pip --version`` like the app would; return a failure message or None."""
+    cmd = [python, *ISOLATED_FLAGS, "-m", "pip", "--version"]
+    print(f"[smoke] $ {' '.join(cmd)}", flush=True)
+    try:
+        proc = subprocess.run(cmd, cwd=data_dir, env=clean_env(data_dir, None),
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"bundled pip is unusable ({exc}); on-demand MinerU install needs it"
+    out = proc.stdout.strip()
+    print(f"[smoke] pip --version -> exit {proc.returncode}: {out or proc.stderr.strip()}", flush=True)
+    version = parse_pip_version(out)
+    if proc.returncode != 0 or not out.startswith("pip ") or version is None:
+        detail = (proc.stderr.strip() or out or "no output").splitlines()[-1]
+        return (f"bundled pip is missing or broken (-m pip --version exit {proc.returncode}: "
+                f"{detail}); on-demand MinerU install needs it")
+    if version < PIP_MIN:
+        return (f"bundled pip {version[0]}.{version[1]} is older than "
+                f"{PIP_MIN[0]}.{PIP_MIN[1]} (needed for pip install --python)")
+    return None
 
 
 def get(url: str, timeout: float = 5.0) -> tuple[int, str, bytes]:
@@ -59,7 +94,12 @@ def main(argv: list[str] | None = None) -> int:
         args.web_dist = os.path.abspath(args.web_dist)
 
     data_dir = tempfile.mkdtemp(prefix="p2r-smoke-")
-    cmd = [args.python, "-I", "-B", "-X", "utf8", args.serve]
+    failures: list[str] = []
+    pip_failure = check_pip(args.python, data_dir)
+    if pip_failure:
+        failures.append(pip_failure)
+
+    cmd = [args.python, *ISOLATED_FLAGS, args.serve]
     print(f"[smoke] $ {' '.join(cmd)}  (P2R_DEMO_DIR={data_dir})", flush=True)
     proc = subprocess.Popen(cmd, cwd=data_dir, env=clean_env(data_dir, args.web_dist),
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -73,7 +113,6 @@ def main(argv: list[str] | None = None) -> int:
             lines.put(line)
 
     threading.Thread(target=pump, daemon=True).start()
-    failures: list[str] = []
     try:
         port = None
         deadline = time.monotonic() + args.timeout

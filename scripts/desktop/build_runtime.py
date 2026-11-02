@@ -19,7 +19,9 @@ Steps (stdlib only; run with any Python >= 3.11, e.g. the repo ``.venv``):
    runtime can be assembled on macOS and vice versa. Versions are pinned to
    the committed ``uv.lock`` (``--no-lock`` to opt out); every installed
    requirement is then re-checked against the TARGET's environment markers;
-4. prune dead weight (tests, idlelib, tkinter/Tcl, ensurepip, pip, headers);
+4. prune dead weight (tests, idlelib, tkinter/Tcl, ensurepip, setuptools,
+   headers). pip is KEPT, intact, so the app can install MinerU on demand
+   into a separate venv (``p2r_docparse.install`` runs ``-m pip --python``);
 5. precompile bytecode with ``unchecked-hash`` invalidation so the read-only
    app bundle is never written to at runtime (keeps the macOS code-signature
    seal intact and works under per-machine installs);
@@ -110,8 +112,11 @@ TARGETS: dict[str, Target] = {
 
 # Stdlib parts no server code path imports.
 PRUNE_STDLIB = ("test", "idlelib", "tkinter", "turtledemo", "turtle.py", "ensurepip", "lib2to3")
-# Site-packages entries that only matter for installing packages.
-PRUNE_SITE = ("pip", "setuptools", "_distutils_hack", "distutils-precedence.pth")
+# Site-packages entries that only matter for building packages. pip stays: the
+# on-demand MinerU installer drives a --without-pip venv with ``-m pip --python``.
+PRUNE_SITE = ("setuptools", "_distutils_hack", "distutils-precedence.pth")
+# Never test-pruned: shipped as PBS installed it (bytecode is rebuilt like the rest).
+KEEP_INTACT_SITE = ("pip",)
 
 
 def log(text: str) -> None:
@@ -189,7 +194,11 @@ def layout(python_dir: Path, target: Target) -> dict[str, Path]:
 
 
 def pip_tool(site_packages: Path) -> Path:
-    """Copy the archive's pure-Python pip out of the runtime (it gets pruned)."""
+    """Copy the archive's pure-Python pip out of the runtime.
+
+    The host runs this copy, not the runtime's own pip, so only the tool root
+    is on the pip process's sys.path while the runtime site-packages fills up.
+    """
     tool_root = CACHE_DIR / f"pip-tool-{PBS_RELEASE}"
     if not (tool_root / "pip" / "__main__.py").is_file():
         source = site_packages / "pip"
@@ -313,11 +322,12 @@ def prune(python_dir: Path, paths: dict[str, Path], target: Target) -> None:
         remove(lib / name)
     for name in PRUNE_SITE:
         remove(site / name)
-    for dist_info in list(site.glob("pip-*.dist-info")) + list(site.glob("setuptools-*.dist-info")):
+    for dist_info in list(site.glob("setuptools-*.dist-info")):
         remove(dist_info)
-    # Test suites shipped inside third-party packages (never inside p2r_*).
+    # Test suites shipped inside third-party packages (never inside p2r_* or pip).
     for tests in [p for p in site.rglob("*") if p.is_dir() and p.name in ("tests", "test")]:
-        if tests.exists() and not tests.relative_to(site).parts[0].startswith("p2r_"):
+        top = tests.relative_to(site).parts[0]
+        if tests.exists() and not top.startswith("p2r_") and top not in KEEP_INTACT_SITE:
             remove(tests)
     for cache in [p for p in python_dir.rglob("__pycache__") if p.is_dir()]:
         remove(cache)
