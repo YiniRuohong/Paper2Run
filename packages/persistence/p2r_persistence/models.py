@@ -239,6 +239,23 @@ class PaperVersionRecord(TimestampMixin, Base):
     media_type: Mapped[str] = mapped_column(String(255), nullable=False, default="application/pdf", server_default="application/pdf")
 
 
+class PaperTextRecord(TimestampMixin, Base):
+    __tablename__ = "paper_texts"
+    __table_args__ = (CheckConstraint("status IN ('parsing', 'ready', 'failed')", name="ck_paper_text_status"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: "ptx_" + str(uuid.uuid4()))
+    paper_id: Mapped[str] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    text_sha256: Mapped[str | None] = mapped_column(String(64))
+    backend: Mapped[str | None] = mapped_column(String(32))
+    backend_version: Mapped[str | None] = mapped_column(String(64))
+    page_count: Mapped[int] = mapped_column(nullable=False)
+    pages_parsed: Mapped[int] = mapped_column(nullable=False, default=0)
+    chunk_map_json: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    warnings_json: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="parsing")
+    error_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
 class SourceRefRecord(Base):
     __tablename__ = "source_refs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: "sr_" + str(uuid.uuid4()))
