@@ -58,6 +58,7 @@ class Env:
 
         self.service = DocParseService(tmp_path / "dp", installer=installer or FakeInstaller(),
                                        parse_online_fn=on, parse_offline_fn=off)
+        self.service.settings.set_mode("online")  # queued online jobs need online to still be selected
         with self.sf() as db:
             user = UserRecord(display_name="u", can_create_project=True)
             db.add(user)
@@ -161,16 +162,48 @@ def test_offline_ready_uses_tier_and_version(tmp_path):
     assert env.texts()[0].backend == "offline_mineru"
 
 
-def test_mode_locked_at_enqueue(tmp_path):
+def test_online_job_queued_then_mode_switched_uploads_nothing(tmp_path):
+    """I6/R1: a queued online job must not upload once the user has moved to offline."""
     env = Env(tmp_path, installer=FakeInstaller("ready"))
     env.service.settings.set_mode("online")
     env.enqueue("online", "k1")
     env.service.settings.set_mode("offline")
     env.run()
-    assert len(env.online_calls) == 1 and env.offline_calls == []
+    assert env.online_calls == [] and env.offline_calls == []
+    (text,) = env.texts()
+    assert text.status == "failed" and text.error_json == {"code": "DOCPARSE_MODE_CHANGED"}
+    assert env.paper().status == "failed"
     env.enqueue("offline", "k2")
     env.run()
-    assert len(env.online_calls) == 1 and len(env.offline_calls) == 1
+    assert env.online_calls == [] and len(env.offline_calls) == 1
+
+
+def test_offline_job_keeps_running_offline_after_switch_to_online(tmp_path):
+    env = Env(tmp_path, installer=FakeInstaller("ready"))
+    env.service.settings.set_mode("offline")
+    env.enqueue("offline", "k1")
+    env.service.settings.set_mode("online")
+    env.run()
+    assert env.online_calls == [] and len(env.offline_calls) == 1
+    assert env.paper().status == "ready"
+
+
+def test_previous_markdown_only_reused_from_online_records(tmp_path):
+    """S2: an offline result must never seed an online retry."""
+    partial = "<!-- p2r:pages 1-3 -->\n# old"
+    for backend, expected in (("offline_mineru", None), ("online_agent", partial)):
+        (tmp_path / backend).mkdir()
+        env = Env(tmp_path / backend)
+        address = env.store.put_bytes(partial.encode())
+        with env.sf() as db:
+            db.add(PaperTextRecord(paper_id=env.paper_id, source_sha256=env.paper().sha256, page_count=3,
+                                   status="ready", text_sha256=address.sha256, backend=backend,
+                                   warnings_json=["w"]))
+            db.commit()
+        env.service.settings.set_mode("online")
+        env.enqueue("online", "k1")
+        env.run()
+        assert env.online_calls[0]["previous_markdown"] == expected
 
 
 def test_unexpected_exception_maps_to_fixed_code(tmp_path):

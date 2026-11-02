@@ -64,6 +64,7 @@ const ERROR_REASONS = new Map<string, string>([
   ['DOCPARSE_RESPONSE_TOO_LARGE', '在线服务返回了不安全或过大的内容，已拒绝'],
   ['DOCPARSE_CANCELLED', '解析已取消'],
   ['DOCPARSE_MODE_UNSET', '尚未选择解析方式'],
+  ['DOCPARSE_MODE_CHANGED', '解析方式已更改，请重试'],
 ]);
 const UNKNOWN_ERROR_REASON = '解析失败（未知原因）';
 

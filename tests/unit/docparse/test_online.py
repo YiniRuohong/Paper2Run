@@ -269,7 +269,7 @@ def test_invalid_url_from_remote_marks_chunk_missing():
     fake = Fake(states=("done",), file_url="https://mineru.net/a b")
     with pytest.raises(DocParseError) as e:
         parse_online(minimal_pdf(["a"]), client=client(fake))
-    assert e.value.code == "DOCPARSE_REMOTE_FAILED"  # sole chunk missing -> all failed
+    assert e.value.code == "DOCPARSE_UNSAFE_URL"  # sole chunk missing -> all failed, keeps its code
     ok = Fake(states=("done",))
 
     def mixed(req):
@@ -357,3 +357,66 @@ def test_transport_body_cap(server):
     assert e.value.code == "DOCPARSE_RESPONSE_TOO_LARGE"
     with pytest.raises(DocParseError):
         urllib_transport(HttpRequest("GET", server + "/big", {}, None, 5.0, max_body=10))
+
+
+def test_blank_markdown_is_a_missing_chunk():
+    """I5: an empty result must not count as a parsed page."""
+    fake = Fake(states=("done",), markdown="  \n")
+    with pytest.raises(DocParseError) as e:
+        parse_online(minimal_pdf(["a"]), client=client(fake))
+    assert e.value.code == "DOCPARSE_REMOTE_FAILED"
+
+    pdf = minimal_pdf([f"p{i}" for i in range(21)])
+    blank_second = Fake(states=("done",))
+    real = blank_second.__call__
+
+    def second_blank(req):
+        resp = real(req)
+        return HttpResponse(200, b" ") if req.url == MD_URL and blank_second.n_tasks == 2 else resp
+
+    res = parse_online(pdf, client=client(second_blank))
+    assert res.pages_parsed == 20 and res.warnings == ["第 21 页解析失败，未包含"]
+    assert res.chunks[1]["status"] == "missing"
+
+
+def test_blank_reused_segment_is_parsed_again():
+    pdf = minimal_pdf([f"p{i}" for i in range(21)])
+    previous = "<!-- p2r:pages 1-20 -->\n \n\n<!-- p2r:page 21 -->\n# ok"
+    fake = Fake(states=("done",))
+    res = parse_online(pdf, client=client(fake), previous_markdown=previous)
+    names = [json.loads(r.body)["file_name"] for r in fake.requests if r.url == SUBMIT]
+    assert names == ["paper-p1-20.pdf"]
+    assert res.warnings == []
+
+
+def test_all_chunks_failed_keeps_last_fixed_code():
+    fake = Fake(submits=[HttpResponse(429, b"")])
+    with pytest.raises(DocParseError) as e:
+        parse_online(minimal_pdf(["a"]), client=client(fake, max_retries=0))
+    assert e.value.code == "DOCPARSE_RATE_LIMITED"
+    fake = Fake(file_url="https://evil.example/x")
+    with pytest.raises(DocParseError) as e:
+        parse_online(minimal_pdf(["a"]), client=client(fake))
+    assert e.value.code == "DOCPARSE_UNSAFE_URL"
+
+
+def test_transport_rejects_body_shorter_than_content_length():
+    class Short(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.write(b"x" * 10)
+            self.close_connection = True
+
+        def log_message(self, *a):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Short)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(OSError):
+            urllib_transport(HttpRequest("GET", f"http://127.0.0.1:{server.server_port}/", {}, None, 5.0))
+    finally:
+        server.shutdown()
+        server.server_close()

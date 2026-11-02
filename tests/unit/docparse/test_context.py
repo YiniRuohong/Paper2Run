@@ -44,3 +44,11 @@ def test_trim_keeps_markers_inside_references():
     assert "<!-- p2r:pages 21-40 -->" in out
     assert "ref entry" not in out
     assert warn == "仅第 1–20 页发送给模型（超出上下文上限）"
+
+
+def test_trim_does_not_count_missing_pages_as_sent():
+    md = merge_outcomes([ChunkOutcome(1, 20, "a" * 100), ChunkOutcome(21, 40, None),
+                         ChunkOutcome(41, 60, "c" * 100)])
+    cut = md.index("c" * 100) + 50
+    out, warn = trim_for_context(md, cut)
+    assert warn == "仅第 1–20 页发送给模型（超出上下文上限）"

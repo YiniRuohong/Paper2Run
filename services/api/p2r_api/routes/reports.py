@@ -22,6 +22,7 @@ from p2r_runner import FIXTURE_RECIPE_ID, FIXTURE_RECIPE_VERSION, REAL_RECIPE_ID
 from ..auth import require_project_access
 from ..demo_receipts import lookup as receipt_lookup, save as receipt_save
 from ..dependencies import actor_id
+from ..paper_text import latest_paper_text
 from .experiments import write_check
 
 router = APIRouter()
@@ -92,6 +93,17 @@ def _environment_snapshot(db, run: RunRecord) -> dict[str, Any]:
     }
 
 
+def _source_block(db, paper, extraction) -> dict:
+    """Frozen source identity; PDF papers also record which backend parsed them and what was missing."""
+    source = {"paper_id": paper.id, "extraction_id": extraction.id, "sha256": paper.sha256, "bytes": paper.bytes}
+    text = latest_paper_text(db, paper, status="ready")
+    if text is not None and text.backend:
+        source["parse"] = {"backend": text.backend, "text_sha256": text.text_sha256,
+                           "pages_parsed": text.pages_parsed, "page_count": text.page_count,
+                           "warnings": list(text.warnings_json or [])}
+    return source
+
+
 def _snapshot(db, request, run):
     """Validate registered inputs before projecting a bounded immutable snapshot."""
     revision = db.get(SpecRevisionRecord, run.revision_id)
@@ -146,7 +158,7 @@ def _snapshot(db, request, run):
         "evidence": evidence,
         "run_created_at": run.created_at.isoformat(),
         "revision": {"id": revision.id, "spec_hash": revision.spec_hash, "created_at": revision.created_at.isoformat()},
-        "source": {"paper_id": paper.id, "extraction_id": extraction.id, "sha256": paper.sha256, "bytes": paper.bytes},
+        "source": _source_block(db, paper, extraction),
         "limitations": list(
             SANDBOX_LIMITATIONS if sandboxed_model_code
             else REAL_LIMITATIONS if real_local_cpu

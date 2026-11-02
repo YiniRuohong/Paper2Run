@@ -50,7 +50,8 @@ def _previous_markdown(db, artifact_store, paper: PaperRecord) -> str | None:
         PaperTextRecord.paper_id == paper.id, PaperTextRecord.status == "ready",
         PaperTextRecord.source_sha256 == paper.sha256,
     ).order_by(PaperTextRecord.created_at.desc()))
-    if record is None or not record.warnings_json or not record.text_sha256:
+    if (record is None or record.backend != "online_agent" or not record.warnings_json
+            or not record.text_sha256):
         return None
     try:
         return artifact_store.open_bytes(record.text_sha256).decode("utf-8")
@@ -125,6 +126,11 @@ def _run_claimed(session_factory, artifact_store, service, *, job_id, token, pap
             return
         text_id, sha = text.id, paper.sha256
         previous = _previous_markdown(db, artifact_store, paper)
+
+    if mode == "online" and service.mode() != "online":
+        # The user moved away from online after queueing: upload nothing (a locked offline job is fine).
+        _finish(session_factory, job_id, worker_id, token, paper_id, text_id, "DOCPARSE_MODE_CHANGED")
+        return
 
     stop, lost = threading.Event(), threading.Event()
     beat = threading.Thread(target=_heartbeat_loop, name="docparse-heartbeat", daemon=True,

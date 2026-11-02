@@ -88,7 +88,11 @@ def urllib_transport(req: HttpRequest, *, max_body: int = 8 * 1024 * 1024) -> Ht
     r = urllib.request.Request(req.url, data=req.body, headers=req.headers, method=req.method)
     try:
         with _OPENER.open(r, timeout=req.timeout) as resp:
-            return HttpResponse(resp.status, _read_capped(resp, limit))
+            data = _read_capped(resp, limit)
+            declared = resp.headers.get("Content-Length")
+            if declared is not None and declared.isdigit() and len(data) < int(declared):
+                raise OSError("transport failure")  # truncated body: retryable like any dropped connection
+            return HttpResponse(resp.status, data)
     except urllib.error.HTTPError as e:
         try:
             return HttpResponse(e.code, _read_capped(e, limit))

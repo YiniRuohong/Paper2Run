@@ -38,6 +38,8 @@ def trim_for_context(markdown: str, max_chars: int) -> tuple[str, str | None]:
     for i, m in enumerate(markers[:-1] if markers else []):
         if markers[i + 1].start() > max_chars:
             break
+        if m.group("missing"):
+            continue  # a failed range was never in the text
         last_page = int(m.group("b") or m.group("p"))
     if last_page is None:
         return cut, "文本超出上下文上限，已截断"

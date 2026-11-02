@@ -11,7 +11,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from p2r_orchestration.report_jobs import process_next_report_job
-from p2r_persistence.models import EvaluationRecord, ExperimentRecord, MembershipRecord, PaperRecord, ProjectRecord, RunRecord, SpecRevisionRecord, UserRecord, ReportRecord, ReportBuildRecord, Job
+from p2r_persistence.models import PaperTextRecord, EvaluationRecord, ExperimentRecord, MembershipRecord, PaperRecord, ProjectRecord, RunRecord, SpecRevisionRecord, UserRecord, ReportRecord, ReportBuildRecord, Job
 
 @pytest.fixture
 def seeded(tmp_path):
@@ -373,3 +373,37 @@ def test_report_requires_completed_and_idempotency(seeded):
     with TestClient(app) as c:
         assert c.post(f'/api/v1/runs/{ids["run"]}/report-builds',headers={'X-Actor-ID':'owner'},json={}).status_code==422
         assert c.post(f'/api/v1/runs/{ids["run"]}/report-builds',headers=h('x'),json={}).status_code==409
+
+
+def _frozen_source(seeded, monkeypatch, *, parsed):
+    app, ids = seeded
+    factory = app.state.runtime['session_factory']
+    if parsed:
+        with factory.begin() as db:
+            paper = db.get(PaperRecord, ids['paper'])
+            db.add(PaperTextRecord(paper_id=paper.id, source_sha256=paper.sha256, page_count=3, pages_parsed=2,
+                                   status='ready', text_sha256='a' * 64, backend='offline_mineru',
+                                   warnings_json=['第 3 页解析失败，未包含']))
+    captured = {}
+    original = report_jobs.build_report
+
+    def capture(snapshot):
+        captured.update(snapshot['source'])
+        return original(snapshot)
+
+    monkeypatch.setattr(report_jobs, 'build_report', capture)
+    with TestClient(app) as client:
+        assert create(client, ids['run']).status_code == 202
+        assert process_next_report_job(factory)
+    return captured
+
+
+def test_report_source_records_parse_backend_and_warnings(seeded, monkeypatch):
+    source = _frozen_source(seeded, monkeypatch, parsed=True)
+    assert source['parse'] == {'backend': 'offline_mineru', 'text_sha256': 'a' * 64,
+                               'pages_parsed': 2, 'page_count': 3, 'warnings': ['第 3 页解析失败，未包含']}
+
+
+def test_report_source_unchanged_for_text_papers(seeded, monkeypatch):
+    source = _frozen_source(seeded, monkeypatch, parsed=False)
+    assert 'parse' not in source and source['paper_id']

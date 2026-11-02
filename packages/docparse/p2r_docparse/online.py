@@ -94,9 +94,12 @@ class OnlineAgentClient:
                 check_remote_url(md_url)
                 resp = self._send("GET", md_url, max_body=_MD_CAP, timeout=120.0)
                 try:
-                    return resp.body.decode("utf-8")
+                    text = resp.body.decode("utf-8")
                 except UnicodeDecodeError:
                     raise DocParseError("DOCPARSE_REMOTE_FAILED") from None
+                if not text.strip():
+                    raise DocParseError("DOCPARSE_REMOTE_FAILED")  # an empty result is not a parsed page
+                return text
             if state == "failed":
                 raise DocParseError("DOCPARSE_REMOTE_FAILED")
             if self._clock() + self._poll_interval > deadline:
@@ -111,8 +114,9 @@ def parse_online(pdf: bytes, *, client: OnlineAgentClient, previous_markdown: st
     reusable = {}
     if previous_markdown:
         reusable = {(o.first_page, o.last_page): o.markdown
-                    for o in split_merged(previous_markdown) if o.markdown is not None}
+                    for o in split_merged(previous_markdown) if o.markdown is not None and o.markdown.strip()}
     outcomes: list[ChunkOutcome] = []
+    last_code = "DOCPARSE_REMOTE_FAILED"
     for i, ch in enumerate(chunks, 1):
         if cancelled():
             raise DocParseError("DOCPARSE_CANCELLED")
@@ -124,12 +128,13 @@ def parse_online(pdf: bytes, *, client: OnlineAgentClient, previous_markdown: st
             except DocParseError as e:
                 if e.code == "DOCPARSE_CANCELLED":
                     raise
+                last_code = e.code
                 md = None
         outcomes.append(ChunkOutcome(ch.first_page, ch.last_page, md))
         if on_progress:
             on_progress(i, len(chunks))
     if all(o.markdown is None for o in outcomes):
-        raise DocParseError("DOCPARSE_REMOTE_FAILED")
+        raise DocParseError(last_code)
     return ParseResult(
         markdown=merge_outcomes(outcomes),
         backend="online_agent",
