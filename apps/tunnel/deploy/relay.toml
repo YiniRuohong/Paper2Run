@@ -1,0 +1,15 @@
+# iroh-relay 1.4.1 config for the Paper2Run relay on 60.204.202.153.
+# Only port 12234 is reachable from outside: HTTPS relay on TCP, QUIC address
+# discovery on UDP. The mandatory plain-HTTP listener is kept on loopback so it
+# neither collides with derper on :80 nor is exposed.
+enable_relay = true
+http_bind_addr = "127.0.0.1:12235"
+enable_quic_addr_discovery = true
+enable_metrics = false
+
+[tls]
+https_bind_addr = "0.0.0.0:12234"
+quic_bind_addr = "0.0.0.0:12234"
+cert_mode = "Manual"
+manual_cert_path = "/etc/p2r-relay/server.pem"
+manual_key_path = "/etc/p2r-relay/server.key"

@@ -1,0 +1,19 @@
+[Unit]
+Description=Paper2Run iroh relay (TCP/UDP 12234)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=p2r-relay
+Group=p2r-relay
+ExecStart=/usr/local/bin/p2r-iroh-relay --config-path /etc/p2r-relay/relay.toml
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
