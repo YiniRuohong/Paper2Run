@@ -1,5 +1,6 @@
-import { GuidedApiError, type Fetcher } from './guided.ts';
-import { createLiveClient } from './client.ts';
+import { ApiError, csrfToken, initializeSession, isSessionReady, type Fetcher } from './client.ts';
+
+export { ApiError };
 
 export interface Capability { id: string; name: string; version: string; description: string; enabled: boolean }
 export interface ModelProfile { id: string; base_url: string; model: string; api: 'anthropic-messages' | 'openai-completions'; auth_mode?: 'api-key' | 'none'; credential_ref?: string; secret_configured?: boolean }
@@ -30,46 +31,34 @@ export interface AutonomousFile {
 }
 export interface AutonomousFiles { items: AutonomousFile[]; truncated: boolean; workspace_available: boolean }
 const enc = encodeURIComponent;
-let memoryCsrf: string | undefined;
-let sessionReady = false;
-let sessionLoading: Promise<void> | undefined;
-export async function initializeAutonomousSession() {
-  if (sessionLoading) return sessionLoading;
-  sessionLoading = (async () => {
-    try { memoryCsrf = (await createLiveClient().getSession()).csrf_token; sessionReady = true; }
-    catch (error) {
-      if (!(error instanceof Error && 'status' in error && error.status === 401)) throw error;
-      memoryCsrf = undefined; sessionReady = true;
-    }
-  })();
-  try { await sessionLoading; } finally { sessionLoading = undefined; }
-}
+// 会话引导与 CSRF 由 client.ts 统一管理；保留这两个导出名供既有调用方使用。
+export const initializeAutonomousSession = initializeSession;
 export const authenticatedGuidedFetch: Fetcher = async (input, init = {}) => {
-  if (!sessionReady && init.method && !['GET', 'HEAD'].includes(init.method)) await initializeAutonomousSession();
+  if (!isSessionReady() && init.method && !['GET', 'HEAD'].includes(init.method)) await initializeSession();
   const headers = new Headers(init.headers);
-  if (memoryCsrf) headers.set('X-CSRF-Token', memoryCsrf);
+  const token = csrfToken();
+  if (token) headers.set('X-CSRF-Token', token);
   return fetch(input, { ...init, headers });
 };
 export function createAutonomousApi(actorId = 'demo-user', fetcher: Fetcher = fetch, csrf?: () => string | undefined) {
-  const initializeSession = initializeAutonomousSession;
   async function send(path: string, method = 'GET', body?: unknown, version?: number | string, signal?: AbortSignal) {
-    if (method !== 'GET' && !csrf && !sessionReady && fetcher === fetch) await initializeSession();
+    if (method !== 'GET' && !csrf && !isSessionReady() && fetcher === fetch) await initializeSession();
     const headers = new Headers({ 'X-Actor-ID': actorId, Accept: 'application/json' });
     if (body !== undefined) headers.set('Content-Type', 'application/json');
     if (method !== 'GET') headers.set('Idempotency-Key', crypto.randomUUID());
-    const token = csrf?.() ?? memoryCsrf; if (token) headers.set('X-CSRF-Token', token);
+    const token = csrf?.() ?? csrfToken(); if (token) headers.set('X-CSRF-Token', token);
     if (version !== undefined) headers.set('If-Match', String(version));
     try {
       return await fetcher(`/api/v1/autonomous${path}`, { method, headers, credentials: 'same-origin', cache: 'no-store', body: body === undefined ? undefined : JSON.stringify(body), signal });
     } catch (error) {
       if (signal?.aborted) throw error;
-      throw new GuidedApiError('网络连接失败；写入结果可能未知，请刷新任务列表后再操作。', 0, 'NETWORK_ERROR');
+      throw new ApiError('网络连接失败；写入结果可能未知，请刷新任务列表后再操作。', 0, 'NETWORK_ERROR');
     }
   }
   async function request<T>(path: string, method = 'GET', body?: unknown, version?: number | string, signal?: AbortSignal): Promise<T> {
     const res = await send(path, method, body, version, signal);
     const json = await res.json().catch(() => null);
-    if (!res.ok || !json || !('data' in json) || json.error) throw new GuidedApiError(json?.error?.message ?? `HTTP ${res.status}`, res.status, json?.error?.code ?? 'INVALID_ENVELOPE', json?.meta?.request_id ?? res.headers.get('X-Request-ID') ?? undefined);
+    if (!res.ok || !json || !('data' in json) || json.error) throw new ApiError(json?.error?.message ?? `HTTP ${res.status}`, res.status, json?.error?.code ?? 'INVALID_ENVELOPE', json?.meta?.request_id ?? res.headers.get('X-Request-ID') ?? undefined);
     return json.data as T;
   }
   return {
@@ -95,12 +84,12 @@ export function createAutonomousApi(actorId = 'demo-user', fetcher: Fetcher = fe
     files: (id: string, signal?: AbortSignal) => request<AutonomousFiles>(`/tasks/${enc(id)}/files`, 'GET', undefined, undefined, signal),
     async fileBlob(id: string, file: Pick<AutonomousFile, 'source' | 'path'>, signal?: AbortSignal) {
       const res = await send(`/tasks/${enc(id)}/files/raw?source=${enc(file.source)}&path=${enc(file.path)}`, 'GET', undefined, undefined, signal);
-      if (!res.ok) { const json = await res.json().catch(() => null); throw new GuidedApiError(json?.error?.message ?? `HTTP ${res.status}`, res.status, json?.error?.code ?? 'FILE_READ_FAILED'); }
+      if (!res.ok) { const json = await res.json().catch(() => null); throw new ApiError(json?.error?.message ?? `HTTP ${res.status}`, res.status, json?.error?.code ?? 'FILE_READ_FAILED'); }
       return res.blob();
     },
     async exportTask(id: string) {
       const res = await send(`/tasks/${enc(id)}/export`);
-      if (!res.ok) { const json = await res.json().catch(() => null); throw new GuidedApiError(json?.error?.message ?? `HTTP ${res.status}`, res.status, json?.error?.code ?? 'EXPORT_FAILED'); }
+      if (!res.ok) { const json = await res.json().catch(() => null); throw new ApiError(json?.error?.message ?? `HTTP ${res.status}`, res.status, json?.error?.code ?? 'EXPORT_FAILED'); }
       const url = URL.createObjectURL(await res.blob());
       const a = document.createElement('a'); a.href = url; a.download = `paper2run-${id}.zip`; a.click(); URL.revokeObjectURL(url);
     },

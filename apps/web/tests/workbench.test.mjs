@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { ancestors, buildTree, countFolders, filterFiles, formatBytes, parseCsv, previewKind } from '../src/ui/workbench/tree.ts';
 import { artifactPath, buildStages, toolLabel, toWbFiles } from '../src/features/autonomous/stages.ts';
-import { createRealFlowState } from '../src/features/guided/realflow-state.ts';
-import { flowRecords, FLOW_PATHS } from '../src/features/guided/realflow-files.ts';
 
 const f = (path, bytes = 1, mediaType = null) => ({ path, bytes, mediaType });
 
@@ -79,30 +77,10 @@ test('frozen artifacts link to the listing path the backend serves', () => {
   assert.deepEqual(toWbFiles([{ path: 'artifacts/u/x', source: 'artifact', bytes: 1, media_type: 'text/plain', sha256: 'h' }])[0].badge, '证据');
 });
 
-test('real-flow records only contain what the server returned', () => {
-  const empty = flowRecords(createRealFlowState(), null, []);
-  assert.equal(empty.files.length, 0);
-  const s = createRealFlowState();
-  s.paper = { paper_id: 'p1', project_id: 'pr', title: 'T', status: 'ready', sha256: 'a'.repeat(64), page_count: 3, content_available: true, current_extraction_id: null, active_operation_id: null, error: null, created_at: '2026-11-03T00:00:00Z' };
-  s.codegen = { attemptId: 'at', attemptIndex: 0, code: 'print(1)\n', codeSha256: 'c'.repeat(64), notes: null };
-  const exp = [{ id: 'x', run_id: 'r', status: 'succeeded', operation_id: null, report_hash: null, created_at: '', items: [
-    { format: 'report_json', status: 'ready', artifact_id: 'd'.repeat(64), filename: 'report.json', bytes: 10, media_type: 'application/json', sha256: 'd'.repeat(64), error: null },
-    { format: 'report_pdf', status: 'pending', artifact_id: null, filename: null, bytes: null, media_type: null, sha256: null, error: null },
-  ] }];
-  const r = flowRecords(s, null, exp);
-  assert.ok(r.text.has(FLOW_PATHS.paper));
-  assert.equal(r.text.get('代码/attempt-0/reproduce.py'), 'print(1)\n');
-  assert.equal(r.artifacts.get('导出/report.json'), 'd'.repeat(64));
-  assert.equal(r.files.filter(x => x.path.startsWith('导出/')).length, 1, 'pending exports are not listed');
-  assert.ok(!JSON.stringify([...r.text.values()]).includes('api_key'));
-});
-
-test('the three task surfaces share the workbench and keep live controls as children', async () => {
-  for (const file of ['../src/features/guided/RealFlowPanel.tsx', '../src/features/dashboard/TaskDetail.tsx', '../src/features/autonomous/AutonomousPage.tsx']) {
-    const src = await readFile(new URL(file, import.meta.url), 'utf8');
-    assert.match(src, /<Workbench\b/, file);
-    assert.doesNotMatch(src, /live=\{/, `${file}: live view must be children, not a prop`);
-  }
+test('the task page keeps live controls as workbench children and releases blob previews', async () => {
+  const page = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /<Workbench\b/);
+  assert.doesNotMatch(page, /live=\{/, 'live view must be children, not a prop');
   const wb = await readFile(new URL('../src/ui/workbench/Workbench.tsx', import.meta.url), 'utf8');
   assert.match(wb, /URL\.revokeObjectURL/, 'blob previews are released');
   assert.doesNotMatch(wb, /dangerouslySetInnerHTML|localStorage/);

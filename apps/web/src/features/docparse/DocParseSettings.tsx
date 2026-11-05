@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GuidedApi } from '../../api-client/guided';
-import type { DocParseMode, DocParseOfflineState, DocParseStatus } from '../../api-client/guided-types';
+import type { DocParseMode, DocParseOfflineState, DocParseStatus, PapersApi } from '../../api-client/papers';
 import { StatusWord, type Tone } from '../../ui/Card';
 import { Segmented } from '../../ui/Controls';
 import { Group, Row } from '../settings/SettingsParts';
@@ -21,7 +20,7 @@ const STATE_TONE: Record<DocParseOfflineState, Tone> = {
 const ACTION_FAILED = '操作未完成，请稍后重试。';
 type Choice = DocParseMode | '';
 
-export default function DocParseSettings({ api }: { api: GuidedApi }) {
+export default function DocParseSettings({ api }: { api: PapersApi }) {
   const [status, setStatus] = useState<DocParseStatus | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [failed, setFailed] = useState(false);

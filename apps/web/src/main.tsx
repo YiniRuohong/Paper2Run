@@ -8,7 +8,7 @@ import { startTheme } from './theme';
 applyShell();
 startTheme();
 
-const GuidedPage = lazy(() => import('./features/guided/GuidedPage'));
+const AppShell = lazy(() => import('./shell/AppShell'));
 
 class SurfaceBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -34,7 +34,7 @@ createRoot(document.getElementById('root')!).render(
           <div className="entry-skeleton" aria-hidden="true" />
         </main>
       }>
-        <GuidedPage />
+        <AppShell />
       </Suspense>
     </SurfaceBoundary>
   </StrictMode>,

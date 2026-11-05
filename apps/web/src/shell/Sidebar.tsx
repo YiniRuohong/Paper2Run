@@ -1,18 +1,20 @@
 import { useState } from 'react';
-import { Dot } from '../ui/Card';
+import { Dot, type Tone } from '../ui/Card';
 import { AppMark, Icon } from '../ui/Icon';
-import { taskHref, taskStatus, type Task } from '../features/dashboard/tasks';
-import type { Health } from './hooks';
+import { taskStateLabel, taskTone } from '../features/autonomous/config';
+import type { Health, RecentTask } from './hooks';
 
 export type View = 'overview' | 'new' | 'task' | 'settings';
 
 const HEALTH_TEXT: Record<Health, string> = { up: '后端已连接', down: '后端未连接', checking: '正在检查后端' };
 const HEALTH_TONE = { up: 'ok', down: 'bad', checking: 'idle' } as const;
 
+export const taskHref = (taskId: string): string => `#/task/${encodeURIComponent(taskId)}`;
+
 // magpie-style sidebar: brand row (window-controls area on desktop), grouped
 // nav, nested "最近" disclosure of recent tasks, footer with 设置 + backend dot.
 export function Sidebar({ view, taskId, recent, recentFailed, health, host, onHide }: {
-  view: View; taskId: string | null; recent: Task[] | null; recentFailed: boolean; health: Health; host: string; onHide: () => void;
+  view: View; taskId: string | null; recent: RecentTask[] | null; recentFailed: boolean; health: Health; host: string; onHide: () => void;
 }) {
   const [open, setOpen] = useState(true);
   const item = (target: View) => ({ className: `side-item${view === target ? ' on' : ''}`, 'aria-current': view === target ? 'page' as const : undefined });
@@ -25,7 +27,7 @@ export function Sidebar({ view, taskId, recent, recentFailed, health, host, onHi
       <div className="side-group">
         <span className="side-label">工作区</span>
         <a href="#/" {...item('overview')}><Icon name="home" />总览</a>
-        <a href="#/new" {...item('new')}><Icon name="plus" />新建任务</a>
+        <a href="#/new" {...item('new')}><Icon name="plus" />新建实验</a>
       </div>
       <div className="side-group">
         <span className="side-label">任务</span>
@@ -40,12 +42,13 @@ export function Sidebar({ view, taskId, recent, recentFailed, health, host, onHi
           {recent && recent.length === 0 && <p className="side-sub-empty">还没有任务</p>}
           {recent && recent.length > 0 && <ul className="side-sub">
             {recent.map(t => {
-              const status = taskStatus(t);
-              const current = view === 'task' && taskId === t.paperId;
-              return <li key={t.paperId}>
-                <a href={taskHref(t.paperId)} className={`side-item side-sub-item${current ? ' on' : ''}`} aria-current={current ? 'page' : undefined} title={`${t.title} · ${status.text}`}>
-                  <Dot tone={status.tone} /><span className="side-sub-title">{t.title}</span>
-                  <span className="sr-only">（{status.text}）</span>
+              const tone: Tone = taskTone(t.state);
+              const label = taskStateLabel(t.state);
+              const current = view === 'task' && taskId === t.id;
+              return <li key={t.id}>
+                <a href={taskHref(t.id)} className={`side-item side-sub-item${current ? ' on' : ''}`} aria-current={current ? 'page' : undefined} title={`${t.objective} · ${label}`}>
+                  <Dot tone={tone} /><span className="side-sub-title">{t.objective}</span>
+                  <span className="sr-only">（{label}）</span>
                 </a>
               </li>;
             })}

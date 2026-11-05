@@ -21,10 +21,13 @@ const TOOL_PHASE: Record<string, PhaseId> = {
   read: 'plan', propose_protocol: 'plan',
   write: 'execute', execute: 'execute', background: 'execute', status: 'execute', logs: 'execute', stop: 'execute',
 };
+// 注意：authorization_confirmed、config_version、background_jobs_retained 在后端
+// 只是 payload 字段（分别在 task_created / application_exit / task_paused 中），
+// 不是事件类型，不能出现在这张表里（契约 C9 核对，2026-11-05）。
 const EVENT_PHASE: Record<string, PhaseId> = {
-  task_created: 'setup', authorization_confirmed: 'setup', worker_started: 'setup', session_ready: 'setup', config_version: 'setup',
+  task_created: 'setup', worker_started: 'setup', session_ready: 'setup',
   protocol_approval_required: 'plan', protocol_approved: 'plan',
-  job_reconciled: 'execute', background_jobs_retained: 'execute',
+  job_reconciled: 'execute',
   artifact_frozen: 'evidence',
   report_created: 'report', task_finished: 'report', budget_exhausted: 'report', worker_exited: 'report', application_exit: 'report',
 };
@@ -54,8 +57,11 @@ export function toolLabel(name: string, args: Record<string, unknown>): string {
 function eventLabel(e: AutonomousEvent): { label: string; detail: string | null; tone?: WbStageItem['tone'] } | null {
   const p = rec(e.payload);
   switch (e.type) {
-    case 'task_created': return { label: '任务已创建', detail: null };
-    case 'authorization_confirmed': return { label: '授权已确认', detail: null, tone: 'ok' };
+    case 'task_created': {
+      const version = e.payload && typeof e.payload === 'object' && !Array.isArray(e.payload)
+        ? (e.payload as Record<string, unknown>).config_version : null;
+      return { label: '任务已创建', detail: typeof version === 'string' || typeof version === 'number' ? `配置版本 ${String(version)}` : null };
+    }
     case 'worker_started': return { label: '执行进程已启动', detail: null };
     case 'session_ready': return { label: '模型会话就绪', detail: str(p.session_id), tone: 'ok' };
     case 'protocol_approval_required': return { label: '等待方案审批', detail: str(p.reason), tone: 'warn' };

@@ -1,240 +1,159 @@
-// 统一请求层：组件只见 ApiClient 接口与 ApiClientError；
-// mock 与 live 在此切换（契约：切换仅在 config 层，不改组件字段结构）。
-import type {
-  ApiError, Attempt, Capabilities, Confirmation, CodeFile, Experiment, ExperimentCreate,
-  Export, ExportAccepted, ExportCreate, Extraction, ID, Operation, PageData,
-  Paper, PaperAccepted, Project, ProjectCreate, Report, ReportPending,
-  RevisionConfirm, RevisionCreate, Run, RunAccepted, RunCreate, RunCurves,
-  RunManifest, SessionInfo, SpecDraft, SpecRevision, TextChunk,
-} from './types';
+// 共享请求基座：ApiError、Fetcher、会话引导（CSRF）、API 信封解析与字段校验。
+// api-client 下的所有模块（autonomous、papers）只用这里的错误类型与信封规则，
+// 组件只见 ApiError，不直接拼 fetch。
+export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
-export class ApiClientError extends Error {
-  readonly api: ApiError;
-  readonly requestId: string;
+export class ApiError extends Error {
   readonly status: number;
-  constructor(api: ApiError, requestId: string, status: number) {
-    super(api.message);
-    this.name = 'ApiClientError';
-    this.api = api;
-    this.requestId = requestId;
+  readonly code: string;
+  readonly requestId: string | undefined;
+  readonly details: unknown;
+  readonly unknown: boolean;
+
+  constructor(message: string, status: number, code: string, requestId?: string, details?: unknown, unknown = false) {
+    super(message);
+    this.name = 'ApiError';
     this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+    this.details = details;
+    this.unknown = unknown;
   }
 }
 
-export interface UploadPaperInput {
-  file?: File;
-  arxivId?: string;
-  titleHint?: string;
-  consent: boolean;
+// ---- 会话引导（CSRF） -------------------------------------------------------
+// CSRF token 只保存在内存中：sessionStorage / localStorage 会让注入脚本可读。
+let memoryCsrf: string | undefined;
+let sessionReady = false;
+let sessionLoading: Promise<void> | undefined;
+
+export function csrfToken(): string | undefined {
+  return memoryCsrf;
 }
 
-export interface ApiClient {
-  getSession(): Promise<SessionInfo>;
-  logout(): Promise<void>;
-
-  getCapabilities(): Promise<Capabilities>;
-
-  listProjects(): Promise<PageData<Project>>;
-  createProject(input: ProjectCreate): Promise<Project>;
-
-  listPapers(projectId: ID): Promise<PageData<Paper>>;
-  getPaper(paperId: ID): Promise<Paper>;
-  uploadPaper(projectId: ID, input: UploadPaperInput): Promise<PaperAccepted>;
-  getExtraction(paperId: ID): Promise<{ kind: 'extraction'; extraction: Extraction } | { kind: 'accepted'; accepted: PaperAccepted }>;
-  getOperation(operationId: ID): Promise<Operation>;
-
-  listExperiments(projectId: ID, paperId?: ID): Promise<PageData<Experiment>>;
-  createExperiment(projectId: ID, input: ExperimentCreate): Promise<Experiment>;
-  getDraft(experimentId: ID): Promise<SpecDraft>;
-  saveRevision(projectId: ID, input: RevisionCreate): Promise<SpecRevision>;
-  confirmRevision(revisionId: ID, input: RevisionConfirm): Promise<Confirmation>;
-  createRun(projectId: ID, input: RunCreate): Promise<RunAccepted>;
-
-  listRuns(projectId: ID): Promise<PageData<Run>>;
-  getRun(runId: ID): Promise<Run>;
-  cancelRun(runId: ID): Promise<Run>;
-  listAttempts(runId: ID): Promise<Attempt[]>;
-  listFiles(attemptId: ID): Promise<CodeFile[]>;
-  getArtifactText(artifactId: ID, offset: number): Promise<TextChunk>;
-  getCurves(runId: ID): Promise<RunCurves>;
-
-  getReport(runId: ID): Promise<{ kind: 'report'; report: Report } | { kind: 'pending'; pending: ReportPending }>;
-  getManifest(runId: ID): Promise<RunManifest>;
-  listExports(runId: ID): Promise<Export[]>;
-  createExport(runId: ID, input: ExportCreate): Promise<ExportAccepted>;
-  downloadArtifact(artifactId: ID): Promise<void>;
+export function isSessionReady(): boolean {
+  return sessionReady;
 }
 
-// ============ live 实现（F2+ 联调用；走同源 /api/v1，代理到 127.0.0.1:8000）============
-const BASE = '/api/v1';
-
-// CSRF tokens are intentionally process-local: sessionStorage would make the
-// token readable by any injected script and violates the browser contract.
-let csrfToken: string | undefined;
-
-interface Envelope<T> { data: T; meta: { request_id: string } }
-
-function uuid(): string {
-  return crypto.randomUUID();
+// GET /api/v1/auth/me 取回 CSRF token。401 表示本地免登录部署，不算错误：
+// 会话照常标记就绪，只是没有 token 可发。
+export async function initializeSession(): Promise<void> {
+  if (sessionLoading) return sessionLoading;
+  sessionLoading = (async () => {
+    try {
+      const res = await fetch('/api/v1/auth/me', { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      if (res.status === 401) {
+        memoryCsrf = undefined;
+        sessionReady = true;
+        return;
+      }
+      const payload: unknown = await res.json().catch(() => null);
+      if (!res.ok) throw errorEnvelope(payload, res);
+      const { data } = envelopeData(payload, res.status, res.headers.get('X-Request-ID') ?? undefined);
+      const item = record(data, 'session must be an object');
+      const token = item.csrf_token;
+      if (typeof token !== 'string' || !token) invalid('session.csrf_token must be a non-empty string');
+      memoryCsrf = token;
+      sessionReady = true;
+    } finally {
+      /* sessionLoading 在下方 finally 中复位 */
+    }
+  })();
+  try { await sessionLoading; } finally { sessionLoading = undefined; }
 }
 
-async function request<T>(
-  method: string,
-  path: string,
-  opts: { body?: unknown; idempotencyKey?: string } = {},
-): Promise<Envelope<T>> {
-  const csrf = csrfToken;
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    credentials: 'same-origin',
-    headers: {
-      ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-      ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
-      ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}),
-    },
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  });
-  const requestId = res.headers.get('X-Request-ID') ?? 'unknown';
-  if (res.status === 204) return { data: undefined as T, meta: { request_id: requestId } };
-  const json = (await res.json().catch(() => null)) as
-    | { data: T; meta: { request_id: string } }
-    | { error: ApiError; meta: { request_id: string } }
-    | null;
-  if (!res.ok || !json || 'error' in json) {
-    const api: ApiError = json && 'error' in json ? json.error : {
-      code: 'UNKNOWN', message: `HTTP ${res.status}`, retryable: false, details: {},
-    };
-    throw new ApiClientError(api, requestId, res.status);
+// ---- 信封与错误 -------------------------------------------------------------
+
+export function invalid(message: string): never {
+  throw new ApiError(message, 200, 'INVALID_DTO');
+}
+
+export function errorEnvelope(payload: unknown, response: Response): ApiError {
+  const requestId = response.headers.get('X-Request-ID') ?? undefined;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return new ApiError(`请求失败 (HTTP ${response.status})`, response.status, 'UNKNOWN_ERROR', requestId, undefined, true);
   }
-  return json;
+  const envelope = payload as Record<string, unknown>;
+  const error = envelope.error && typeof envelope.error === 'object' && !Array.isArray(envelope.error)
+    ? envelope.error as Record<string, unknown>
+    : null;
+  if (!error) return new ApiError(`请求失败 (HTTP ${response.status})`, response.status, 'UNKNOWN_ERROR', requestId, undefined, true);
+  const code = typeof error.code === 'string' ? error.code : 'UNKNOWN_ERROR';
+  const message = typeof error.message === 'string' ? error.message : `请求失败 (HTTP ${response.status})`;
+  const metaId = envelope.meta && typeof envelope.meta === 'object' && !Array.isArray(envelope.meta)
+    ? (envelope.meta as Record<string, unknown>).request_id
+    : undefined;
+  return new ApiError(message, response.status, code, typeof metaId === 'string' ? metaId : requestId, error.details, response.status >= 500);
 }
 
-async function requestPage<T>(path: string): Promise<PageData<T>> {
-  const env = (await request<T[]>('GET', path)) as Envelope<T[]> & { page?: { next_cursor: string | null; has_more: boolean } };
-  return { items: env.data, has_more: env.page?.has_more ?? false, next_cursor: env.page?.next_cursor ?? null };
+export async function responsePayload(response: Response, unknown = false): Promise<unknown> {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    throw new ApiError('API 未返回有效 JSON；请检查代理或后端。', response.status, 'INVALID_JSON', response.headers.get('X-Request-ID') ?? undefined, undefined, unknown);
+  }
 }
 
-export function createLiveClient(): ApiClient {
-  return {
-    async getSession() {
-      const env = await request<SessionInfo>('GET', '/auth/me');
-      csrfToken = env.data.csrf_token;
-      return env.data;
-    },
-    async logout() {
-      await request<void>('DELETE', '/auth/session');
-      csrfToken = undefined;
-    },
-    async getCapabilities() {
-      return (await request<Capabilities>('GET', '/capabilities')).data;
-    },
-    async listProjects() {
-      return requestPage<Project>('/projects?limit=20');
-    },
-    async createProject(input) {
-      return (await request<Project>('POST', '/projects', { body: input, idempotencyKey: uuid() })).data;
-    },
-    async listPapers(projectId) {
-      return requestPage<Paper>(`/projects/${projectId}/papers?limit=20`);
-    },
-    async getPaper(paperId) {
-      return (await request<Paper>('GET', `/papers/${paperId}`)).data;
-    },
-    async uploadPaper(projectId, input) {
-      if (!input.consent) {
-        throw new ApiClientError({ code: 'CONSENT_REQUIRED', message: '未同意论文内容处理，不能上传', retryable: false, details: {} }, 'local', 0);
-      }
-      let body: BodyInit;
-      const headers: Record<string, string> = {};
-      if (input.file) {
-        const fd = new FormData();
-        fd.append('file', input.file);
-        if (input.titleHint) fd.append('title_hint', input.titleHint);
-        fd.append('source_processing_consent', 'true');
-        body = fd;
-      } else if (input.arxivId) {
-        headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ source_type: 'arxiv', arxiv_id: input.arxivId, source_processing_consent: true });
-      } else {
-        throw new ApiClientError({ code: 'NO_SOURCE', message: '缺少 PDF 文件或 arXiv ID', retryable: false, details: {} }, 'local', 0);
-      }
-      const res = await fetch(`${BASE}/projects/${projectId}/papers`, {
-        method: 'POST', credentials: 'same-origin',
-        headers: { ...headers, 'X-CSRF-Token': csrfToken ?? '', 'Idempotency-Key': uuid() },
-        body,
-      });
-      const json = await res.json();
-      if (!res.ok) throw new ApiClientError(json.error, res.headers.get('X-Request-ID') ?? 'unknown', res.status);
-      return json.data as PaperAccepted;
-    },
-    async getExtraction(paperId) {
-      const res = await fetch(`${BASE}/papers/${paperId}/extraction`, { credentials: 'same-origin' });
-      const json = await res.json();
-      if (!res.ok) throw new ApiClientError(json.error, res.headers.get('X-Request-ID') ?? 'unknown', res.status);
-      if (res.status === 202) return { kind: 'accepted', accepted: json.data as PaperAccepted };
-      return { kind: 'extraction', extraction: json.data as Extraction };
-    },
-    async getOperation(operationId) {
-      return (await request<Operation>('GET', `/operations/${operationId}`)).data;
-    },
-    async listExperiments(projectId, paperId) {
-      const q = paperId ? `?paper_id=${paperId}&limit=20` : '?limit=20';
-      return requestPage<Experiment>(`/projects/${projectId}/experiments${q}`);
-    },
-    async createExperiment(projectId, input) {
-      return (await request<Experiment>('POST', `/projects/${projectId}/experiments`, { body: input, idempotencyKey: uuid() })).data;
-    },
-    async getDraft(experimentId) {
-      return (await request<SpecDraft>('GET', `/experiments/${experimentId}/draft`)).data;
-    },
-    async saveRevision(projectId, input) {
-      return (await request<SpecRevision>('POST', `/projects/${projectId}/spec-revisions`, { body: input, idempotencyKey: uuid() })).data;
-    },
-    async confirmRevision(revisionId, input) {
-      return (await request<Confirmation>('POST', `/spec-revisions/${revisionId}/confirm`, { body: input, idempotencyKey: uuid() })).data;
-    },
-    async createRun(projectId, input) {
-      return (await request<RunAccepted>('POST', `/projects/${projectId}/runs`, { body: input, idempotencyKey: uuid() })).data;
-    },
-    async listRuns(projectId) {
-      return requestPage<Run>(`/projects/${projectId}/runs?limit=20`);
-    },
-    async getRun(runId) {
-      return (await request<Run>('GET', `/runs/${runId}`)).data;
-    },
-    async cancelRun(runId) {
-      return (await request<Run>('POST', `/runs/${runId}/cancel`, { body: {} })).data;
-    },
-    async listAttempts(runId) {
-      return (await requestPage<Attempt>(`/runs/${runId}/attempts?limit=20`)).items;
-    },
-    async listFiles(attemptId) {
-      return (await requestPage<CodeFile>(`/attempts/${attemptId}/files?limit=50`)).items;
-    },
-    async getArtifactText(artifactId, offset) {
-      return (await request<TextChunk>('GET', `/artifacts/${artifactId}/text?offset=${offset}&limit=65536`)).data;
-    },
-    async getCurves(runId) {
-      return (await request<RunCurves>('GET', `/runs/${runId}/curves`)).data;
-    },
-    async getReport(runId) {
-      const res = await fetch(`${BASE}/runs/${runId}/report`, { credentials: 'same-origin' });
-      const json = await res.json();
-      if (!res.ok) throw new ApiClientError(json.error, res.headers.get('X-Request-ID') ?? 'unknown', res.status);
-      if (res.status === 202) return { kind: 'pending', pending: json.data as ReportPending };
-      return { kind: 'report', report: json.data as Report };
-    },
-    async getManifest(runId) {
-      return (await request<RunManifest>('GET', `/runs/${runId}/manifest`)).data;
-    },
-    async listExports(runId) {
-      return (await requestPage<Export>(`/runs/${runId}/exports?limit=20`)).items;
-    },
-    async createExport(runId, input) {
-      return (await request<ExportAccepted>('POST', `/runs/${runId}/exports`, { body: input, idempotencyKey: uuid() })).data;
-    },
-    async downloadArtifact(artifactId) {
-      window.location.assign(`${BASE}/artifacts/${artifactId}/download`);
-    },
-  };
+export function envelopeData(payload: unknown, status: number, requestId?: string, unknown = false): { data: unknown; requestId?: string } {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new ApiError('API 成功响应缺少 data。', status, 'INVALID_ENVELOPE', requestId, undefined, unknown);
+  }
+  const envelope = payload as Record<string, unknown>;
+  const meta = envelope.meta && typeof envelope.meta === 'object' && !Array.isArray(envelope.meta)
+    ? envelope.meta as Record<string, unknown>
+    : undefined;
+  const resolvedRequestId = typeof meta?.request_id === 'string' ? meta.request_id : requestId;
+  if (!('data' in envelope)) {
+    throw new ApiError('API 成功响应缺少 data。', status, 'INVALID_ENVELOPE', resolvedRequestId, undefined, unknown);
+  }
+  return { data: envelope.data, requestId: resolvedRequestId };
+}
+
+export function isAbort(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true
+    || (error instanceof DOMException && error.name === 'AbortError')
+    || (error instanceof Error && error.name === 'AbortError');
+}
+
+export function asUnknown(error: unknown, fallbackMessage: string, status: number, code: string, requestId?: string, details?: unknown): ApiError {
+  if (error instanceof ApiError) {
+    if (error.unknown || error.code === 'NETWORK_ERROR' || error.code === 'INTENT_ACCEPTED' || error.code === 'INTENT_UNKNOWN') return error;
+    return new ApiError(error.message, error.status, error.code, error.requestId ?? requestId, error.details ?? details, true);
+  }
+  return new ApiError(fallbackMessage, status, code, requestId, details, true);
+}
+
+// ---- 字段校验 ---------------------------------------------------------------
+
+export function record(value: unknown, message = 'expected an object'): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid(message);
+  return value as Record<string, unknown>;
+}
+
+export function str(value: unknown, path: string): string {
+  if (typeof value !== 'string' || value.length === 0) invalid(`${path} must be a non-empty string`);
+  return value;
+}
+
+export function nullableStr(value: unknown, path: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || value.length === 0) invalid(`${path} must be a non-empty string or null`);
+  return value;
+}
+
+export function int(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) invalid(`${path} must be an integer`);
+  return value;
+}
+
+export function nonNegativeInt(value: unknown, path: string): number {
+  const parsed = int(value, path);
+  if (parsed < 0) invalid(`${path} must be non-negative`);
+  return parsed;
+}
+
+export function boolean(value: unknown, path: string): boolean {
+  if (typeof value !== 'boolean') invalid(`${path} must be a boolean`);
+  return value;
 }
