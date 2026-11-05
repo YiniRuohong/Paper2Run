@@ -14,12 +14,14 @@ LOG_PAGE = 1_000_000
 
 
 def qualifying_run(db, row):
-    """Latest successful direct entrypoint execution after the round's latest code registration."""
+    """Latest successful direct entrypoint run launched after the round's latest code registration.
+
+    Anchored on the job launch sequence, so re-observing an older job never qualifies it."""
     artifacts = round_artifacts(row)
     latest_code = max((a.get("sequence", 0) for a in artifacts if a["kind"] == "code"), default=0)
     runs = [e for e in entrypoint_executions(db, row)
             if e["matches_protocol_entrypoint"] and e["result"].get("exit_code") == 0
-            and e["sequence"] > latest_code]
+            and e["launch_sequence"] is not None and e["launch_sequence"] > latest_code]
     return runs[-1] if runs else None
 
 
@@ -71,7 +73,7 @@ def freeze(service, target, task_id, summary):
         root = artifact_root(service, row)
         task_root = service.task_root(task_id)
     run = {"job_id": run_fact["result"]["job_id"], "exit_code": run_fact["result"]["exit_code"],
-           "sequence": run_fact["sequence"]}
+           "sequence": run_fact["launch_sequence"]}
     if not isinstance(run["job_id"], str) or not run["job_id"].isalnum():
         fail("CANDIDATE_INCOMPLETE", "entrypoint run has no attributable job", 409)
     snapshot = digest({"protocol_sha256": protocol_sha, "round": round_, "run": run,

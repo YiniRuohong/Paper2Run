@@ -170,6 +170,7 @@ def entrypoint_executions(db, row):
                        and not any(char in command for char in ";|&<>($`\n\r\\")
                        and not any(t and all(char in "();<>|&" for char in t) for t in tokens))
         executions.append({"sequence": fact.sequence, "tool": fact.payload.get("name"), "command": command,
+            "launch_sequence": job.get("sequence") if type(job.get("sequence")) is int else None,
             "result": observation, "matches_protocol_entrypoint": matches})
     return executions
 

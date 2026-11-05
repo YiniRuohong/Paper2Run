@@ -39,10 +39,11 @@ submit_candidate is accepted only when all of these hold: the protocol is frozen
 are registered in the current round; the entrypoint ran successfully (exit_code 0) after the latest code registration.
 After a candidate is submitted, evidence is frozen and you must end the turn. The trusted evaluation and an independent review
 run in another session; any findings arrive in your next message. You may repair and resubmit for at most max_repair_rounds
-rounds (see your limits); each new round starts with a fresh artifact set.
-Outcomes are decided by the program, never by you: completed (candidate passed independent review), incomplete (evidence missing
-or no progress), needs_human (review found issues that need a person, or repair rounds are exhausted), failed (the run or
-review could not be carried out). Model text cannot establish success.
+rounds (stated in the initial message); each new round starts with a fresh artifact set.
+Outcomes are decided by the program, never by you: verified (the latest candidate passed the independent review),
+completed_with_issues (review found issues and repair rounds are exhausted, or the budget ran out after a reviewed candidate),
+review_unavailable (the review could not be carried out), blocked_by_safety (container isolation integrity failed).
+A task that never submits a candidate ends incomplete with no outcome. Model text cannot establish success.
 Protocol changes require a proposal; a paused task must wait for user authorization.
 Report missing credentials/licenses as blockers. Credentials and control-plane storage are never experiment inputs.
 """

@@ -160,3 +160,137 @@ def test_prompt_has_no_step_order():
     assert "submit_candidate" in SYSTEM_PROMPT and "max_repair_rounds" in SYSTEM_PROMPT
     for phrase in ("Step 1", "first,", "then "):
         assert phrase not in SYSTEM_PROMPT
+
+
+def old_run_then_new_code(service):
+    task_id, target = running(service)
+    register(service, target, task_id, "main.py", "code")
+    first = run(service, target, task_id, "formal")
+    record_tool_result(service, task_id, "execute", first)
+    for name, kind in KINDS[1:]:
+        register(service, target, task_id, name, kind)
+    assert gate(service, task_id) == []
+    register(service, target, task_id, "main2.py", "code")
+    return task_id, target, first
+
+
+MISSING_RUN = ["successful entrypoint run after latest code registration"]
+
+
+def test_status_poll_of_old_job_does_not_requalify(service):
+    task_id, target, first = old_run_then_new_code(service)
+    polled = dispatch(service, target, task_id, "status", {"job_id": first["job_id"]}, "poll")
+    record_tool_result(service, task_id, "status", polled)
+    assert gate(service, task_id) == MISSING_RUN
+
+
+def test_reused_launch_id_does_not_requalify(service):
+    task_id, target, first = old_run_then_new_code(service)
+    again = run(service, target, task_id, "formal")
+    record_tool_result(service, task_id, "execute", again)
+    assert again["job_id"] == first["job_id"]
+    assert gate(service, task_id) == MISSING_RUN
+
+
+def test_background_job_started_before_code_does_not_requalify(service):
+    task_id, target = running(service)
+    register(service, target, task_id, "main.py", "code")
+    started = dispatch(service, target, task_id, "background",
+                       {"command": "python3 main.py", "launch_id": "bg", "timeout_seconds": 5}, "bg")
+    for name, kind in KINDS[1:]:
+        register(service, target, task_id, name, kind)
+    register(service, target, task_id, "main2.py", "code")
+    record_tool_result(service, task_id, "status", dispatch(service, target, task_id, "status", {"job_id": started["job_id"]}, "p"))
+    assert gate(service, task_id) == MISSING_RUN
+
+
+def test_snapshot_records_launch_sequence(service):
+    task_id, target = running(service)
+    complete(service, target, task_id)
+    submit(service, target, task_id)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        job = next(iter(row.jobs_json.values()))
+        assert row.harness_json["candidate"]["run"]["sequence"] == job["sequence"]
+
+
+def test_job_without_launch_sequence_does_not_qualify(service):
+    task_id, target = running(service)
+    complete(service, target, task_id)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.jobs_json = {k: {a: b for a, b in v.items() if a != "sequence"} for k, v in row.jobs_json.items()}
+        db.commit()
+    assert gate(service, task_id) == MISSING_RUN
+
+
+@pytest.mark.parametrize("change", ["round", "protocol"])
+def test_freeze_refuses_stale_candidate(service, change):
+    task_id, target = running(service)
+    complete(service, target, task_id)
+
+    def logs(job_id, offset=0, limit=16000):
+        with service.sessions() as db:
+            row = service.row(db, task_id)
+            if change == "round":
+                row.harness_json = {**row.harness_json, "repair_round": 1}
+            else:
+                row.protocol_json = {**row.protocol_json, "sha256": "f" * 64}
+            db.commit()
+        return {"stdout": "x", "next_offset": 0}
+    target.logs = logs
+    with pytest.raises(ServiceError) as caught:
+        submit(service, target, task_id)
+    assert caught.value.code == "CANDIDATE_STALE"
+    with service.sessions() as db:
+        assert service.row(db, task_id).harness_json["candidate"] is None
+
+
+def test_freeze_detects_tampered_artifact(service):
+    task_id, target = running(service)
+    complete(service, target, task_id)
+    with service.sessions() as db:
+        root = evidence.artifact_root(service, service.row(db, task_id))
+    (root / "main.py").write_text("tampered")
+    with pytest.raises(ServiceError) as caught:
+        submit(service, target, task_id)
+    assert caught.value.code == "EVIDENCE_INTEGRITY"
+    with service.sessions() as db:
+        assert service.row(db, task_id).harness_json["candidate"] is None
+
+
+def test_freeze_refuses_unattributable_job_id(service):
+    task_id, target = running(service)
+    register(service, target, task_id, "main.py", "code")
+    for name, kind in KINDS[1:]:
+        register(service, target, task_id, name, kind)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        sha = row.protocol_json["sha256"]
+        row.jobs_json = {"l": {"job_id": "../evil", "command": "python3 main.py", "protocol_sha256": sha,
+                               "sequence": row.event_sequence + 1}}
+        service.event(db, row, "tool_completed", {"name": "execute", "result": {"job_id": "../evil", "exit_code": 0}})
+        db.commit()
+    with pytest.raises(ServiceError) as caught:
+        submit(service, target, task_id)
+    assert caught.value.code == "CANDIDATE_INCOMPLETE"
+
+
+def test_prompt_names_program_outcomes():
+    for outcome in ("verified", "completed_with_issues", "review_unavailable", "blocked_by_safety"):
+        assert outcome in SYSTEM_PROMPT
+    assert "needs_human" not in SYSTEM_PROMPT and "Model text cannot establish success" in SYSTEM_PROMPT
+
+
+def test_initial_prompt_states_max_repair_rounds(service):
+    from .test_service import Bridge
+    seen = []
+
+    class Capturing(Bridge):
+        def run(self, config, prompt, callback):
+            seen.append(prompt)
+    service.bridge_factory = Capturing
+    task_id = create(service)
+    service.launch(task_id)
+    service.workers[task_id]["thread"].join(timeout=10)
+    assert json.loads(seen[0])["max_repair_rounds"] == 3

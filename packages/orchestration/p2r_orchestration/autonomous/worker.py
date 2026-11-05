@@ -56,7 +56,8 @@ def dispatch(service, target, task_id, name, args, request_id):
             previous = row.jobs_json.get(launch_id)
             intent = {"job_id": job_id, "command": args["command"], "timeout_seconds": timeout, "state": "submitting",
                       "protocol_sha256": row.protocol_json["sha256"] if row.protocol_json else None,
-                      "entrypoint": row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None}
+                      "entrypoint": row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None,
+                      "sequence": row.event_sequence}  # launch sequence; reused intents keep the original
             if previous:
                 if previous["command"] != args["command"]:
                     fail("LAUNCH_CONFLICT", "launch_id belongs to a different command", 409)
@@ -291,6 +292,7 @@ def run_worker(service, task_id, bridge, message):
                     fail("SESSION_MISSING", "saved SDK session is missing; cannot safely resume", 409)
                 config["session_file"] = row.session_file
             prompt = json.dumps(service.profiles.clean({"objective": row.objective,
+                "max_repair_rounds": row.config_snapshot["limits"].get("max_repair_rounds", 3),
                 "paper": row.context_json, "protocol": row.protocol_json,
                 "skills": [{"id": s["id"], "version": s["version"], "sha256": s["sha256"], "content": s["content"]} for s in row.skills_json],
                 "existing_jobs": row.jobs_json, "instruction": message or "Continue the authorized research task; reconcile existing jobs first."}, bounded=False), ensure_ascii=False)
