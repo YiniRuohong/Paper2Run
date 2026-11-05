@@ -5,6 +5,8 @@ use iroh_relay::RelayQuicConfig;
 pub use iroh_relay::tls::CaTlsConfig;
 
 pub const ALPN: &[u8] = b"p2r/http/1";
+pub const ALPN_PAIR: &[u8] = b"p2r/pair/1";
+pub const ALPN_RENDEZVOUS: &[u8] = b"p2r/rendezvous/1";
 
 #[derive(Clone, Debug)]
 pub struct NetConfig {
@@ -35,7 +37,7 @@ pub async fn bind_with(cfg: &NetConfig, key: SecretKey, ca: CaTlsConfig) -> anyh
     let relay = RelayConfig::new(cfg.relay_url.clone(), cfg.relay_quic_port.map(RelayQuicConfig::new));
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(key)
-        .alpns(vec![ALPN.to_vec()])
+        .alpns(vec![ALPN.to_vec(), ALPN_PAIR.to_vec(), ALPN_RENDEZVOUS.to_vec()])
         .relay_mode(RelayMode::Custom(RelayMap::from(relay)))
         .clear_address_lookup()
         .ca_tls_config(ca);

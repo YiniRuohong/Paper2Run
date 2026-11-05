@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use p2r_tunnel::{connect, endpoint, keys, serve, shutdown};
+use p2r_tunnel::{connect, endpoint, keys, rendezvous, serve, shutdown};
 
 #[derive(Parser)]
 #[command(name = "p2r-tunnel", about = "Paper2Run tablet tunnel over iroh")]
@@ -62,6 +62,11 @@ enum Cmd {
         #[arg(long)]
         allow: PathBuf,
     },
+    /// Relay host: hand out pairing nameplates.
+    Rendezvous {
+        #[command(flatten)]
+        net: Net,
+    },
     /// Tablet side: expose the remote backend on a local port.
     Connect {
         #[command(flatten)]
@@ -85,6 +90,11 @@ async fn main() -> anyhow::Result<()> {
             let ep = net.bind().await?;
             tracing::info!("serving id={} backend=127.0.0.1:{backend_port}", ep.id());
             shutdown::run_until(ep.clone(), shutdown::signal(), serve::run(ep, backend_port, allow)).await?;
+        }
+        Cmd::Rendezvous { net } => {
+            let ep = net.bind().await?;
+            tracing::info!("rendezvous id={}", ep.id());
+            shutdown::run_until(ep.clone(), shutdown::signal(), rendezvous::serve(ep)).await?;
         }
         Cmd::Connect { net, peer, listen } => {
             let cfg = net.config()?;

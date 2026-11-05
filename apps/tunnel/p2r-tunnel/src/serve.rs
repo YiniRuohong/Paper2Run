@@ -27,6 +27,9 @@ pub async fn run(ep: Endpoint, backend_port: u16, allow_path: PathBuf) -> anyhow
                 Ok(c) => c,
                 Err(e) => return tracing::debug!("handshake failed: {e}"),
             };
+            if conn.alpn() != crate::endpoint::ALPN {
+                return conn.close(1u32.into(), b"unsupported protocol");
+            }
             let peer = conn.remote_id();
             match crate::allow::load(&allow_path) {
                 Ok(set) if set.contains(&peer) => {}
