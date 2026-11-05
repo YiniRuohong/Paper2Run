@@ -162,20 +162,20 @@ def test_offline_ready_uses_tier_and_version(tmp_path):
     assert env.texts()[0].backend == "offline_mineru"
 
 
-def test_online_job_queued_then_mode_switched_uploads_nothing(tmp_path):
-    """I6/R1: a queued online job must not upload once the user has moved to offline."""
+def test_online_job_queued_then_mode_switched_keeps_its_locked_mode(tmp_path):
+    """A queued job uses the backend selected when it was enqueued."""
     env = Env(tmp_path, installer=FakeInstaller("ready"))
     env.service.settings.set_mode("online")
     env.enqueue("online", "k1")
     env.service.settings.set_mode("offline")
     env.run()
-    assert env.online_calls == [] and env.offline_calls == []
+    assert len(env.online_calls) == 1 and env.offline_calls == []
     (text,) = env.texts()
-    assert text.status == "failed" and text.error_json == {"code": "DOCPARSE_MODE_CHANGED"}
-    assert env.paper().status == "failed"
+    assert text.status == "ready" and text.error_json is None
+    assert env.paper().status == "ready"
     env.enqueue("offline", "k2")
     env.run()
-    assert env.online_calls == [] and len(env.offline_calls) == 1
+    assert len(env.online_calls) == 1 and len(env.offline_calls) == 1
 
 
 def test_offline_job_keeps_running_offline_after_switch_to_online(tmp_path):

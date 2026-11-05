@@ -27,16 +27,31 @@ def _drop_references(markdown: str) -> str:
         markdown = markdown[: m.start()] + kept + markdown[end:]
 
 
+def _utf8_prefix(text: str, max_bytes: int) -> tuple[str, int]:
+    """Return the largest character prefix whose UTF-8 encoding fits."""
+    if max_bytes <= 0:
+        return "", 0
+    used = 0
+    end = 0
+    for index, char in enumerate(text):
+        size = len(char.encode("utf-8"))
+        if used + size > max_bytes:
+            break
+        used += size
+        end = index + 1
+    return text[:end], end
+
+
 def trim_for_context(markdown: str, max_chars: int) -> tuple[str, str | None]:
     text = _drop_references(markdown)
-    if len(text) <= max_chars:
+    if len(text.encode("utf-8")) <= max_chars:
         return text, None
-    cut = text[:max_chars]
+    cut, cut_chars = _utf8_prefix(text, max_chars)
     markers = list(_MARKER.finditer(text))
     # A page range counts as sent only if its whole segment (up to the next marker) fits.
     last_page = None
     for i, m in enumerate(markers[:-1] if markers else []):
-        if markers[i + 1].start() > max_chars:
+        if markers[i + 1].start() > cut_chars:
             break
         if m.group("missing"):
             continue  # a failed range was never in the text

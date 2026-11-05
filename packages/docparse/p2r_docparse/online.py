@@ -34,17 +34,25 @@ class OnlineAgentClient:
 
     def _send(self, method: str, url: str, *, body: bytes | None = None,
               content_type: str | None = None, max_body: int = _JSON_CAP,
-              timeout: float = 60.0) -> HttpResponse:
+              timeout: float = 60.0, deadline: float | None = None) -> HttpResponse:
         """One logical request with retry on 429 / 5xx / connection errors."""
         headers = {"User-Agent": _UA}
         if content_type:
             headers["Content-Type"] = content_type
         last = "DOCPARSE_REMOTE_FAILED"
         for attempt in range(self._max_retries + 1):
+            if deadline is not None and self._clock() >= deadline:
+                raise DocParseError("DOCPARSE_TIMEOUT")
             if attempt:
-                self._sleep(min(2 ** (attempt - 1), 30))
+                delay = min(2 ** (attempt - 1), 30)
+                if deadline is not None and self._clock() + delay >= deadline:
+                    raise DocParseError("DOCPARSE_TIMEOUT")
+                self._sleep(delay)
             try:
-                resp = self._transport(HttpRequest(method, url, dict(headers), body, timeout, max_body))
+                request_timeout = timeout
+                if deadline is not None:
+                    request_timeout = min(timeout, max(0.001, deadline - self._clock()))
+                resp = self._transport(HttpRequest(method, url, dict(headers), body, request_timeout, max_body))
             except (OSError, http.client.HTTPException, ValueError):
                 last = "DOCPARSE_REMOTE_FAILED"
                 continue
@@ -59,9 +67,12 @@ class OnlineAgentClient:
             return resp
         raise DocParseError(last)
 
-    def _api(self, method: str, url: str, payload: dict | None = None) -> dict:
+    def _api(self, method: str, url: str, payload: dict | None = None,
+             *, deadline: float | None = None) -> dict:
         body = json.dumps(payload).encode() if payload is not None else None
-        resp = self._send(method, url, body=body, content_type="application/json" if body else None)
+        resp = self._send(method, url, body=body,
+                          content_type="application/json" if body else None,
+                          deadline=deadline)
         try:
             doc = json.loads(resp.body)
             data = doc["data"]
@@ -75,24 +86,25 @@ class OnlineAgentClient:
                     cancelled: Callable[[], bool] = _never) -> str:
         deadline = self._clock() + self._chunk_timeout
         sub = self._api("POST", f"{self._base}/api/v1/agent/parse/file", {
-            "file_name": file_name, "enable_table": True, "enable_formula": True, "is_ocr": False})
+            "file_name": file_name, "enable_table": True, "enable_formula": True, "is_ocr": False},
+            deadline=deadline)
         task_id, file_url = sub.get("task_id"), sub.get("file_url")
         if not isinstance(task_id, str) or not isinstance(file_url, str) or not task_id:
             raise DocParseError("DOCPARSE_REMOTE_FAILED")
         check_remote_url(file_url)
-        self._send("PUT", file_url, body=data, timeout=120.0)
+        self._send("PUT", file_url, body=data, timeout=120.0, deadline=deadline)
 
         while True:
             if cancelled():
                 raise DocParseError("DOCPARSE_CANCELLED")
-            st = self._api("GET", f"{self._base}/api/v1/agent/parse/{task_id}")
+            st = self._api("GET", f"{self._base}/api/v1/agent/parse/{task_id}", deadline=deadline)
             state = st.get("state")
             if state == "done":
                 md_url = st.get("markdown_url")
                 if not isinstance(md_url, str):
                     raise DocParseError("DOCPARSE_REMOTE_FAILED")
                 check_remote_url(md_url)
-                resp = self._send("GET", md_url, max_body=_MD_CAP, timeout=120.0)
+                resp = self._send("GET", md_url, max_body=_MD_CAP, timeout=120.0, deadline=deadline)
                 try:
                     text = resp.body.decode("utf-8")
                 except UnicodeDecodeError:

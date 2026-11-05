@@ -160,6 +160,28 @@ def test_chunk_timeout():
     assert e.value.code == "DOCPARSE_TIMEOUT"
 
 
+def test_chunk_timeout_covers_slow_submit_retries():
+    clock = [0.0]
+    attempts = []
+
+    def slow_failure(req):
+        attempts.append(req)
+        clock[0] += 20.0
+        return HttpResponse(503, b"")
+
+    c = OnlineAgentClient(
+        slow_failure,
+        chunk_timeout=30.0,
+        max_retries=5,
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        clock=lambda: clock[0],
+    )
+    with pytest.raises(DocParseError) as e:
+        c.parse_chunk(b"x", "f.pdf")
+    assert e.value.code == "DOCPARSE_TIMEOUT"
+    assert len(attempts) == 2
+
+
 def test_cancel_between_polls():
     fake = Fake(states=("running",))
     calls = {"n": 0}
