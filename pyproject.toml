@@ -20,12 +20,9 @@ dependencies = [
 test = ["pytest>=8", "httpx>=0.27", "numpy>=1.24,<3", "scikit-learn>=1.2,<2"]
 
 [tool.pytest.ini_options]
-pythonpath = ["services/api", "packages/contracts", "packages/artifacts", "packages/persistence", "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/codegen", "packages/runner", "packages/kernel", "packages/orchestration"]
+pythonpath = ["services/api", "packages/contracts", "packages/artifacts", "packages/persistence", "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/orchestration"]
 testpaths = ["tests"]
 
-[tool.setuptools.package-data]
-p2r_runner = ["data/*.csv"]
-
 [tool.setuptools.packages.find]
-where = ["services/api", "packages/contracts", "packages/artifacts", "packages/persistence", "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/codegen", "packages/runner", "packages/kernel", "packages/orchestration"]
-include = ["p2r_api*", "p2r_contracts*", "p2r_artifacts*", "p2r_persistence*", "p2r_sandbox*", "p2r_docparse*", "p2r_evaluation*", "p2r_codegen*", "p2r_runner*", "p2r_kernel*", "p2r_orchestration*"]
+where = ["services/api", "packages/contracts", "packages/artifacts", "packages/persistence", "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/orchestration"]
+include = ["p2r_api*", "p2r_contracts*", "p2r_artifacts*", "p2r_persistence*", "p2r_sandbox*", "p2r_docparse*", "p2r_evaluation*", "p2r_orchestration*"]

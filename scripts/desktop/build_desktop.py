@@ -51,7 +51,7 @@ def validate_packaged(target: str) -> None:
     if build_harness.source_fingerprint(resources / "harness", resources / "research-skills") != build_harness.source_fingerprint(build_harness.HARNESS, build_harness.SKILLS):
         raise RuntimeError("Packaged Harness/skills differ from current sources; rebuild")
     python = build_runtime.layout(resources / "python", build_runtime.TARGETS[target])["exe"]
-    run([str(python), "-I", "-B", "-c", "from pathlib import Path; import p2r_sandbox.autonomous.execution as e; import p2r_orchestration.autonomous.bridge; import p2r_runner; assert Path(e.__file__).with_name('_container.py').is_file(); print('packaged Python autonomous resources: PASS')"])
+    run([str(python), "-I", "-B", "-c", "from pathlib import Path; import p2r_sandbox.autonomous.execution as e; import p2r_orchestration.autonomous.bridge; assert Path(e.__file__).with_name('_container.py').is_file(); print('packaged Python autonomous resources: PASS')"])
     print("[desktop] packaged Node, SDK, bridge, skills and Python resources: PASS", flush=True)
 
 

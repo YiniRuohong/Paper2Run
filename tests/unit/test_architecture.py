@@ -12,8 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 LAYERS = {
     "p2r_contracts": 0,
-    "p2r_sandbox": 1, "p2r_docparse": 1, "p2r_evaluation": 1, "p2r_codegen": 1, "p2r_artifacts": 1, "p2r_persistence": 1,
-    "p2r_runner": 2, "p2r_kernel": 2,
+    "p2r_sandbox": 1, "p2r_docparse": 1, "p2r_evaluation": 1, "p2r_artifacts": 1, "p2r_persistence": 1,
     "p2r_orchestration": 3,
     "p2r_api": 4,
 }

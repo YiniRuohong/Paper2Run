@@ -38,8 +38,7 @@ BASE_PORT = 8010
 # Python source roots (keep in sync with pyproject.toml [tool.pytest.ini_options]).
 # Putting them on PYTHONPATH means a stale editable install can never shadow them.
 SOURCE_ROOTS = ("services/api", "packages/contracts", "packages/artifacts", "packages/persistence",
-                "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/codegen",
-                "packages/runner", "packages/kernel", "packages/orchestration")
+                "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/orchestration")
 
 WINDOWS = sys.platform == "win32"
 
@@ -76,7 +75,7 @@ def ensure_venv() -> Path:
         message(f"[!] 虚拟环境损坏（缺 {python}）；删除 .venv 目录后重试 / broken venv, remove .venv and retry")
         raise SystemExit(1)
     probe = subprocess.run(
-        [str(python), "-c", "import p2r_api, p2r_runner, p2r_kernel, uvicorn"],
+        [str(python), "-c", "import p2r_api.main, uvicorn"],
         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         env={**os.environ, "PYTHONPATH": source_pythonpath()},
     )

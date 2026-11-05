@@ -230,8 +230,6 @@ def build_wheel(tool: Path, work: Path) -> Path:
         raise SystemExit(f"expected one paper2run py3-none-any wheel, found {[w.name for w in wheels]}")
     with zipfile.ZipFile(wheels[0]) as zf:
         names = zf.namelist()
-    if not any(n.startswith("p2r_runner/data/") and n.endswith(".csv") for n in names):
-        raise SystemExit("wheel is missing p2r_runner/data/*.csv package data")
     log(f"built {wheels[0].name} ({len(names)} files)")
     return wheels[0]
 
@@ -385,7 +383,7 @@ def dir_size(path: Path) -> int:
 
 def smoke(paths: dict[str, Path]) -> None:
     run([paths["exe"], "-I", "-c",
-         "import p2r_api, p2r_sandbox, p2r_runner, p2r_kernel, uvicorn, sys; print('imports ok', sys.executable)"])
+         "import p2r_api.main, p2r_sandbox.autonomous, uvicorn, sys; print('imports ok', sys.executable)"])
     run([sys.executable, str(SMOKE_SCRIPT), "--python", str(paths["exe"])])
 
 
