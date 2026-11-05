@@ -120,7 +120,7 @@
 5. 修复轮次上限是 `limits.max_repair_rounds`，默认 3，取值 0 到 10，用户可以调小。复核消耗的 token 和时间计入同一个任务预算。
 6. 如果预算在复核过程中耗尽：此前已有复核记录的，结局为 `completed_with_issues`，原因记为 `budget_exhausted`，绑定最近一次被复核的快照；没有的话，结局为 `review_unavailable`，原因同样是 `budget_exhausted`。
 7. 恢复：复核过程中如果暂停或应用退出，且复核者还没有提交合法的 `submit_review`，候选仍是 `pending`，恢复后针对同一份快照重新复核。复核结果只对它所复核的那份快照有效，快照对不上就算一次失败的尝试。
-8. 已完成的复核一定保留：只要复核会话为当前快照返回了合法结论，不论任务此时是否还在运行（复核会话最后一次用量触发预算停止、提交后暂停或应用退出），都写入 `review_recorded`、复核记录和候选的复核状态。之后：任务仍在运行，照第 4 步继续；不在运行且结论为 `pass`，结局为 `verified`，生成报告，生命周期状态保持停止流程给出的状态，不再恢复主会话；不在运行且结论为 `issues`，修复轮次已用完则结局为 `completed_with_issues`，预算停止则按第 6 步得出绑定这份快照的 `completed_with_issues`，暂停则在恢复时直接进入修复轮次，不再复核。续写消息中的剩余预算在预算耗尽时写作 `exhausted`，不报错。
+8. 已完成的复核一定保留：只要复核会话为当前快照返回了合法结论，不论任务此时是否还在运行（复核会话最后一次用量触发预算停止、提交后暂停或应用退出），都写入 `review_recorded`、复核记录和候选的复核状态。之后：任务仍在运行，照第 4 步继续；不在运行且结论为 `pass`，结局为 `verified`，生成报告，生命周期状态保持停止流程给出的状态，不再恢复主会话；不在运行且结论为 `issues`，修复轮次已用完则结局为 `completed_with_issues`，预算停止则按第 6 步得出绑定这份快照的 `completed_with_issues`，暂停则在恢复时直接进入修复轮次，不再复核。续写消息中的剩余预算在预算耗尽时写作 `exhausted`，不报错。harness 被中止时会以错误消息结束会话（`aborted`、`budget_exceeded`、`wall_time_exceeded`、`bridge_disconnected`、`stdin_eof`、`tool_timeout`）；如果这类中断发生在 `submit_review` 被接受之后，结论照常返回，不算复核失败。提交之前的中断，以及其他错误码（例如 `provider_error`），仍按复核失败处理。
 
 ### 5.6 结局
 

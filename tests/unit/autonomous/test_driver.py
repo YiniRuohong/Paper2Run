@@ -55,10 +55,13 @@ class Main(Bridge):
 
 class Review(Bridge):
     """Review session: optionally submits one verdict; on_run injects side effects."""
-    def __init__(self, verdict=None, findings=(), on_run=None, messages=(), after_verdict=None, usage=None):
+    def __init__(self, verdict=None, findings=(), on_run=None, messages=(), after_verdict=None, usage=None,
+                 abort_error=False):
         super().__init__()
         self.verdict, self.findings, self.on_run, self.messages = verdict, list(findings), on_run, messages
         self.after_verdict, self.usage = after_verdict, usage or {}
+        # Like apps/harness/bridge.mjs: an aborted session ends with an `aborted` error, not a result.
+        self.abort_error = abort_error
         self.prompt = self.config = None
 
     def run(self, config, prompt, callback):
@@ -73,6 +76,9 @@ class Review(Bridge):
                       "arguments": {"verdict": self.verdict, "findings": self.findings}})
         if self.after_verdict:
             self.after_verdict()
+        if self.abort_error and self.aborted:
+            callback({"type": "error", "code": "aborted", "message": "tool aborted"})
+            return
         callback({"type": "result", "text": "reviewed", "usage": self.usage})
 
 
@@ -295,6 +301,20 @@ def test_pause_after_pass_submit_is_verified_without_second_review(service):
         resume(service, task_id)
     assert caught.value.code == "TASK_FINISHED"
     assert len(events(service, task_id, "review_recorded")) == 1
+
+
+def test_pause_after_pass_with_harness_abort_error_is_verified(service):
+    # The real bridge reports the pause's abort as an `aborted` error after the verdict.
+    holder = {}
+    review_bridge = Review("pass", after_verdict=pause_task(service, holder), abort_error=True)
+    task_id = prepare(service, [Main([work()]), review_bridge])
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert review_bridge.aborted
+    assert row.outcome == "verified" and row.state == "paused"
+    assert len(events(service, task_id, "review_recorded")) == 1
+    assert events(service, task_id, "review_failed") == []
 
 
 def test_pause_after_issues_submit_resumes_into_repair_round(service):

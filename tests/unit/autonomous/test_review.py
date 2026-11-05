@@ -179,6 +179,26 @@ def test_error_message_fails_review(service):
     assert "provider_error" in caught.value.reason
 
 
+@pytest.mark.parametrize("code", ["aborted", "budget_exceeded", "wall_time_exceeded", "bridge_disconnected",
+                                  "stdin_eof", "tool_timeout"])
+def test_interruption_after_submit_keeps_verdict(service, code):
+    # The real harness answers an abort (pause/stop/shutdown/budget) with an error
+    # message; a verdict already accepted through submit_review must survive it.
+    task_id, _, snap, _ = frozen(service)
+    bridge = Scripted([("submit_review", {"verdict": "pass", "findings": []})],
+                      tail=({"type": "error", "code": code, "message": "interrupted"},))
+    assert review(service, task_id, bridge)[0] == {"verdict": "pass", "findings": [],
+                                                   "snapshot_sha256": snap["snapshot_sha256"]}
+
+
+def test_interruption_before_submit_fails_review(service):
+    task_id, *_ = frozen(service)
+    bridge = Scripted([], tail=({"type": "error", "code": "aborted", "message": "interrupted"},))
+    with pytest.raises(ReviewFailed) as caught:
+        review(service, task_id, bridge)
+    assert "aborted" in caught.value.reason
+
+
 def test_unknown_and_bad_tool_calls_are_tool_errors(service):
     task_id, *_ = frozen(service)
     bridge = Scripted([("write", {"path": "x", "content": "y"}), ("read", {"path": 3}),

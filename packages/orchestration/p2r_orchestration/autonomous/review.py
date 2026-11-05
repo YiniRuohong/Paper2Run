@@ -135,6 +135,12 @@ class FrozenTarget:
         return {**self.candidate["run"], "state": "completed"}
 
 
+# Harness error codes that mean the session was cut short, not that it misbehaved
+# (apps/harness/bridge.mjs and bridge.py).
+INTERRUPTION_CODES = frozenset({"aborted", "budget_exceeded", "wall_time_exceeded", "bridge_disconnected",
+                                "stdin_eof", "tool_timeout"})
+
+
 def run_review(service, task_id, bridge, model, account):
     """Run one fresh, read-only review session.
 
@@ -197,7 +203,12 @@ def run_review(service, task_id, bridge, model, account):
         return {"type": "tool_result", "id": request_id, "result": service.profiles.clean(result), "is_error": is_error}
 
     bridge.run(config, prompt, callback)
-    if outcome["error"] is not None:
+    # A pause, stop, shutdown or budget abort ends the harness session with an
+    # interruption error. A verdict already accepted through submit_review was
+    # schema-checked when it arrived, so only the closing exchange was lost.
+    interrupted_after_submit = (outcome["review"] is not None and outcome["error"] is not None
+                                and outcome["error"].split(":", 1)[0] in INTERRUPTION_CODES)
+    if outcome["error"] is not None and not interrupted_after_submit:
         raise ReviewFailed(service.profiles.clean("review session error: " + outcome["error"]))
     if outcome["review"] is None:
         raise ReviewFailed("review session ended without a valid submit_review")
