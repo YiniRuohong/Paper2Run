@@ -6,6 +6,7 @@ import json
 from sqlalchemy import select
 
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
+from p2r_orchestration.service import ServiceError
 from . import evidence
 from .candidate import gate
 from .review import run_review
@@ -54,8 +55,14 @@ def facts_message(service, db, row, findings=True):
               for launch_id, job in row.jobs_json.items()] or ["- none"]
     missing = gate(db, row)
     lines.append("submit_candidate requirements not yet met: " + ("; ".join(missing) if missing else "none") + ".")
-    remaining = service.remaining(row)
-    lines.append("Remaining budget: " + ", ".join(f"{key} {value}" for key, value in remaining.items()) + ".")
+    try:
+        remaining = service.remaining(row)
+    except ServiceError as exc:
+        if exc.code != "BUDGET_EXHAUSTED":
+            raise
+        lines.append("Remaining budget: exhausted.")
+    else:
+        lines.append("Remaining budget: " + ", ".join(f"{key} {value}" for key, value in remaining.items()) + ".")
     reviews = harness.get("reviews") or []
     if reviews and findings:
         lines.append("Latest review findings, verbatim:")
@@ -123,14 +130,18 @@ def with_user_messages(service, db, row, prompt):
 
 
 def finish(service, db, row, outcome, reason=None, snapshot=None):
-    """Terminal outcome bound to the snapshot that decided it (default: the current candidate)."""
+    """Terminal outcome bound to the snapshot that decided it (default: the current candidate).
+
+    A running task completes; a task already pausing or stopping keeps that lifecycle state."""
     current = (row.harness_json or {}).get("candidate")
     snapshot = snapshot or (current["snapshot_sha256"] if current else None)
     candidate = evidence.deciding_candidate(row.harness_json or {}, snapshot)
     row.harness_json = {**row.harness_json, "outcome_snapshot_sha256": snapshot}
     evidence.report(service, db, row, narrative=candidate["summary"] if candidate else "",
                     outcome=outcome, reason=reason, outcome_snapshot=snapshot)
-    row.outcome, row.state = outcome, "completed"
+    row.outcome = outcome
+    if row.state == "running":
+        row.state = "completed"
     payload = {"state": row.state, "outcome": outcome, "verdict": "not_comparable"}
     service.event(db, row, "task_finished", {**payload, "reason": reason} if reason else payload)
 
@@ -208,6 +219,17 @@ def _attempt(service, task_id, bridge_factory, model, account):
     return review, error, False
 
 
+def start_repair(service, db, row):
+    """Open the repair round that follows a recorded issues review; returns the continuation prompt."""
+    harness = {k: v for k, v in row.harness_json.items() if k != "repair_pending"}
+    row.harness_json = {**harness, "repair_round": harness.get("repair_round", 0) + 1, "no_progress": 0}
+    row.harness_json = {**row.harness_json, "fingerprint": fingerprint(row)}
+    prompt = findings_text(harness["reviews"][-1]) + "\n\n" + facts_message(service, db, row, findings=False)
+    service.event(db, row, "continuation_sent", {"reason": "review_issues",
+                                                 "repair_round": row.harness_json["repair_round"]})
+    return prompt
+
+
 def _review(service, task_id, bridge_factory, model, account):
     while True:
         review, error, skipped = _attempt(service, task_id, bridge_factory, model, account)
@@ -217,18 +239,19 @@ def _review(service, task_id, bridge_factory, model, account):
             raise error  # the worker records the budget cancellation; budget_outcome decides
         with service.lock, service.sessions() as db:
             row = service.row(db, task_id)
-            if row.state != "running":
-                # Paused, stopped or budget-cancelled during review: the candidate stays pending
-                # and the same snapshot is reviewed on resume.
-                return "finished", None
+            running = row.state == "running"
             harness = row.harness_json
             candidate = harness["candidate"]
-            attempt = int(candidate.get("attempts", 0)) + 1
             reason = None
             if error is not None:
                 reason = getattr(error, "reason", None) or f"{type(error).__name__}: {error}"
             elif review.get("snapshot_sha256") != candidate["snapshot_sha256"]:
                 reason = "snapshot_changed"  # a verdict only counts for the snapshot it reviewed
+            if reason is not None and not running:
+                # Paused, stopped or budget-cancelled without a valid verdict: the candidate stays
+                # pending and the same snapshot is reviewed on resume.
+                return "finished", None
+            attempt = int(candidate.get("attempts", 0)) + 1
             if reason is not None:
                 candidate = {**candidate, "attempts": attempt}
                 if attempt >= REVIEW_ATTEMPTS:
@@ -242,6 +265,8 @@ def _review(service, task_id, bridge_factory, model, account):
                     return "finished", None
                 db.commit()
                 continue
+            # A valid verdict for the current snapshot is always kept, whatever the task state:
+            # the review completed and was paid for.
             record = {"snapshot_sha256": candidate["snapshot_sha256"], "round": candidate["round"],
                       "attempt": attempt, "verdict": review["verdict"], "findings": review["findings"]}
             service.event(db, row, "review_recorded", {key: record[key] for key in
@@ -257,11 +282,13 @@ def _review(service, task_id, bridge_factory, model, account):
                 finish(service, db, row, "completed_with_issues")
                 db.commit()
                 return "finished", None
-            row.harness_json = {**harness, "repair_round": harness.get("repair_round", 0) + 1, "no_progress": 0}
-            row.harness_json = {**row.harness_json, "fingerprint": fingerprint(row)}
-            prompt = findings_text(record) + "\n\n" + facts_message(service, db, row, findings=False)
-            service.event(db, row, "continuation_sent", {"reason": "review_issues",
-                                                         "repair_round": row.harness_json["repair_round"]})
+            if not running:
+                # A budget stop decides completed_with_issues from this review (budget_outcome);
+                # a pause resumes into the repair round without reviewing again.
+                row.harness_json = {**harness, "repair_pending": True}
+                db.commit()
+                return "finished", None
+            prompt = start_repair(service, db, row)
             db.commit()
             return "continue", prompt
 

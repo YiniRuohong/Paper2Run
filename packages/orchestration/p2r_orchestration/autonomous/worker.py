@@ -334,6 +334,8 @@ def run_worker(service, task_id, bridge, message):
             prompt = json.dumps(service.profiles.clean(opening, bounded=False), ensure_ascii=False)
             candidate = (row.harness_json or {}).get("candidate")
             review_pending = bool(candidate and candidate.get("review_status") == "pending")
+            # An issues review recorded while the task was pausing: resume opens its repair round.
+            repair_pending = bool((row.harness_json or {}).get("repair_pending"))
             # The opening carries context_json.user_messages up to here; it counts as delivered only when sent.
             opening_messages = driver.user_message_count(db, row)
             sends_opening = True
@@ -384,7 +386,6 @@ def run_worker(service, task_id, bridge, message):
             return callback(sdk_message, role="review")
 
         def next_turn():
-            nonlocal sends_opening
             # Program-decided follow-up of a turn: review a pending candidate, or continue with facts.
             # A run that returns without a result is not a turn end; it pauses for explicit resume.
             if not (turn_ended or review_pending):
@@ -393,6 +394,10 @@ def run_worker(service, task_id, bridge, message):
                                                  review_account, narrative=last_response or "")
             if decision == "finished":
                 return None
+            return continuation(follow)
+
+        def continuation(follow):
+            nonlocal sends_opening
             with service.lock, service.sessions() as db:
                 session_file = service.row(db, task_id).session_file
             if session_file:
@@ -408,6 +413,14 @@ def run_worker(service, task_id, bridge, message):
             # Resume: finish the interrupted review of the same snapshot before the main session.
             prompt = next_turn()
             review_pending = False
+        elif repair_pending:
+            with service.lock, service.sessions() as db:
+                row = service.row(db, task_id)
+                follow = driver.start_repair(service, db, row) if row.state == "running" else None
+                db.commit()
+            if follow is None:
+                return
+            prompt = continuation(follow)
         while prompt is not None:
             with service.lock, service.sessions() as db:
                 row = service.row(db, task_id)

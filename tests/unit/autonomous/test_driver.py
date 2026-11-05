@@ -7,6 +7,8 @@ import pytest
 from sqlalchemy import select
 
 from p2r_orchestration.autonomous import driver
+from p2r_orchestration.autonomous.security import fail
+from p2r_orchestration.service import ServiceError
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
 
 from .test_service import Bridge, Target, create, protocol, service, wait  # noqa: F401
@@ -33,9 +35,10 @@ def work(tag="r0", files=FILES):
 
 class Main(Bridge):
     """Main session: one scripted list of tool calls per turn, then a result."""
-    def __init__(self, turns=()):
+    def __init__(self, turns=(), ids=""):
         super().__init__()
         self.turns, self.prompts, self.configs, self.responses = list(turns), [], [], []
+        self.ids = ids  # request-id prefix; a resumed session must not reuse the first worker's launch ids
 
     def run(self, config, prompt, callback):
         self.prompts.append(prompt)
@@ -45,16 +48,17 @@ class Main(Bridge):
         path.write_text('{"type":"session"}\n')
         callback({"type": "ready", "session_file": str(path), "session_id": "main"})
         for index, (name, arguments) in enumerate(self.turns.pop(0) if self.turns else []):
-            self.responses.append(callback({"type": "tool_request", "id": f"{turn}-{index}",
+            self.responses.append(callback({"type": "tool_request", "id": f"{self.ids}{turn}-{index}",
                                             "name": name, "arguments": arguments}))
         callback({"type": "result", "text": f"turn {turn}", "usage": {}})
 
 
 class Review(Bridge):
     """Review session: optionally submits one verdict; on_run injects side effects."""
-    def __init__(self, verdict=None, findings=(), on_run=None, messages=()):
+    def __init__(self, verdict=None, findings=(), on_run=None, messages=(), after_verdict=None, usage=None):
         super().__init__()
         self.verdict, self.findings, self.on_run, self.messages = verdict, list(findings), on_run, messages
+        self.after_verdict, self.usage = after_verdict, usage or {}
         self.prompt = self.config = None
 
     def run(self, config, prompt, callback):
@@ -67,7 +71,9 @@ class Review(Bridge):
         if self.verdict:
             callback({"type": "tool_request", "id": "verdict", "name": "submit_review",
                       "arguments": {"verdict": self.verdict, "findings": self.findings}})
-        callback({"type": "result", "text": "reviewed", "usage": {}})
+        if self.after_verdict:
+            self.after_verdict()
+        callback({"type": "result", "text": "reviewed", "usage": self.usage})
 
 
 class Crashing(Bridge):
@@ -249,6 +255,108 @@ def test_deciding_snapshot_is_evaluated_under_its_own_protocol(service):
     assert report["status"] != "incomplete" and report["successful_execution_observed"] is True
     saved = service.task_root(task_id) / "candidates" / reviewed / "protocol.json"
     assert json.loads(saved.read_text()) == row.harness_json["candidates"][reviewed]["protocol"]
+
+
+def test_budget_spent_by_review_result_after_pass_keeps_verified(service):
+    spent = Review("pass", usage={"total_tokens": 10_000})  # the review's own final usage exhausts the budget
+    task_id, row = start(service, [Main([work()]), spent])
+    snapshot = row.harness_json["candidate"]["snapshot_sha256"]
+    assert row.outcome == "verified" and row.state == "stopped"
+    assert row.harness_json["candidate"]["review_status"] == "pass"
+    assert row.report_json["outcome"] == "verified" and row.report_json["outcome_snapshot_sha256"] == snapshot
+    assert [r["verdict"] for r in events(service, task_id, "review_recorded")] == ["pass"]
+    assert events(service, task_id, "budget_exhausted")
+
+
+def pause_task(service, holder):
+    def pause():
+        with service.lock, service.sessions() as db:
+            service.control(db, holder["task_id"], "pause")
+            db.commit()
+    return pause
+
+
+def resume(service, task_id):
+    with service.lock, service.sessions() as db:
+        service.control(db, task_id, "resume")
+        db.commit()
+
+
+def test_pause_after_pass_submit_is_verified_without_second_review(service):
+    holder = {}
+    task_id = prepare(service, [Main([work()]), Review("pass", after_verdict=pause_task(service, holder))])
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    row = wait(service, task_id)
+    snapshot = row.harness_json["candidate"]["snapshot_sha256"]
+    assert row.outcome == "verified" and row.state == "paused"
+    assert row.report_json["outcome_snapshot_sha256"] == snapshot == row.harness_json["outcome_snapshot_sha256"]
+    with pytest.raises(ServiceError) as caught:
+        resume(service, task_id)
+    assert caught.value.code == "TASK_FINISHED"
+    assert len(events(service, task_id, "review_recorded")) == 1
+
+
+def test_pause_after_issues_submit_resumes_into_repair_round(service):
+    holder = {}
+    main, later = Main([work("r0")]), Main([work("r1")], ids="resumed-")
+    task_id = prepare(service, [main, Review("issues", [FINDING], after_verdict=pause_task(service, holder)),
+                                later, Review("pass")])
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert row.state == "paused" and row.outcome is None
+    assert row.harness_json["candidate"]["review_status"] == "issues"
+    assert [r["verdict"] for r in row.harness_json["reviews"]] == ["issues"]
+    resume(service, task_id)
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert row.outcome == "verified" and row.harness_json["repair_round"] == 1
+    assert len(later.prompts) == 1 and FINDING["description"] in later.prompts[0]
+    assert [r["verdict"] for r in events(service, task_id, "review_recorded")] == ["issues", "pass"]
+
+
+def test_pause_after_issues_with_rounds_exhausted_completes_with_issues(service):
+    holder = {}
+    task_id = prepare(service, [Main([work()]), Review("issues", [FINDING], after_verdict=pause_task(service, holder))],
+                      rounds=0)
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert row.outcome == "completed_with_issues" and row.state == "paused"
+    assert row.report_json["outcome_snapshot_sha256"] == row.harness_json["candidate"]["snapshot_sha256"]
+
+
+def test_budget_exhausted_at_facts_after_issues_keeps_the_review(service, monkeypatch):
+    exhausted = {"now": False}
+    original_remaining, original_review = service.remaining, driver.run_review
+
+    def remaining(row):
+        if exhausted["now"]:
+            fail("BUDGET_EXHAUSTED", "cumulative task budget exhausted", 409)
+        return original_remaining(row)
+
+    def reviewed(*args):
+        result = original_review(*args)
+        exhausted["now"] = True  # the budget runs out between the review session and its recording
+        return result
+    monkeypatch.setattr(service, "remaining", remaining)
+    monkeypatch.setattr(driver, "run_review", reviewed)
+    task_id, row = start(service, [Main([work()]), Review("issues", [FINDING])])
+    snapshot = row.harness_json["candidate"]["snapshot_sha256"]
+    assert [r["snapshot_sha256"] for r in row.harness_json["reviews"]] == [snapshot]
+    assert [r["verdict"] for r in events(service, task_id, "review_recorded")] == ["issues"]
+    assert row.outcome == "completed_with_issues" and row.state == "stopped"
+    assert row.report_json["outcome_snapshot_sha256"] == snapshot
+    assert row.report_json["outcome_reason"] == "budget_exhausted"
+
+
+def test_facts_message_reports_exhausted_budget(service):
+    task_id = create(service, protocol=protocol())
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.usage_json = {**row.usage_json, "total_tokens": 10_000}
+        assert "Remaining budget: exhausted." in driver.facts_message(service, db, row)
 
 
 def test_resume_with_pending_review_reruns_same_snapshot(service):
