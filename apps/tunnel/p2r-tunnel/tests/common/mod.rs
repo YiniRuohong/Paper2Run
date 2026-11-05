@@ -52,7 +52,7 @@ async fn handle(req: Request<Incoming>, hits: Arc<AtomicUsize>) -> Result<Respon
     match req.uri().path() {
         "/healthz" => Ok(Response::new(full("ok"))),
         "/echo-headers" => {
-            let text = format!("host={}\norigin={}\nsec-fetch-site={}\n", h("host"), h("origin"), h("sec-fetch-site"));
+            let text = format!("host={}\norigin={}\nsec-fetch-site={}\nx-p2r-remote={}\n", h("host"), h("origin"), h("sec-fetch-site"), h("x-p2r-remote"));
             Ok(Response::new(full(text)))
         }
         "/sse" => {

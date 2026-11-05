@@ -8,3 +8,4 @@ pub mod shutdown;
 pub mod rendezvous;
 pub mod devices;
 pub mod pair;
+pub mod control;

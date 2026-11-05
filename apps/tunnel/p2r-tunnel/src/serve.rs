@@ -1,7 +1,15 @@
 //! Desktop side: accept allow-listed peers and reverse-proxy each QUIC stream
 //! as one HTTP/1.1 connection to the loopback backend.
 
-use std::{convert::Infallible, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use bytes::Bytes;
 use http::{header, HeaderValue, Request, Response, StatusCode, Uri};
@@ -11,10 +19,74 @@ use hyper_util::{
     client::legacy::{connect::HttpConnector, Client},
     rt::{TokioExecutor, TokioIo},
 };
-use iroh::{endpoint::Connection, Endpoint};
+use iroh::{endpoint::Connection, Endpoint, EndpointId};
+
+use crate::paths::PathKind;
 
 type Body = BoxBody<Bytes, hyper::Error>;
 type Upstream = Client<HttpConnector, Incoming>;
+
+/// Close code sent to a peer that is not (or no longer) paired.
+pub const CLOSE_REVOKED: u32 = 2;
+
+/// Live connections per peer, for the control API's status and revoke.
+#[derive(Clone, Default)]
+pub struct Registry(Arc<tokio::sync::Mutex<HashMap<EndpointId, Entry>>>);
+
+struct Entry {
+    conn: Option<(u64, Connection)>,
+    last_seen: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveInfo {
+    pub online: bool,
+    pub path: Option<PathKind>,
+    pub last_seen: u64,
+}
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+impl Registry {
+    pub async fn snapshot(&self) -> HashMap<EndpointId, LiveInfo> {
+        self.0.lock().await.iter().map(|(id, e)| {
+            let live = e.conn.as_ref().filter(|(_, c)| c.close_reason().is_none());
+            let path = live.map(|(_, c)| crate::paths::selected(c).0).filter(|k| *k != PathKind::Unknown);
+            (*id, LiveInfo { online: live.is_some(), path, last_seen: e.last_seen })
+        }).collect()
+    }
+
+    /// Close the peer's live connection, telling it it was revoked.
+    pub async fn revoke(&self, id: EndpointId) {
+        if let Some(e) = self.0.lock().await.remove(&id) {
+            if let Some((_, c)) = e.conn {
+                c.close(CLOSE_REVOKED.into(), b"revoked");
+            }
+        }
+    }
+
+    async fn attach(&self, conn: Connection) {
+        let generation = GENERATION.fetch_add(1, Ordering::Relaxed);
+        let id = conn.remote_id();
+        self.0.lock().await.insert(id, Entry { conn: Some((generation, conn.clone())), last_seen: crate::devices::now_unix() });
+        let reg = self.clone();
+        tokio::spawn(async move {
+            conn.closed().await;
+            if let Some(e) = reg.0.lock().await.get_mut(&id) {
+                if e.conn.as_ref().is_some_and(|(g, _)| *g == generation) {
+                    e.conn = None;
+                    e.last_seen = crate::devices::now_unix();
+                }
+            }
+        });
+    }
+
+    async fn touch(&self, id: EndpointId) {
+        if let Some(e) = self.0.lock().await.get_mut(&id) {
+            e.last_seen = crate::devices::now_unix();
+        }
+    }
+}
 
 pub async fn run(ep: Endpoint, backend_port: u16, allow_path: PathBuf) -> anyhow::Result<()> {
     run_with(ep, backend_port, allow_path, None).await
@@ -22,8 +94,13 @@ pub async fn run(ep: Endpoint, backend_port: u16, allow_path: PathBuf) -> anyhow
 
 /// Like [`run`], also handing ALPN_PAIR connections to `pairing` when given.
 pub async fn run_with(ep: Endpoint, backend_port: u16, allow_path: PathBuf, pairing: Option<crate::pair::Pairing>) -> anyhow::Result<()> {
+    run_full(ep, backend_port, allow_path, pairing, Registry::default()).await
+}
+
+/// Like [`run_with`], tracking live peers in `registry`.
+pub async fn run_full(ep: Endpoint, backend_port: u16, allow_path: PathBuf, pairing: Option<crate::pair::Pairing>, registry: Registry) -> anyhow::Result<()> {
     let client: Upstream = Client::builder(TokioExecutor::new()).build_http();
-    let ctx = Arc::new(Ctx { client, backend_port, allow_path: allow_path.clone() });
+    let ctx = Arc::new(Ctx { client, backend_port, allow_path: allow_path.clone(), registry });
     while let Some(incoming) = ep.accept().await {
         let ctx = ctx.clone();
         let allow_path = allow_path.clone();
@@ -45,14 +122,15 @@ pub async fn run_with(ep: Endpoint, backend_port: u16, allow_path: PathBuf, pair
                 Ok(set) if set.contains(&peer) => {}
                 Ok(_) => {
                     tracing::warn!("peer={peer} rejected: not in allow-list");
-                    return conn.close(1u32.into(), b"not allowed");
+                    return conn.close(CLOSE_REVOKED.into(), b"revoked");
                 }
                 Err(e) => {
                     tracing::error!("allow-list unreadable, rejecting peer={peer}: {e:#}");
-                    return conn.close(1u32.into(), b"not allowed");
+                    return conn.close(1u32.into(), b"allow-list unreadable");
                 }
             }
             crate::paths::spawn_logger(conn.clone());
+            ctx.registry.attach(conn.clone()).await;
             serve_conn(conn, ctx).await;
         });
     }
@@ -63,6 +141,7 @@ struct Ctx {
     client: Upstream,
     backend_port: u16,
     allow_path: PathBuf,
+    registry: Registry,
 }
 
 fn still_allowed(ctx: &Ctx, peer: iroh::EndpointId) -> bool {
@@ -75,9 +154,10 @@ async fn serve_conn(conn: Connection, ctx: Arc<Ctx>) {
         // Re-check on every stream so removing a peer cuts a live connection.
         if !still_allowed(&ctx, peer) {
             tracing::warn!("peer={peer} revoked; closing connection");
-            conn.close(1u32.into(), b"revoked");
+            conn.close(CLOSE_REVOKED.into(), b"revoked");
             return;
         }
+        ctx.registry.touch(peer).await;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(tokio::io::join(recv, send));
@@ -124,6 +204,8 @@ async fn proxy(mut req: Request<Incoming>, ctx: Arc<Ctx>) -> Result<Response<Bod
     };
     let headers = req.headers_mut();
     headers.insert(header::HOST, HeaderValue::from_str(&authority).expect("ascii"));
+    // Only this proxy may say a request came from a paired device.
+    headers.insert("x-p2r-remote", HeaderValue::from_static("1"));
     if headers.contains_key(header::ORIGIN) {
         headers.insert(header::ORIGIN, HeaderValue::from_str(&format!("http://{authority}")).expect("ascii"));
     }

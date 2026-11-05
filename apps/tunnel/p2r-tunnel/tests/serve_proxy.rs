@@ -62,10 +62,10 @@ async fn rewrites_host_and_origin() {
     ])).await.unwrap();
     let text = body_text(resp).await;
     let p = backend.port;
-    assert_eq!(text, format!("host=127.0.0.1:{p}\norigin=http://127.0.0.1:{p}\nsec-fetch-site=same-origin\n"));
+    assert_eq!(text, format!("host=127.0.0.1:{p}\norigin=http://127.0.0.1:{p}\nsec-fetch-site=same-origin\nx-p2r-remote=1\n"));
 
     let resp = tx.send_request(common::get("/echo-headers", &[("host", "127.0.0.1:18080")])).await.unwrap();
-    assert_eq!(body_text(resp).await, format!("host=127.0.0.1:{p}\norigin=-\nsec-fetch-site=-\n"));
+    assert_eq!(body_text(resp).await, format!("host=127.0.0.1:{p}\norigin=-\nsec-fetch-site=-\nx-p2r-remote=1\n"));
 }
 
 #[tokio::test]

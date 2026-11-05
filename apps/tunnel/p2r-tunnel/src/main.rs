@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use p2r_tunnel::{connect, endpoint, keys, pair, rendezvous, serve, shutdown};
+use p2r_tunnel::{connect, control, endpoint, keys, pair, rendezvous, serve, shutdown};
 
 #[derive(Parser)]
 #[command(name = "p2r-tunnel", about = "Paper2Run tablet tunnel over iroh")]
@@ -58,9 +58,15 @@ enum Cmd {
         net: Net,
         #[arg(long)]
         backend_port: u16,
-        /// File with one allowed peer id per line.
+        /// Paired devices (JSON); created on first pairing.
         #[arg(long)]
-        allow: PathBuf,
+        devices: PathBuf,
+        /// Rendezvous endpoint id (from remote.json); enables pairing.
+        #[arg(long)]
+        rendezvous: Option<iroh::EndpointId>,
+        /// Where to publish the control API's port and token.
+        #[arg(long)]
+        control_file: Option<PathBuf>,
     },
     /// Relay host: hand out pairing nameplates.
     Rendezvous {
@@ -94,6 +100,9 @@ enum Cmd {
         peer: iroh::EndpointId,
         #[arg(long, default_value = "127.0.0.1:18080")]
         listen: std::net::SocketAddr,
+        /// Print one JSON line per state change on stdout. Exits 5 when revoked.
+        #[arg(long)]
+        status_json: bool,
     },
 }
 
@@ -104,10 +113,25 @@ async fn main() -> anyhow::Result<()> {
         .init();
     match Cli::parse().cmd {
         Cmd::Id { key } => println!("{}", keys::load_or_create(&key)?.public()),
-        Cmd::Serve { net, backend_port, allow } => {
+        Cmd::Serve { net, backend_port, devices, rendezvous, control_file } => {
+            let cfg = net.config()?;
             let ep = net.bind().await?;
             tracing::info!("serving id={} backend=127.0.0.1:{backend_port}", ep.id());
-            shutdown::run_until(ep.clone(), shutdown::signal(), serve::run(ep, backend_port, allow)).await?;
+            let pairing = pair::Pairing::new(devices.clone());
+            let registry = serve::Registry::default();
+            let mut _control_guard = None;
+            if let Some(path) = control_file {
+                let rendezvous = rendezvous.ok_or_else(|| anyhow::anyhow!("--control-file needs --rendezvous"))?;
+                let token = control::new_token();
+                let port = control::spawn(control::ControlState {
+                    ep: ep.clone(), cfg, rendezvous, pairing: pairing.clone(),
+                    devices: devices.clone(), registry: registry.clone(), token: token.clone(),
+                }).await?;
+                _control_guard = Some(control::ControlFile::write(&path, port, &token)?);
+                tracing::info!("control api on 127.0.0.1:{port}");
+            }
+            let work = serve::run_full(ep.clone(), backend_port, devices, rendezvous.map(|_| pairing), registry);
+            shutdown::run_until(ep, shutdown::signal(), work).await?;
         }
         Cmd::Pair { net, rendezvous, code, name, out } => {
             let cfg = net.config()?;
@@ -134,12 +158,31 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("rendezvous id={}", ep.id());
             shutdown::run_until(ep.clone(), shutdown::signal(), rendezvous::serve(ep)).await?;
         }
-        Cmd::Connect { net, peer, listen } => {
+        Cmd::Connect { net, peer, listen, status_json } => {
             let cfg = net.config()?;
             let ep = net.bind().await?;
             tracing::info!("connecting id={} -> peer={peer}", ep.id());
-            let work = connect::run(ep.clone(), endpoint::peer_addr(&cfg, peer), listen);
-            shutdown::run_until(ep, shutdown::signal(), work).await?;
+            let report = move |s: connect::Status| {
+                if status_json {
+                    let line = match s {
+                        connect::Status::Connecting => serde_json::json!({"state": "connecting"}),
+                        connect::Status::Connected(p) => serde_json::json!({"state": "connected", "path": p.to_string()}),
+                        connect::Status::Revoked => serde_json::json!({"state": "revoked"}),
+                    };
+                    use std::io::Write;
+                    let mut out = std::io::stdout().lock();
+                    let _ = writeln!(out, "{line}");
+                    let _ = out.flush();
+                }
+            };
+            let work = connect::run_with_status(ep.clone(), endpoint::peer_addr(&cfg, peer), listen, report);
+            if let Err(e) = shutdown::run_until(ep, shutdown::signal(), work).await {
+                if e.downcast_ref::<connect::Revoked>().is_some() {
+                    eprintln!("{e}");
+                    std::process::exit(5);
+                }
+                return Err(e);
+            }
         }
     }
     Ok(())
