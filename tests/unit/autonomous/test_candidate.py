@@ -117,6 +117,8 @@ def test_submit_candidate_freezes_copies(service):
         log = base / "logs" / f"{snap['run']['job_id']}.txt"
         assert log.is_file() and log.read_text().startswith("observed")
         assert snap["run"]["exit_code"] == 0 and snap["run"]["sequence"] > 0
+        assert snap["protocol"] == row.protocol_json and row.harness_json["candidates"] == {snap["snapshot_sha256"]: snap}
+        assert json.loads((base / "protocol.json").read_text()) == row.protocol_json
         events = db.scalars(select(Event).where(Event.task_id == task_id, Event.type == "candidate_frozen")).all()
         assert len(events) == 1 and events[0].payload["snapshot_sha256"] == snap["snapshot_sha256"]
 

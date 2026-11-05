@@ -129,11 +129,14 @@ def evaluation(service, row):
     return evaluation_at(service, row, artifact_root(service, row))
 
 
-def evaluation_at(service, row, root):
-    """Program-owned evaluation of the artifacts under root (live round or frozen candidate)."""
-    if not row.protocol_json:
+def evaluation_at(service, row, root, protocol=None):
+    """Program-owned evaluation of the artifacts under root (live round or frozen candidate).
+
+    protocol: the frozen {protocol, sha256} to evaluate under; defaults to the task's current protocol."""
+    protocol = protocol or row.protocol_json
+    if not protocol:
         return {"verdict": "not_comparable", "comparison_eligible": False, "metrics": {}, "reasons": ["No approved protocol."]}
-    result = evaluate_artifacts(row.protocol_json, root)
+    result = evaluate_artifacts(protocol, root)
     # API-v1 does not expose independent evaluator custody/attestation. User or
     # agent booleans cannot establish independent labels or absence of leakage.
     result["comparison_eligible"] = False
@@ -188,6 +191,26 @@ def entrypoint_code(artifacts, entrypoint):
     return next((a for a in artifacts if a["kind"] == "code" and entrypoint in (a["name"], a.get("source_path"))), None)
 
 
+def store_candidate(harness, candidate):
+    """harness_json with candidate as the current one, also kept under candidates[snapshot_sha256]."""
+    candidates = {**(harness.get("candidates") or {}), candidate["snapshot_sha256"]: candidate}
+    return {**harness, "candidate": candidate, "candidates": candidates}
+
+
+def deciding_candidate(harness, snapshot=None):
+    """The candidate named by snapshot (an outcome's deciding snapshot), else the current candidate."""
+    current = harness.get("candidate")
+    if not snapshot or (current and current["snapshot_sha256"] == snapshot):
+        return current
+    # Candidates frozen before per-snapshot manifests were kept fall back to the current one.
+    return (harness.get("candidates") or {}).get(snapshot) or current
+
+
+def candidate_protocol(row, candidate):
+    """The {protocol, sha256} the candidate was frozen under (older candidates: the task's protocol)."""
+    return candidate.get("protocol") or row.protocol_json
+
+
 def candidate_root(service, row, candidate):
     """Frozen candidate artifacts, hash-checked against the snapshot manifest."""
     root = service.task_root(row.id) / "candidates" / candidate["snapshot_sha256"] / "artifacts"
@@ -204,8 +227,9 @@ INTEGRITY_FAILED = "frozen candidate integrity check failed"
 
 def report(service, db, row, narrative="", outcome=None, reason=None, outcome_snapshot=None):
     harness = row.harness_json or {}
-    candidate = harness.get("candidate")
-    # A candidate report describes the frozen snapshot, never the live round.
+    # A candidate report describes the deciding frozen snapshot under its own protocol, never the live round.
+    candidate = deciding_candidate(harness, outcome_snapshot if outcome else None)
+    protocol = candidate_protocol(row, candidate) if candidate else row.protocol_json
     root, intact = None, True
     if candidate:
         try:
@@ -217,18 +241,18 @@ def report(service, db, row, narrative="", outcome=None, reason=None, outcome_sn
     try:
         if not intact:
             raise ValueError(INTEGRITY_FAILED)
-        calculated = evaluation_at(service, row, root) if candidate else evaluation(service, row)
+        calculated = evaluation_at(service, row, root, protocol) if candidate else evaluation(service, row)
     except (ValueError, OSError) as exc:
         calculated = {"verdict": "not_comparable", "comparison_eligible": False,
                       "metrics": {}, "reasons": [str(exc)]}
     artifacts = [dict(a) for a in candidate["artifacts"]] if candidate else round_artifacts(row)
-    expected = row.protocol_json["protocol"]["expected_artifacts"] if row.protocol_json else []
+    expected = protocol["protocol"]["expected_artifacts"] if protocol else []
     names = {a["name"] for a in artifacts}
     missing = sorted(set(expected) - names)
     kinds = {a["kind"] for a in artifacts}
     missing_kinds = sorted({"code", "environment", "data", "result"} - kinds)
     executions = entrypoint_executions(db, row)
-    entrypoint = row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None
+    entrypoint = protocol["protocol"]["entrypoint"] if protocol else None
     frozen_code = entrypoint_code(artifacts, entrypoint)
     if candidate:
         # The candidate's own formal run, checked as a qualifying entrypoint run when it was frozen.
@@ -237,12 +261,12 @@ def report(service, db, row, narrative="", outcome=None, reason=None, outcome_sn
         observed_success = bool(frozen_code) and any(f["matches_protocol_entrypoint"] and f["result"].get("exit_code") == 0
                                                      for f in executions)
     verification = None
-    if row.reference_values_json is not None and row.protocol_json:
+    if row.reference_values_json is not None and protocol:
         try:
             if not intact:
                 raise ValueError(INTEGRITY_FAILED)
             verification = verify_reference_values(
-                row.protocol_json, root or artifact_root(service, row), row.reference_values_json,
+                protocol, root or artifact_root(service, row), row.reference_values_json,
                 scope=row.reference_scope or "", user_confirmed_sources=row.reference_sources_confirmed,
                 comparison_custody_verified=False,
             )
@@ -259,7 +283,7 @@ def report(service, db, row, narrative="", outcome=None, reason=None, outcome_sn
               "candidate": candidate, "reviews": harness.get("reviews", []),
               "model_narrative": service.profiles.clean(narrative),
               "evaluation": calculated, "artifacts": artifacts, "missing_artifacts": missing,
-              "missing_evidence_kinds": missing_kinds, "protocol": row.protocol_json,
+              "missing_evidence_kinds": missing_kinds, "protocol": protocol,
               "reference_values": row.reference_values_json,
               "verification": verification,
               "limitations": ["Model narrative is not execution evidence.",

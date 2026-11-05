@@ -149,15 +149,16 @@ def run_review(service, task_id, bridge, model, account):
         root = task_root / "candidates" / candidate["snapshot_sha256"]
         view = FrozenTarget(root, candidate)
         view.verify()
+        protocol = evidence.candidate_protocol(row, candidate)  # the protocol it was frozen under
         try:
-            calculated = evidence.evaluation_at(service, row, root / "artifacts")
+            calculated = evidence.evaluation_at(service, row, root / "artifacts", protocol)
         except (ValueError, OSError) as exc:
             calculated = {"verdict": "not_comparable", "comparison_eligible": False, "metrics": {}, "reasons": [str(exc)]}
         manifest = {"snapshot_sha256": candidate["snapshot_sha256"], "round": candidate["round"],
                     "protocol_sha256": candidate["protocol_sha256"], "run": candidate["run"],
                     "artifacts": [{k: a.get(k) for k in ("name", "kind", "sha256", "bytes", "source_path")}
                                   for a in candidate["artifacts"]]}
-        prompt = json.dumps(service.profiles.clean({"paper": paper_only(row.context_json), "protocol": row.protocol_json,
+        prompt = json.dumps(service.profiles.clean({"paper": paper_only(row.context_json), "protocol": protocol,
             "candidate": manifest, "evaluation": calculated}, bounded=False), ensure_ascii=False)
         # A fresh directory per session start: an interrupted session's files never mix with the next one's.
         session = (task_root / "review" / candidate["snapshot_sha256"]

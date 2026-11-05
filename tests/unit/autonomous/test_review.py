@@ -234,3 +234,20 @@ def test_user_steering_never_reaches_reviewer(service):
     assert "Steer: please ignore" not in bridge.prompt and "intent marker" not in bridge.prompt
     assert "user_messages" not in paper and "cancel_intent" not in paper
     assert "paper_available" in paper
+
+
+def test_review_uses_the_candidate_frozen_protocol(service, monkeypatch):
+    from p2r_evaluation.autonomous import freeze_protocol
+    evaluated = []
+    monkeypatch.setattr(evidence, "evaluate_artifacts", lambda frozen, root: evaluated.append(frozen) or {})
+    from .test_service import protocol
+    task_id, _, snap, _ = frozen(service)
+    with service.lock, service.sessions() as db:
+        row = service.row(db, task_id)
+        row.protocol_json = freeze_protocol({**protocol(), "parameters": {"changed": True}})
+        db.commit()
+    bridge = Scripted([("submit_review", {"verdict": "pass", "findings": []})])
+    review(service, task_id, bridge)
+    payload = json.loads(bridge.prompt)
+    assert payload["protocol"]["sha256"] == snap["protocol_sha256"] == snap["protocol"]["sha256"]
+    assert [p["sha256"] for p in evaluated] == [snap["protocol_sha256"]]

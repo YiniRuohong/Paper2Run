@@ -461,8 +461,10 @@ def run_worker(service, task_id, bridge, message):
                     candidate = row.harness_json["candidate"]
                     if candidate.get("review_status") == "pending":
                         candidate = {**candidate, "review_status": "unavailable"}
-                    row.harness_json = {**row.harness_json, "candidate": candidate, "outcome_snapshot_sha256": snapshot}
-                    evidence.report(service, db, row, candidate["summary"], outcome=outcome, reason=reason,
+                    row.harness_json = {**evidence.store_candidate(row.harness_json, candidate),
+                                        "outcome_snapshot_sha256": snapshot}
+                    deciding = evidence.deciding_candidate(row.harness_json, snapshot)
+                    evidence.report(service, db, row, deciding["summary"], outcome=outcome, reason=reason,
                                     outcome_snapshot=snapshot)
                     row.outcome = outcome
                     service.event(db, row, "task_finished", {"state": row.state, "outcome": outcome,

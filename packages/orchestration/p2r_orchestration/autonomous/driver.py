@@ -124,8 +124,9 @@ def with_user_messages(service, db, row, prompt):
 
 def finish(service, db, row, outcome, reason=None, snapshot=None):
     """Terminal outcome bound to the snapshot that decided it (default: the current candidate)."""
-    candidate = (row.harness_json or {}).get("candidate")
-    snapshot = snapshot or (candidate["snapshot_sha256"] if candidate else None)
+    current = (row.harness_json or {}).get("candidate")
+    snapshot = snapshot or (current["snapshot_sha256"] if current else None)
+    candidate = evidence.deciding_candidate(row.harness_json or {}, snapshot)
     row.harness_json = {**row.harness_json, "outcome_snapshot_sha256": snapshot}
     evidence.report(service, db, row, narrative=candidate["summary"] if candidate else "",
                     outcome=outcome, reason=reason, outcome_snapshot=snapshot)
@@ -149,7 +150,8 @@ def block_for_safety(service, db, row, error):
             snapshot = candidate["snapshot_sha256"]
             if candidate.get("review_status") == "pending":
                 candidate = {**candidate, "review_status": "unavailable"}
-        row.harness_json = {**row.harness_json, "candidate": candidate, "outcome_snapshot_sha256": snapshot}
+            row.harness_json = evidence.store_candidate(row.harness_json, candidate)
+        row.harness_json = {**row.harness_json, "outcome_snapshot_sha256": snapshot}
     service.event(db, row, "safety_blocked", {**error, "outcome_snapshot_sha256": snapshot})
 
 
@@ -231,7 +233,7 @@ def _review(service, task_id, bridge_factory, model, account):
                 candidate = {**candidate, "attempts": attempt}
                 if attempt >= REVIEW_ATTEMPTS:
                     candidate["review_status"] = "unavailable"
-                row.harness_json = {**harness, "candidate": candidate}
+                row.harness_json = evidence.store_candidate(harness, candidate)
                 service.event(db, row, "review_failed", {"snapshot_sha256": candidate["snapshot_sha256"],
                                                          "attempt": attempt, "reason": service.profiles.clean(reason)})
                 if attempt >= REVIEW_ATTEMPTS:
@@ -245,7 +247,7 @@ def _review(service, task_id, bridge_factory, model, account):
             service.event(db, row, "review_recorded", {key: record[key] for key in
                                                        ("snapshot_sha256", "verdict", "findings", "attempt")})
             candidate = {**candidate, "review_status": review["verdict"]}
-            harness = {**harness, "candidate": candidate, "reviews": [*harness.get("reviews", []), record]}
+            harness = {**evidence.store_candidate(harness, candidate), "reviews": [*harness.get("reviews", []), record]}
             row.harness_json = harness
             if review["verdict"] == "pass":
                 finish(service, db, row, "verified")

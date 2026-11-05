@@ -1,4 +1,6 @@
 """Turn driver: review after a turn, repair rounds, continuation and outcomes (scripted bridges)."""
+from hashlib import sha256
+import json
 from pathlib import Path
 
 import pytest
@@ -14,15 +16,16 @@ FILES = [("env.json", "environment", "{}"), ("data.json", "data", "{}"),
          ("labels.json", "result", '[{"id":"a","label":1}]')]
 FINDING = {"description": "labels.json holds 1 row; the protocol split requires the full test split.",
            "evidence": ["labels.json"]}
+OFF_BY_TWO = [*FILES[:2], ("predictions.json", "result", '[{"id":"a","prediction":3}]'), FILES[3]]
 ADVICE = ("you should", "next step", "建议")
 
 
-def work(tag="r0"):
+def work(tag="r0", files=FILES):
     """Tool calls for one complete candidate: code, a formal run after it, remaining evidence, submit."""
     calls = [("write", {"path": "main.py", "content": f"print('{tag}')"}),
              ("register_artifact", {"path": "main.py", "name": "main.py", "kind": "code"}),
              ("execute", {"command": "python3 main.py", "timeout_seconds": 5})]
-    for name, kind, content in FILES:
+    for name, kind, content in files:
         calls += [("write", {"path": name, "content": content}),
                   ("register_artifact", {"path": name, "name": name, "kind": kind})]
     return calls + [("submit_candidate", {"summary": f"candidate {tag}"})]
@@ -72,8 +75,8 @@ class Crashing(Bridge):
         raise RuntimeError("node binary missing")
 
 
-def prepare(service, bridges, rounds=None):
-    task_id = create(service, protocol=protocol())
+def prepare(service, bridges, rounds=None, frozen=None):
+    task_id = create(service, protocol=frozen or protocol())
     if rounds is not None:
         with service.sessions() as db:
             row = service.row(db, task_id)
@@ -199,7 +202,7 @@ def test_facts_message_lists_jobs_and_latest_findings(service):
 @pytest.mark.parametrize("reviewed", [False, True])
 def test_budget_exhausted_during_review_gives_review_unavailable(service, reviewed):
     exhausted = Review(messages=({"type": "error", "code": "budget_exceeded", "message": "budget exhausted"},))
-    turns = [work("r0"), work("r1")] if reviewed else [work("r0")]
+    turns = [work("r0"), work("r1", OFF_BY_TWO)] if reviewed else [work("r0")]
     reviews = [Review("issues", [FINDING]), exhausted] if reviewed else [exhausted]
     main = Main(turns)
     task_id, row = start(service, [main, *reviews])
@@ -213,12 +216,39 @@ def test_budget_exhausted_during_review_gives_review_unavailable(service, review
         assert earlier != row.harness_json["candidate"]["snapshot_sha256"]
         assert row.harness_json["outcome_snapshot_sha256"] == earlier
         assert row.report_json["outcome_snapshot_sha256"] == earlier
+        # Every candidate-derived report field describes the reviewed snapshot, not the newer pending one.
+        assert row.report_json["candidate"]["snapshot_sha256"] == earlier
+        assert row.report_json["candidate"] == row.harness_json["candidates"][earlier]
+        code = next(a for a in row.report_json["artifacts"] if a["name"] == "main.py")
+        assert code["sha256"] == sha256(b"print('r0')").hexdigest()
+        assert row.report_json["evaluation"]["metrics"]["mae"] == 0
     else:
         assert row.outcome == "review_unavailable"
         assert row.report_json["outcome"] == "review_unavailable"
         assert row.report_json["outcome_reason"] == "budget_exhausted"
         assert row.report_json["outcome_snapshot_sha256"] == row.harness_json["candidate"]["snapshot_sha256"]
     assert events(service, task_id, "task_finished")[-1]["reason"] == "budget_exhausted"
+
+
+def test_deciding_snapshot_is_evaluated_under_its_own_protocol(service):
+    first = {**protocol(), "allowed_changes": ["parameters"]}
+    second = {**first, "parameters": {"seed": 7}}
+    exhausted = Review(messages=({"type": "error", "code": "budget_exceeded", "message": "budget exhausted"},))
+    main = Main([work("r0"), [("propose_protocol", {"protocol": second, "reason": "seed"}), *work("r1", OFF_BY_TWO)]])
+    task_id = prepare(service, [main, Review("issues", [FINDING]), exhausted], frozen=first)
+    service.launch(task_id)
+    row = wait(service, task_id)
+    reviewed = row.harness_json["reviews"][-1]["snapshot_sha256"]
+    old_sha = row.harness_json["candidates"][reviewed]["protocol_sha256"]
+    assert row.outcome == "completed_with_issues" and row.report_json["outcome_snapshot_sha256"] == reviewed
+    assert row.protocol_json["sha256"] != old_sha == row.harness_json["candidates"][reviewed]["protocol"]["sha256"]
+    assert row.harness_json["candidate"]["protocol_sha256"] == row.protocol_json["sha256"]
+    report = row.report_json
+    assert report["protocol"]["sha256"] == old_sha and report["evaluation"]["protocol_sha256"] == old_sha
+    assert report["evaluation"]["metrics"]["mae"] == 0
+    assert report["status"] != "incomplete" and report["successful_execution_observed"] is True
+    saved = service.task_root(task_id) / "candidates" / reviewed / "protocol.json"
+    assert json.loads(saved.read_text()) == row.harness_json["candidates"][reviewed]["protocol"]
 
 
 def test_resume_with_pending_review_reruns_same_snapshot(service):

@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 
 from .evidence import (MAX_FILE, artifact_root, current_round, ensure_not_under_review, entrypoint_code,
-                       entrypoint_executions, round_artifacts, safe_name)
+                       entrypoint_executions, round_artifacts, safe_name, store_candidate)
 from .security import digest, fail
 
 REQUIRED_KINDS = ("code", "environment", "data", "result")
@@ -77,6 +78,7 @@ def freeze(service, target, task_id, summary):
         run_fact = qualifying_run(db, row)
         round_ = current_round(row)
         protocol_sha = row.protocol_json["sha256"]
+        frozen_protocol = dict(row.protocol_json)
         artifacts = [dict(a) for a in round_artifacts(row)]
         root = artifact_root(service, row)
         task_root = service.task_root(task_id)
@@ -93,7 +95,8 @@ def freeze(service, target, task_id, summary):
     log = _fetch_logs(service, target, run["job_id"])
     (base / "logs").mkdir(parents=True, exist_ok=True)
     (base / "logs" / f"{run['job_id']}.txt").write_text(log)
-    candidate = {"snapshot_sha256": snapshot, "round": round_, "protocol_sha256": protocol_sha,
+    (base / "protocol.json").write_text(json.dumps(frozen_protocol, ensure_ascii=False, sort_keys=True))
+    candidate = {"snapshot_sha256": snapshot, "round": round_, "protocol_sha256": protocol_sha, "protocol": frozen_protocol,
                  "artifacts": artifacts, "run": run, "summary": service.profiles.clean(summary),
                  "review_status": "pending", "attempts": 0}
     with service.lock, service.sessions() as db:
@@ -101,7 +104,7 @@ def freeze(service, target, task_id, summary):
         ensure_not_under_review(row)
         if current_round(row) != round_ or not row.protocol_json or row.protocol_json["sha256"] != protocol_sha:
             fail("CANDIDATE_STALE", "evidence changed while the candidate was being frozen", 409)
-        row.harness_json = {**row.harness_json, "candidate": candidate}
+        row.harness_json = store_candidate(row.harness_json, candidate)
         service.event(db, row, "candidate_frozen", candidate)
         db.commit()
     return candidate

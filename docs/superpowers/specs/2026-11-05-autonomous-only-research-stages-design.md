@@ -101,7 +101,7 @@
 4. 协议 `expected_artifacts` 中的每个名称都已在当前轮次登记，每缺一个列一项 `expected artifact <name>`；
 5. 至少有一次入口运行以退出码 0 结束，它的 argv 与协议入口一致（沿用现有"直接用解释器启动入口"的规则），并且该作业的**启动序号**晚于当前轮次最后一次登记 `code` 的序号。按启动序号而不是结束时间或观察时间判断，所以重新查询一个旧作业不会让它变成"新鲜"的运行。
 
-检查通过后冻结快照：协议版本、轮次、正式运行作业的 id/退出码/启动序号、四类产物的名称/类别/sha256。对这些内容做规范化序列化后计算哈希。快照引用的产物按哈希校验后复制到 `task_root/candidates/<sha>/artifacts/`，正式运行作业的日志分页取回，写入 `task_root/candidates/<sha>/logs/`。最后写入 `candidate_frozen` 事件，候选的复核状态为 `pending`。
+检查通过后冻结快照：协议版本、轮次、正式运行作业的 id/退出码/启动序号、四类产物的名称/类别/sha256。对这些内容做规范化序列化后计算哈希。快照引用的产物按哈希校验后复制到 `task_root/candidates/<sha>/artifacts/`，正式运行作业的日志分页取回，写入 `task_root/candidates/<sha>/logs/`；冻结时的协议（`{protocol, sha256}`）写入 `task_root/candidates/<sha>/protocol.json`，并保存在候选记录里。每份冻结候选的清单都保留在 `harness_json.candidates[<sha>]`，`harness_json.candidate` 仍是当前候选。最后写入 `candidate_frozen` 事件，候选的复核状态为 `pending`。
 
 候选处于 `pending` 期间，`register_artifact`、`submit_candidate` 和 `propose_protocol` 一律被拒绝（`CANDIDATE_UNDER_REVIEW`），证据在复核结束前不会再变。`submit_candidate` 的返回值告诉 Pi 结束本轮。
 
@@ -109,7 +109,7 @@
 
 复核不放在 `submit_candidate` 调用内同步完成。harness 对单次工具调用有 300 秒的超时上限（`apps/harness/bridge.mjs:305`），一次复核会超过它。所以 `submit_candidate` 只负责冻结并立即返回，Pi 结束当前轮次后，由 `driver.after_turn` 接手：
 
-1. 运行现有的可信评测（对冻结副本重算），可比性结论原样保存。
+1. 运行现有的可信评测（对冻结副本、按该候选冻结时的协议重算），可比性结论原样保存。
 2. 新开一个 harness 会话作为复核者：使用新的会话目录，模型沿用主 Agent 的配置（允许同一个模型）。复核者只有 `read`、`logs`、`status` 和 `submit_review` 这几个工具，这些工具指向 `FrozenTarget`，只能访问冻结副本和冻结日志，**不连接实验容器**。复核者的输入包括：论文上下文（按论文字段白名单取，不含用户消息和取消意图等控制状态）、冻结协议、快照清单、评测结果。复核期间，用户的引导消息不会送到复核者，只会留在库里，等主会话取用。
 3. `submit_review` 的结构：`verdict: pass | issues`；`findings[]`，每条包含描述和引用的证据（产物名、源路径或日志摘录）。`issues` 至少要带一条带证据的 finding。复核结果绑定到快照哈希，写入 `review_recorded` 事件。
 4. 根据结果分支：
@@ -130,7 +130,7 @@
 | `review_unavailable` | 复核会话两次尝试都失败；或者预算耗尽时候选还在等待复核，且此前没有复核记录 |
 | `blocked_by_safety` | 容器隔离完整性校验失败，错误码为 `isolation_changed`、`network_isolation_failed` 或 `host_addresses_changed`。第一次发生就终止，不能恢复。此前这类错误只会让任务暂停 |
 
-每个结局都写入 `outcome_snapshot_sha256`，记录是哪份快照决定了它（没有候选时为空）。评测结论 `verdict` 在所有结局下都是 `not_comparable`，结局不改变可比性。
+每个结局都写入 `outcome_snapshot_sha256`，记录是哪份快照决定了它（没有候选时为空）。报告中的候选、产物、评测、完成检查和叙述都取自这份决定结局的快照，评测按它自己冻结的协议计算；没有结局时取当前候选。评测结论 `verdict` 在所有结局下都是 `not_comparable`，结局不改变可比性。
 
 状态和结局的对应：
 - `verified`、`completed_with_issues`（复核耗尽轮次）、`review_unavailable`（复核失败）：`state` 为 `completed`。
@@ -227,5 +227,6 @@
 8. 旧任务以 `harness_json` 为空识别，而不是 `outcome`/`repair_round` 为空（5.9）。
 9. 复核进行时，暂停、停止和应用退出会中止复核会话，用户消息不转发给复核者（5.5）。
 10. 提交关卡与报告的完整性检查使用同一套规则：入口代码产物和协议 `expected_artifacts` 都是提交条件，因此 `verified` 的报告不会是 `incomplete`（5.4）。
+11. 预算耗尽时结局绑定较早一份已复核快照的情况下，报告按那份快照及其冻结协议生成，而不是按更新的待复核候选或任务当前协议（5.4、5.6）。
 
 5.10 到 5.12（前端、删除传统模式、Windows）仍是后续工作，本次未改动。
