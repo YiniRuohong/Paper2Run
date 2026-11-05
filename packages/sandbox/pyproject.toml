@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "p2r-sandbox"
 version = "0.1.0"
-description = "Host-isolated execution of untrusted Python scripts (Paper2Run sandbox), usable standalone"
+description = "Docker execution target for Paper2Run autonomous experiments, usable standalone"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

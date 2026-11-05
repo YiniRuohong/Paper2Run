@@ -1,9 +1,10 @@
 """Build the relocatable CPython runtime bundled into the Paper2Run desktop app.
 
-Why a real interpreter instead of PyInstaller/Nuitka: ``p2r_sandbox`` launches
-``sys.executable -I ...`` for every probe and guest run (seatbelt on macOS,
-AppContainer/Job Object on Windows). A frozen executable is not a Python
-interpreter, so the backend must ship as a real, relocatable CPython. We use
+Why a real interpreter instead of PyInstaller/Nuitka: the Electron shell starts
+``serve.py`` with interpreter flags, and ``p2r_docparse.install`` runs
+``sys.executable -m pip --python ...`` to install MinerU on demand. A frozen
+executable is not a Python interpreter, so the backend must ship as a real,
+relocatable CPython. We use
 python-build-standalone (PBS) ``install_only_stripped`` builds, pinned below
 by release + SHA-256.
 
