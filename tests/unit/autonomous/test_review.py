@@ -53,9 +53,9 @@ def test_frozen_target_ignores_live_changes(service):
     target.files["main.py"] = b"changed after freeze"
     with service.sessions() as db:
         live = evidence.artifact_root(service, service.row(db, task_id))
+    (live / "main.py").write_text("live store overwritten after freeze")
     view = FrozenTarget(root, snap)
     assert view.read("main.py")["content"] == "content of main.py"
-    assert (live / "main.py").read_text() == "content of main.py"
     moved = {**snap, "artifacts": [{**a, "source_path": "/work/" + a["name"]} for a in snap["artifacts"]]}
     assert FrozenTarget(root, moved).read("/work/main.py")["content"] == "content of main.py"
     page = view.read("main.py", offset=8, limit=4)
@@ -67,7 +67,7 @@ def test_logs_only_for_candidate_job(service):
     view = FrozenTarget(root, snap)
     job = snap["run"]["job_id"]
     assert view.logs(job)["stdout"].startswith("observed")
-    assert view.status(job) == {"job_id": job, "exit_code": 0, "state": "completed"}
+    assert view.status(job) == {**snap["run"], "state": "completed"} and "sequence" in view.status(job)
     for call in (view.logs, view.status):
         with pytest.raises(ServiceError) as caught:
             call("0" * 64)
@@ -136,6 +136,16 @@ def test_issues_with_evidence_is_returned(service):
     finding = {"description": "metric differs from protocol", "evidence": ["predictions.json"]}
     bridge = Scripted([("submit_review", {"verdict": "issues", "findings": [finding]})])
     assert review(service, task_id, bridge)[0] == {"verdict": "issues", "findings": [finding]}
+
+
+def test_long_findings_survive_intact(service):
+    task_id, *_ = frozen(service)
+    findings = [{"description": f"发现{i}：" + "结果与协议不一致" * 490, "evidence": ["predictions.json", "日志" * 400]}
+                for i in range(20)]
+    assert all(len(f["description"]) <= 4000 for f in findings)
+    bridge = Scripted([("submit_review", {"verdict": "issues", "findings": findings})])
+    result = review(service, task_id, bridge)[0]
+    assert result == {"verdict": "issues", "findings": findings}
 
 
 @pytest.mark.parametrize("arguments", [

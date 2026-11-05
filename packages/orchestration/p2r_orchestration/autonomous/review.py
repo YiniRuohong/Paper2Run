@@ -121,8 +121,7 @@ class FrozenTarget:
 
     def status(self, job_id: str) -> dict:
         self._own(job_id)
-        run = self.candidate["run"]
-        return {"job_id": run["job_id"], "exit_code": run["exit_code"], "state": "completed"}
+        return {**self.candidate["run"], "state": "completed"}
 
 
 def run_review(service, task_id, bridge, model, account):
@@ -163,7 +162,9 @@ def run_review(service, task_id, bridge, model, account):
             fail("REVIEW_ALREADY_SUBMITTED", "the review verdict was already submitted", 409)
         if args["verdict"] == "issues" and not any(f["evidence"] for f in args["findings"]):
             fail("INVALID_REVIEW", "an issues verdict requires at least one finding citing evidence")
-        outcome["review"] = service.profiles.clean({"verdict": args["verdict"], "findings": args["findings"]})
+        # Strings are schema-bounded; a bounded clean could replace the verdict with a preview.
+        outcome["review"] = service.profiles.clean({"verdict": args["verdict"], "findings": args["findings"]},
+                                                   bounded=False)
         return {"recorded": True}
 
     def callback(message):
@@ -184,4 +185,5 @@ def run_review(service, task_id, bridge, model, account):
         raise ReviewFailed(service.profiles.clean("review session error: " + outcome["error"]))
     if outcome["review"] is None:
         raise ReviewFailed("review session ended without a valid submit_review")
+    assert set(outcome["review"]) == {"verdict", "findings"}
     return outcome["review"]
