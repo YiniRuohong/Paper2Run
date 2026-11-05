@@ -125,9 +125,14 @@ def verified_files(service, row):
 
 def evaluation(service, row):
     verified_files(service, row)
+    return evaluation_at(service, row, artifact_root(service, row))
+
+
+def evaluation_at(service, row, root):
+    """Program-owned evaluation of the artifacts under root (live round or frozen candidate)."""
     if not row.protocol_json:
         return {"verdict": "not_comparable", "comparison_eligible": False, "metrics": {}, "reasons": ["No approved protocol."]}
-    result = evaluate_artifacts(row.protocol_json, artifact_root(service, row))
+    result = evaluate_artifacts(row.protocol_json, root)
     # API-v1 does not expose independent evaluator custody/attestation. User or
     # agent booleans cannot establish independent labels or absence of leakage.
     result["comparison_eligible"] = False
