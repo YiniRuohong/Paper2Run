@@ -1,3 +1,1 @@
-from .environment import environment_snapshot
-
-__all__ = ["environment_snapshot"]
+"""Paper2Run control plane: autonomous research tasks and paper parsing jobs."""
