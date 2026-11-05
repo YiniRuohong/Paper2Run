@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use p2r_tunnel::{endpoint, keys, serve};
+use p2r_tunnel::{connect, endpoint, keys, serve};
 
 #[derive(Parser)]
 #[command(name = "p2r-tunnel", about = "Paper2Run tablet tunnel over iroh")]
@@ -62,6 +62,16 @@ enum Cmd {
         #[arg(long)]
         allow: PathBuf,
     },
+    /// Tablet side: expose the remote backend on a local port.
+    Connect {
+        #[command(flatten)]
+        net: Net,
+        /// The desktop's peer id.
+        #[arg(long)]
+        peer: iroh::EndpointId,
+        #[arg(long, default_value = "127.0.0.1:18080")]
+        listen: std::net::SocketAddr,
+    },
 }
 
 #[tokio::main]
@@ -75,6 +85,12 @@ async fn main() -> anyhow::Result<()> {
             let ep = net.bind().await?;
             tracing::info!("serving id={} backend=127.0.0.1:{backend_port}", ep.id());
             serve::run(ep, backend_port, allow).await?;
+        }
+        Cmd::Connect { net, peer, listen } => {
+            let cfg = net.config()?;
+            let ep = net.bind().await?;
+            tracing::info!("connecting id={} -> peer={peer}", ep.id());
+            connect::run(ep, endpoint::peer_addr(&cfg, peer), listen).await?;
         }
     }
     Ok(())
