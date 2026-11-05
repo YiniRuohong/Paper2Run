@@ -1,0 +1,5 @@
+{
+  "relay_url": "https://60.204.202.153:12234",
+  "relay_quic_port": 12234,
+  "rendezvous_id": "fbac210d9819d3047fdabac2afb3fccdfa73b922c06e27f3921c6673645f0c3a"
+}

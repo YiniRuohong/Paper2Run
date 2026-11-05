@@ -80,3 +80,24 @@ async fn nameplates_are_unique_while_active() {
     let set: HashSet<u16> = claims.iter().map(|c| c.nameplate).collect();
     assert_eq!(set.len(), 50);
 }
+
+/// Against the deployed rendezvous (apps/tunnel/deploy/remote.json):
+///   cargo test --test rendezvous -- --ignored real_rendezvous_roundtrip
+#[tokio::test]
+#[ignore]
+async fn real_rendezvous_roundtrip() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy");
+    let remote: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("remote.json")).unwrap()).unwrap();
+    let cfg = p2r_tunnel::endpoint::NetConfig {
+        relay_url: remote["relay_url"].as_str().unwrap().parse().unwrap(),
+        relay_quic_port: remote["relay_quic_port"].as_u64().map(|p| p as u16),
+        relay_ca_pem: Some(std::fs::read(dir.join("relay-ca.pem")).unwrap()),
+        relay_only: false,
+    };
+    let rv_id: iroh::EndpointId = remote["rendezvous_id"].as_str().unwrap().parse().unwrap();
+    let desktop = p2r_tunnel::endpoint::bind(&cfg, iroh::SecretKey::generate()).await.unwrap();
+    let tablet = p2r_tunnel::endpoint::bind(&cfg, iroh::SecretKey::generate()).await.unwrap();
+    let claim = tokio::time::timeout(Duration::from_secs(20), rendezvous::claim(&desktop, peer_addr(&cfg, rv_id))).await.unwrap().unwrap();
+    let got = rendezvous::lookup(&tablet, peer_addr(&cfg, rv_id), claim.nameplate).await.unwrap();
+    assert_eq!(got, desktop.id());
+}

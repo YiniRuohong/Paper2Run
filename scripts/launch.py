@@ -9,7 +9,9 @@ API and the built web UI from a single local port:
 2. ensure ``apps/web/dist`` exists (build with npm when available);
 3. pick a free loopback port starting at 8010;
 4. start uvicorn (``create_demo_app``) with a persistent demo dir;
-5. open the default browser once the health check passes.
+5. open the default browser once the health check passes;
+6. start the ``p2r-tunnel`` sidecar for tablet pairing (built with cargo if
+   missing). Without it the app still runs; only tablet remote is off.
 
 Prerequisites: Python 3.11+. Node.js/npm is needed when the prebuilt
 frontend bundle is missing; autonomous mode additionally needs Node >=22.19
@@ -41,6 +43,12 @@ SOURCE_ROOTS = ("services/api", "packages/contracts", "packages/artifacts", "pac
                 "packages/runner", "packages/kernel", "packages/orchestration")
 
 WINDOWS = sys.platform == "win32"
+
+TUNNEL_DIR = ROOT / "apps" / "tunnel"
+TUNNEL_BIN = TUNNEL_DIR / "target" / "release" / ("p2r-tunnel.exe" if WINDOWS else "p2r-tunnel")
+REMOTE_CONFIG = TUNNEL_DIR / "deploy" / "remote.json"
+REMOTE_CA = TUNNEL_DIR / "deploy" / "relay-ca.pem"
+REMOTE_DATA = Path.home() / ".paper2run" / "remote"
 
 
 def message(text: str) -> None:
@@ -181,6 +189,66 @@ def free_port(base: int) -> int:
     raise SystemExit("[!] 8010-8029 端口均被占用 / no free port in 8010-8029")
 
 
+def find_cargo() -> str | None:
+    rustup_cargo = Path.home() / ".cargo" / "bin" / ("cargo.exe" if WINDOWS else "cargo")
+    return str(rustup_cargo) if rustup_cargo.exists() else shutil.which("cargo")
+
+
+def ensure_remote_binary(binary: Path = TUNNEL_BIN) -> tuple[Path | None, str]:
+    """Return (binary, "") or (None, reason the tablet remote is unavailable)."""
+    if binary.exists():
+        return binary, ""
+    cargo = find_cargo()
+    if not cargo:
+        return None, "未找到 cargo（Rust），无法构建 p2r-tunnel / cargo not found"
+    message("    构建平板远程组件 / building p2r-tunnel (first run, a few minutes) ...")
+    result = subprocess.run([cargo, "build", "--release", "--locked", "-p", "p2r-tunnel"], cwd=TUNNEL_DIR)
+    if result.returncode != 0 or not binary.exists():
+        return None, f"p2r-tunnel 构建失败 / build failed (exit {result.returncode})"
+    return binary, ""
+
+
+def remote_command(binary: Path, config: Path, ca: Path, data: Path, backend_port: int) -> list[str]:
+    cfg = json.loads(config.read_text(encoding="utf-8"))
+    if not cfg.get("rendezvous_id"):
+        raise ValueError(f"{config} has no rendezvous_id")
+    return [str(binary), "serve",
+            "--key", str(data / "desktop.key"),
+            "--relay", cfg["relay_url"],
+            "--relay-quic-port", str(cfg["relay_quic_port"]),
+            "--relay-ca", str(ca),
+            "--backend-port", str(backend_port),
+            "--devices", str(data / "devices.json"),
+            "--rendezvous", cfg["rendezvous_id"],
+            "--control-file", str(data / "control.json")]
+
+
+def start_remote(backend_port: int) -> subprocess.Popen | None:
+    """Start the tablet-remote sidecar; never fatal for the app itself."""
+    binary, reason = ensure_remote_binary()
+    if binary is None:
+        message(f"[!] 平板远程不可用 / tablet remote unavailable: {reason}")
+        return None
+    try:
+        cmd = remote_command(binary, REMOTE_CONFIG, REMOTE_CA, REMOTE_DATA, backend_port)
+    except (OSError, ValueError, KeyError) as exc:
+        message(f"[!] 平板远程不可用 / tablet remote unavailable: {exc}")
+        return None
+    REMOTE_DATA.mkdir(parents=True, exist_ok=True)
+    message("    平板远程已启动，在设置页生成配对码 / tablet remote started")
+    return subprocess.Popen(cmd, cwd=TUNNEL_DIR)
+
+
+def stop(proc: subprocess.Popen | None) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
 def main() -> None:
     if sys.version_info < (3, 11):
         message(f"[!] 需要 Python 3.11+，当前为 {sys.version.split()[0]} / Python 3.11+ required")
@@ -208,6 +276,7 @@ def main() -> None:
     })
     message(f"[3/3] 启动服务 / starting server at {url} （数据目录 .p2r-app）")
     message("    停止 / stop: 关闭本窗口或按 Ctrl+C")
+    remote = None
     server = subprocess.Popen(
         [str(python), "-m", "uvicorn", "p2r_api.main:create_demo_app", "--factory",
          "--host", "127.0.0.1", "--port", str(port)],
@@ -229,18 +298,15 @@ def main() -> None:
             message("[!] 健康检查超时 / health check timed out")
             server.terminate()
             raise SystemExit(1)
+        remote = start_remote(port)
         message(f"✓ 已就绪 / ready: {url} （浏览器将自动打开）")
         webbrowser.open(url)
         server.wait()
     except KeyboardInterrupt:
         message("\n正在停止 / stopping ...")
     finally:
-        if server.poll() is None:
-            server.terminate()
-            try:
-                server.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                server.kill()
+        stop(remote)
+        stop(server)
 
 
 if __name__ == "__main__":

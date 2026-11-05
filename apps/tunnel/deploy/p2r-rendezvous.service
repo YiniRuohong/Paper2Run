@@ -1,0 +1,21 @@
+[Unit]
+Description=Paper2Run pairing rendezvous (reached through the local relay)
+After=network-online.target p2r-relay.service
+Wants=network-online.target
+
+[Service]
+User=p2r-relay
+Group=p2r-relay
+StateDirectory=p2r-rendezvous
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/p2r-tunnel rendezvous --key /var/lib/p2r-rendezvous/key --relay https://60.204.202.153:12234 --relay-quic-port 12234 --relay-ca /etc/p2r-relay/ca.pem
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+Environment=RUST_LOG=p2r_tunnel=info
+
+[Install]
+WantedBy=multi-user.target
