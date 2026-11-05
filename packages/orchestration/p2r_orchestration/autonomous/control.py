@@ -48,6 +48,8 @@ class ControlMixin:
                 fail("TASK_BUSY", "wait for the previous worker to finish pausing", 409)
             if self.cancel_requested(row):
                 fail("CANCELLATION_PENDING", "task cancellation is irrevocable; reconcile stop instead of resuming", 409)
+            if row.harness_json is None:
+                fail("LEGACY_TASK", "该任务创建于新版 harness 之前，请新建任务", 409)
             self.settle_interrupted_usage(db, row)
             if row.context_json.get("paper_available") and not row.context_json.get("text"):
                 context = self.paper_context(db, row.project_id, row.context_json.get("paper_version_id"))

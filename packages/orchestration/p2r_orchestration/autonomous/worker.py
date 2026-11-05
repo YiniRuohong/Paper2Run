@@ -9,7 +9,7 @@ import time
 from p2r_persistence.models import utcnow
 from . import driver, evidence
 from .candidate import freeze
-from .driver import BUDGET_ERRORS
+from .driver import BUDGET_ERRORS, SAFETY_CODES
 from .evidence import ensure_not_under_review
 from .security import fail
 from p2r_orchestration.service import ServiceError
@@ -56,6 +56,7 @@ def dispatch(service, target, task_id, name, args, request_id):
             intent = {"job_id": job_id, "command": args["command"], "timeout_seconds": timeout, "state": "submitting",
                       "protocol_sha256": row.protocol_json["sha256"] if row.protocol_json else None,
                       "entrypoint": row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None,
+                      "isolation": (service.workers.get(task_id) or {}).get("isolation") or None,
                       "sequence": row.event_sequence}  # launch sequence; reused intents keep the original
             if previous:
                 if previous["command"] != args["command"]:
@@ -126,6 +127,13 @@ def observe_job(row, observation):
             return
 
 
+def isolation_of(observation):
+    """The isolation facts a probe/prepare observation reports (network, filesystem), if any."""
+    if not isinstance(observation, dict):
+        return {}
+    return {key: observation[key] for key in ("network", "filesystem") if observation.get(key)}
+
+
 def run_worker(service, task_id, bridge, message):
     target, baseline, started = None, None, time.monotonic()
     observed = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -175,7 +183,7 @@ def run_worker(service, task_id, bridge, message):
         return False
 
     def stop_for_budget():
-        # Call only after the cancellation transaction commits and releases lock.
+        # Also ends a safety block. Call only after the cancellation transaction commits and releases lock.
         bridge.abort()
         worker = service.workers.get(task_id) or {}
         if worker.get("bridge") not in (None, bridge):
@@ -209,6 +217,9 @@ def run_worker(service, task_id, bridge, message):
                     observe_job(row, safe)
                 if row.state == "running":
                     stop_budget = check_budget(db, row) or stop_budget
+                if row.state == "running" and is_error and safe.get("code") in SAFETY_CODES:
+                    driver.block_for_safety(service, db, row, safe)  # a budget stop above takes precedence
+                    stop_budget = True
                 service.event(db, row, "tool_completed", {"id": request_id, "name": name, "result": safe, "is_error": is_error})
                 paused = row.state != "running"
                 db.commit()
@@ -335,6 +346,7 @@ def run_worker(service, task_id, bridge, message):
             opening_messages = driver.user_message_count(db, row)
             sends_opening = True
             db.commit()
+        isolation = {}
         for action in ("probe", "prepare"):
             with service.lock, service.sessions() as db:
                 if service.row(db, task_id).state != "running":
@@ -349,20 +361,34 @@ def run_worker(service, task_id, bridge, message):
             if stop_budget:
                 stop_for_budget()
                 return
+            isolation.update(isolation_of(observation))  # prepare, the last action, has the final word
+        service.workers[task_id]["isolation"] = isolation
         # Reconcile handles before the SDK receives further decisions.
         with service.lock, service.sessions() as db:
             jobs = dict(service.row(db, task_id).jobs_json)
         for launch_id, job in jobs.items():
-            try:
-                observation = target.status(job["job_id"])
-            except Exception as exc:
-                observation = {"state": "unknown", "error": str(exc)}
+            unsafe = None
+            if job.get("isolation") and isolation and job["isolation"] != isolation:
+                unsafe = {"code": "isolation_changed", "message":
+                          f"job {launch_id} recorded {json.dumps(job['isolation'], sort_keys=True)} "
+                          f"but current probe shows {json.dumps(isolation, sort_keys=True)}"}
+                observation = {"state": "unknown", "error": "isolation changed; job not queried"}
+            else:
+                try:
+                    observation = target.status(job["job_id"])
+                except Exception as exc:
+                    observation = {"state": "unknown", "error": str(exc)}
+                    if getattr(exc, "code", None) in SAFETY_CODES:
+                        unsafe = {"code": exc.code, "message": str(exc)}
             with service.lock, service.sessions() as db:
                 row = service.row(db, task_id)
                 usage(row)
                 service.event(db, row, "job_reconciled", {"launch_id": launch_id, "observation": observation})
                 observe_job(row, service.profiles.clean(observation))
                 stop_budget = check_budget(db, row) if row.state == "running" else False
+                if unsafe and row.state == "running":
+                    driver.block_for_safety(service, db, row, unsafe)  # a budget stop above takes precedence
+                    stop_budget = True
                 continue_reconciling = row.state == "running"
                 db.commit()
             if stop_budget:
@@ -423,9 +449,13 @@ def run_worker(service, task_id, bridge, message):
             if row.state == "running":
                 stop_budget = check_budget(db, row) or stop_budget
             if row.state in ("queued", "running"):
-                row.state = "paused"
-                row.error_json = service.profiles.clean(error)
-                service.event(db, row, "task_error", row.error_json)
+                if error["code"] in SAFETY_CODES:
+                    driver.block_for_safety(service, db, row, error)
+                    stop_budget = True
+                else:
+                    row.state = "paused"
+                    row.error_json = service.profiles.clean(error)
+                    service.event(db, row, "task_error", row.error_json)
             db.commit()
         if stop_budget:
             stop_for_budget()
@@ -453,6 +483,14 @@ def run_worker(service, task_id, bridge, message):
                                     outcome_snapshot=snapshot)
                     row.outcome = outcome
                     service.event(db, row, "task_finished", {"state": row.state, "outcome": outcome,
+                        "verdict": "not_comparable", "reason": reason, "outcome_snapshot_sha256": snapshot})
+                elif row.outcome == "blocked_by_safety":
+                    harness = row.harness_json or {}
+                    candidate, snapshot = harness.get("candidate"), harness.get("outcome_snapshot_sha256")
+                    reason = (row.context_json.get("cancel_intent", {}).get("reason") or {}).get("code")
+                    evidence.report(service, db, row, candidate["summary"] if candidate else "",
+                                    outcome="blocked_by_safety", reason=reason, outcome_snapshot=snapshot)
+                    service.event(db, row, "task_finished", {"state": row.state, "outcome": "blocked_by_safety",
                         "verdict": "not_comparable", "reason": reason, "outcome_snapshot_sha256": snapshot})
                 elif budget_stopped and row.outcome is None:
                     # Budget cancellation forbids new work, not the report for the

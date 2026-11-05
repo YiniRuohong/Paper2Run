@@ -13,6 +13,8 @@ from .review import run_review
 BUDGET_ERRORS = {"budget_exceeded", "wall_time_exceeded", "BUDGET_EXHAUSTED"}
 ENDED_JOB_STATES = {"stopped", "cancelled", "canceled", "completed", "succeeded", "failed",
                     "timed_out", "timeout", "exited"}
+# ExecutionError codes (p2r_sandbox.autonomous.execution) meaning the container's isolation can no longer be trusted.
+SAFETY_CODES = {"isolation_changed", "network_isolation_failed", "host_addresses_changed"}
 NO_PROGRESS_LIMIT = 3
 REVIEW_ATTEMPTS = 2
 
@@ -130,6 +132,25 @@ def finish(service, db, row, outcome, reason=None, snapshot=None):
     row.outcome, row.state = outcome, "completed"
     payload = {"state": row.state, "outcome": outcome, "verdict": "not_comparable"}
     service.event(db, row, "task_finished", {**payload, "reason": reason} if reason else payload)
+
+
+def block_for_safety(service, db, row, error):
+    """Isolation integrity failed: record the outcome and cancel all work. Irrevocable; never resumable.
+
+    The caller commits, then calls bridge.abort() and service.finish_stop(task_id); the final state is
+    stopped with the outcome kept. A candidate that was awaiting review is left unreviewed."""
+    error = service.profiles.clean(error)
+    service.request_cancel(row, error)
+    row.state, row.outcome = "stopping", "blocked_by_safety"
+    snapshot = None
+    if row.harness_json is not None:
+        candidate = row.harness_json.get("candidate")
+        if candidate:
+            snapshot = candidate["snapshot_sha256"]
+            if candidate.get("review_status") == "pending":
+                candidate = {**candidate, "review_status": "unavailable"}
+        row.harness_json = {**row.harness_json, "candidate": candidate, "outcome_snapshot_sha256": snapshot}
+    service.event(db, row, "safety_blocked", {**error, "outcome_snapshot_sha256": snapshot})
 
 
 def budget_outcome(row):

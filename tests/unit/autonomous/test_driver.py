@@ -415,3 +415,155 @@ def test_unrecoverable_message_is_quoted_as_truncated_preview():
     assert driver.quote_message({"truncated": True, "preview": "partial"}) == "> partial [truncated]"
     assert driver.quote_message("") == "> [empty message]"
     assert driver.quote_message("a\nb") == "> a\n> b"
+
+
+# --- safety termination ---------------------------------------------------------------------------
+
+SAFETY = ["isolation_changed", "network_isolation_failed", "host_addresses_changed"]
+
+
+class IsolationError(Exception):
+    def __init__(self, code):
+        super().__init__(f"isolation integrity failure: {code}")
+        self.code = code
+
+
+def broken(**hooks):
+    """A Target whose named methods raise IsolationError(code)."""
+    class BrokenTarget(Target):
+        def probe(self):
+            if "probe" in hooks: raise IsolationError(hooks["probe"])
+            return super().probe()
+
+        def prepare(self):
+            if "prepare" in hooks: raise IsolationError(hooks["prepare"])
+            return super().prepare()
+
+        def start(self, command, launch_id, timeout_seconds):
+            if "start" in hooks: raise IsolationError(hooks["start"])
+            return super().start(command, launch_id, timeout_seconds)
+    return BrokenTarget
+
+
+def assert_blocked(service, task_id, row, code):
+    assert row.outcome == "blocked_by_safety" and row.state == "stopped"
+    assert row.report_json["outcome"] == "blocked_by_safety" and row.report_json["verdict"] == "not_comparable"
+    blocked = events(service, task_id, "safety_blocked")
+    assert len(blocked) == 1 and blocked[0]["code"] == code
+    assert row.context_json["cancel_intent"]["requested"] is True
+    assert not events(service, task_id, "task_error")
+
+
+def test_safety_codes_are_the_execution_integrity_codes():
+    assert driver.SAFETY_CODES == {"isolation_changed", "network_isolation_failed", "host_addresses_changed"}
+
+
+@pytest.mark.parametrize("code", SAFETY)
+def test_isolation_failure_blocks_for_safety(service, code):
+    service.target_factory = broken(start=code)
+    main = Main([work(), work("r1")])
+    task_id, row = start(service, [main])
+    assert_blocked(service, task_id, row, code)
+    assert len(main.prompts) == 1
+    assert row.harness_json["candidate"] is None
+
+
+@pytest.mark.parametrize("stage", ["probe", "prepare"])
+@pytest.mark.parametrize("code", SAFETY)
+def test_prepare_isolation_failure_blocks_for_safety(service, stage, code):
+    service.target_factory = broken(**{stage: code})
+    main = Main([work()])
+    task_id, row = start(service, [main])
+    assert_blocked(service, task_id, row, code)
+    assert main.prompts == []
+
+
+def test_non_safety_target_error_still_pauses(service):
+    class Plain(Target):
+        def prepare(self):
+            error = RuntimeError("docker daemon busy"); error.code = "transport_unavailable"
+            raise error
+    service.target_factory = Plain
+    task_id, row = start(service, [Main()])
+    assert row.state == "paused" and row.outcome is None
+    assert not events(service, task_id, "safety_blocked")
+
+
+def test_job_intent_records_isolation_and_reconcile_blocks_on_change(service):
+    network = {"private_denied": True, "uid": 10001, "public": False}
+
+    class Probed(Target):
+        current = network
+        def prepare(self): return {"ready": True, "network": dict(Probed.current)}
+    service.target_factory = Probed
+    main = Main([[("background", {"command": "true", "launch_id": "L1", "timeout_seconds": 5})]])
+    task_id, row = start(service, [main])
+    assert row.jobs_json["L1"]["isolation"] == {"network": network}
+    # The same task resumes against a changed isolation record.
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.state, row.error_json, row.outcome = "paused", None, None
+        row.harness_json = {**row.harness_json, "no_progress": 0}
+        service.control(db, task_id, "resume")
+        db.commit()
+    Probed.current = {**network, "private_denied": False}
+    service.bridge_factory = lambda: Main()
+    service.workers.pop(task_id, None)
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert_blocked(service, task_id, row, "isolation_changed")
+    assert "L1" in events(service, task_id, "safety_blocked")[0]["message"]
+
+
+def test_reconcile_with_unchanged_isolation_continues(service):
+    network = {"private_denied": True, "uid": 10001}
+
+    class Probed(Target):
+        def prepare(self): return {"ready": True, "network": dict(network)}
+    service.target_factory = Probed
+    task_id = prepare(service, [Main()])
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.jobs_json = {"L1": {"job_id": "a" * 64, "command": "true", "state": "completed",
+                                "isolation": {"network": network}}}
+        db.commit()
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert row.outcome is None and not events(service, task_id, "safety_blocked")
+
+
+def test_budget_stop_preempts_safety_block(service):
+    service.target_factory = broken(start="network_isolation_failed")
+    main = Main([[("execute", {"command": "true"})]])
+    task_id = prepare(service, [main])
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.usage_json = {**row.usage_json, "calls": row.config_snapshot["limits"]["max_model_calls"] - 1}
+        db.commit()
+
+    run = main.run
+    def spend(config, prompt, callback):
+        callback({"type": "event", "event": {"type": "turn_start"}})
+        callback({"type": "event", "event": {"type": "message_end", "message": {
+            "role": "assistant", "content": "x", "usage": {"input": 1, "output": 1, "totalTokens": 2}}}})
+        run(config, prompt, callback)
+    main.run = spend
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert events(service, task_id, "budget_exhausted")
+    assert row.outcome != "blocked_by_safety"
+    assert not events(service, task_id, "safety_blocked")
+
+
+def test_secret_in_artifact_does_not_terminate(service):
+    secret = "unit-secret-123456"
+    class Leaky(Target):
+        def __init__(self, *args):
+            super().__init__(*args)
+            self.files["leak.txt"] = secret.encode()
+    service.target_factory = Leaky
+    main = Main([[("register_artifact", {"path": "leak.txt", "name": "leak.txt", "kind": "other"})]])
+    task_id, row = start(service, [main])
+    assert any(r and r["is_error"] and r["result"]["code"] == "SECRET_IN_ARTIFACT" for r in main.responses)
+    assert row.outcome is None and row.state != "stopped"
+    assert not events(service, task_id, "safety_blocked")

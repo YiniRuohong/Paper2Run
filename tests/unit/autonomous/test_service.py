@@ -534,3 +534,38 @@ def test_file_listing_and_read_follow_round_layout(service):
     items = [i for i in files.list_files(snap)["items"] if i["source"] == "artifact"]
     assert [i["path"].split("/")[2] for i in items] == ["r0", "r1"] and all(i["modified_at"] for i in items)
     assert [files.read_file(snap, "artifact", i["path"])[0] for i in items] == [b"print(1)", b"print(2)"]
+
+
+def test_resume_refused_for_legacy_task(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        row = service.row(db, task_id); row.state = "paused"; row.harness_json = None; db.commit()
+        with pytest.raises(ServiceError) as caught:
+            service.control(db, task_id, "resume")
+        assert caught.value.code == "LEGACY_TASK" and caught.value.status == 409
+        assert "新建任务" in str(caught.value)
+        db.rollback()
+        assert service.row(db, task_id).state == "paused"
+
+
+def test_legacy_task_still_exports(service):
+    task_id = _running_task(service, protocol=protocol())
+    target = Target({}, service.root)
+    with service.sessions() as db:
+        row = service.row(db, task_id); row.harness_json = None; row.state = "paused"; db.commit()
+    _register(service, target, task_id, "main.py", "print(1)")
+    archive = evidence.export_zip(service, task_id)
+    assert "report.json" in zipfile.ZipFile(io.BytesIO(archive)).namelist()
+    evidence.verify_export_zip(archive)
+
+
+def test_blocked_task_cannot_resume(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.state, row.outcome = "stopped", "blocked_by_safety"
+        db.commit()
+        with pytest.raises(ServiceError) as caught:
+            service.control(db, task_id, "resume")
+        assert caught.value.code == "INVALID_STATE" and caught.value.status == 409
+        assert service.row(db, task_id).state == "stopped"
