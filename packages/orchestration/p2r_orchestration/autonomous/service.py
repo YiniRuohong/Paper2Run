@@ -15,7 +15,7 @@ from p2r_evaluation.autonomous import freeze_protocol
 from p2r_evaluation.reference_verification import validate_reference_values
 from p2r_orchestration.research_capabilities import CapabilityRegistry
 from p2r_persistence.autonomous import AutonomousConfigRecord as Config, AutonomousTaskRecord as Task, AutonomousEventRecord as Event
-from p2r_persistence.models import PaperRecord,PaperVersionRecord, PaperTextRecord, utcnow
+from p2r_persistence.models import PaperRecord, PaperVersionRecord, PaperTextRecord, utcnow
 from .bridge import HarnessBridge
 from .control import ControlMixin
 from .security import ProfileStore, digest, fail
