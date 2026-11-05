@@ -3,7 +3,7 @@ import { Badge, Card, CardHeader, KV, KVList, StatusWord, type Tone } from '../.
 import { CopyButton } from '../../ui/Controls';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { maxRepairRounds } from './config';
+import { evidenceKindLabel, maxRepairRounds } from './config';
 import { parseCandidate, parseReviews, type ReviewView } from './report';
 import { reviewFailures } from './stages';
 
@@ -21,7 +21,6 @@ const VERDICT: Record<string, { text: string; tone: Tone }> = {
   pass: { text: '复核通过', tone: 'ok' },
   issues: { text: '发现问题', tone: 'warn' },
 };
-const KIND_LABEL: Record<string, string> = { code: '代码', environment: '环境', data: '数据', result: '结果' };
 
 export const EMPTY_CANDIDATE_TEXT = 'Pi 还没有提交候选结果。提交时程序会检查：协议已冻结；本轮登记了 code / environment / data / result；入口代码已登记；协议要求的产物齐全；入口在最后一次登记代码之后成功运行。';
 
@@ -75,7 +74,7 @@ export function CandidateCard({ task, events }: { task: AutonomousTask; events: 
               {candidate.artifacts.map(artifact => <li key={artifact.name} className="ui-row">
                 <span className="ui-row-main"><span className="ui-row-title ui-mono" title={artifact.name}>{artifact.name}</span></span>
                 <span className="ui-row-end">
-                  <Badge title={artifact.kind}>{KIND_LABEL[artifact.kind] ?? artifact.kind}</Badge>
+                  <Badge title={artifact.kind}>{evidenceKindLabel(artifact.kind)}</Badge>
                   <span className="ui-mono" title={artifact.sha256}>{artifact.sha256.slice(0, 12)}…</span>
                   <CopyButton value={artifact.sha256} label={`复制 ${artifact.name} 哈希`} />
                 </span>

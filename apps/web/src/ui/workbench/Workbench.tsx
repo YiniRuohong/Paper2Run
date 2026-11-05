@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from '../Icon';
 import type { Tone } from '../Card';
-import { ancestors, baseName, buildTree, countFolders, fileTone, filterFiles, formatBytes, parseCsv, previewKind, type WbFile, type WbFolderNode, type WbNode } from './tree';
+import { CopyButton } from '../Controls';
+import { ancestors, baseName, buildTree, countFolders, fileTone, filterFiles, formatBytes, parseCsv, previewKind, type WbFile, type WbFolderNode, type WbNode, type WbTag } from './tree';
 import './workbench.css';
 
-export type { WbFile } from './tree';
+export type { WbFile, WbTag } from './tree';
 
 // Three-column task workbench (shared by 新建任务 / 任务详情 / 自主实验):
 //   left   stage timeline — each stage collapses to a header, expands to its sub-steps
@@ -268,8 +269,9 @@ export function Workbench(props: WorkbenchProps) {
           <div className="wb-file-meta">
             <span className="ui-mono" title={activeFile.path}>{activeFile.path}</span>
             <span>{formatBytes(activeFile.bytes)}</span>
-            {activeFile.sha256 && <span className="ui-mono" title={activeFile.sha256}>sha256 {activeFile.sha256.slice(0, 12)}…</span>}
+            {activeFile.sha256 && <span className="wb-file-sha"><span className="ui-mono" title={activeFile.sha256}>sha256 {activeFile.sha256.slice(0, 12)}…</span><CopyButton value={activeFile.sha256} label="复制完整 SHA256" /></span>}
             {activeFile.badge && <span className="wb-badge">{activeFile.badge}</span>}
+            {activeFile.tags?.map(tag => <FileTag key={tag.text} tag={tag} />)}
           </div>
           <Preview file={activeFile} entry={activeEntry} onRetry={() => ensureLoaded(activeFile, true)} />
         </div>}
@@ -314,6 +316,10 @@ function StageMarker({ mark, index }: { mark: StageMark; index: number }) {
   </span>;
 }
 
+function FileTag({ tag }: { tag: WbTag }) {
+  return <span className={`wb-badge${tag.tone ? ` tone-${tag.tone}` : ''}`} title={tag.title}>{tag.text}</span>;
+}
+
 function FileGlyph({ file, size = 15 }: { file: WbFile | undefined; size?: number }) {
   if (!file) return <Icon name="doc" size={size} />;
   const tone = fileTone(file);
@@ -337,6 +343,7 @@ function TreeLevel({ node, depth, collapsed, active, onToggle, onOpen }: { node:
         <FileGlyph file={child.file} />
         <span className="wb-node-name">{child.name}</span>
         {child.file.badge && <span className="wb-badge">{child.file.badge}</span>}
+        {child.file.tags?.filter(tag => tag.inTree).map(tag => <FileTag key={tag.text} tag={tag} />)}
         <span className="wb-node-size">{formatBytes(child.file.bytes)}</span>
       </button>
     </div>)}</>;

@@ -135,6 +135,9 @@ button.wb-tab { gap: 7px; padding: 0 13px; }
 .wb-file-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; padding: 0 4px; color: var(--muted); font-size: 12px; }
 .wb-file-meta .ui-mono { font-size: 12px; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-badge { flex: none; padding: 0 6px; border-radius: 5px; background: var(--raised); color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1.6; }
+.wb-badge[class*="tone-"] { background: var(--tone-soft); color: var(--tone); }
+.wb-badge.tone-idle { color: var(--muted); }
+.wb-file-sha { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
 
 .wb-preview { flex: 1; min-height: 0; margin: 0; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--code-bg); overflow: auto; }
 .wb-preview-center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 32px; color: var(--muted); font-size: 13px; text-align: center; }

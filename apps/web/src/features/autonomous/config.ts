@@ -5,7 +5,10 @@ export const researchTaskTypes: { value: ResearchTaskType; label: string }[] = [
   { value: 'paper_analysis', label: '论文分析' }, { value: 'method_design', label: '方法设计' },
   { value: 'coding', label: '代码建议' }, { value: 'data_analysis', label: '数据分析' }, { value: 'review', label: '科研审查' },
 ];
-const profileName = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+export const researchTaskTypeLabel = (value: string) => researchTaskTypes.find(type => type.value === value)?.label ?? value;
+const EVIDENCE_KIND_LABELS: Record<string, string> = { code: '代码', environment: '环境', data: '数据', result: '结果' };
+export const evidenceKindLabel = (kind: string) => EVIDENCE_KIND_LABELS[kind] ?? kind;
+const profileName =/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 export function modelReference(profile?: ModelProfile): ProjectConfig['model'] {
   return profile ? { provider_profile: profile.id, credential_ref: profile.credential_ref ?? `profile:${profile.id}` } : { provider_profile: '', credential_ref: '' };
 }

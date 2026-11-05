@@ -6,7 +6,8 @@ import { Workbench, type WbContent, type WbFile } from '../../ui/workbench/Workb
 import { Badge, Card, CardHeader } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { buildStages, safetyBlock, toWbFiles } from './stages';
+import { buildStages, currentProtocolSha, safetyBlock, toWbFiles } from './stages';
+import { ProgressNotes, SpecialistCalls } from './ActivityViews';
 import { decisionSuperseded, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { ApprovalCard } from './ApprovalCard';
 import { CandidateCard } from './CandidateCard';
@@ -148,7 +149,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   if (task) records.set('task/config.json', pretty(task.config_snapshot));
   const sources = new Map((files?.items ?? []).map(f => [f.path, f.source]));
   const wbFiles: WbFile[] | null = files === null ? null : [
-    ...toWbFiles(files.items),
+    ...toWbFiles(files.items, { round: typeof task?.repair_round === 'number' ? task.repair_round : null, protocolSha256: currentProtocolSha(task, events) }),
     ...[...records].map(([path, body]) => ({ path, bytes: new TextEncoder().encode(body).length, mediaType: path.endsWith('.json') ? 'application/json' : 'text/plain', badge: '记录' })),
   ];
   const loadFile = async (file: WbFile, signal: AbortSignal): Promise<WbContent> => {
@@ -212,7 +213,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
       {display.caption && <span>{display.caption}</span>}
       <span>更新于 {task.updated_at || '—'}</span><span>{events.length} 条事件</span>
     </> : <span>任务的阶段、命令输出和产物会在这里持续更新。</span>}
-    progress={<span className="auto-progress">进度 · {timeline.stages.filter(st => st.mark === 'done').length} / {timeline.stages.length}<Badge tone="idle" title="阶段由前端根据事件流归纳；harness 阶段状态机上线（契约 C1）后改为后端判定">按事件归纳</Badge></span>}
+    progress={<span className="auto-progress">进度 · {timeline.stages.filter(st => st.mark === 'done').length} / {timeline.stages.length}<Badge tone="idle" title="阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定">按事件归纳</Badge></span>}
     stages={timeline.stages}
     activeStageId={task ? timeline.active : null}
     files={wbFiles}
@@ -310,11 +311,15 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
           </div>
         </div>
 
+        <ProgressNotes events={events} />
+
         <CandidateCard task={task} events={events} />
 
         {task.report != null && <ReportView report={task.report} />}
 
         <UsageView usage={(task.usage ?? {}) as Record<string, unknown>} limits={task.config_snapshot?.limits as unknown as Record<string, unknown> | undefined} budgetExhausted={budgetReason} />
+
+        <SpecialistCalls events={events} configured={task.config_snapshot?.specialists?.length ?? 0} />
 
         {taskSkills.length > 0 && <Card>
           <CardHeader icon="spark" title="本任务固定的 Skills 快照" subtitle="运行期间固定使用以下版本，不随后续更新变化。" />
