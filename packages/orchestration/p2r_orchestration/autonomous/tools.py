@@ -21,7 +21,7 @@ TOOLS = [
     tool("logs", "Read an existing job's bounded log cursor.", {"job_id": S, "offset": OFFSET, "limit": LIMIT}, ["job_id"]),
     tool("stop", "Stop only a job owned by this task.", {"job_id": S}, ["job_id"]),
     tool("propose_protocol", "Propose a protocol version. Changes outside authorized fields pause until the user approves via control.", {"protocol": {"type": "object"}, "reason": S}, ["protocol", "reason"]),
-    tool("register_artifact", "Freeze an actual workspace file as evidence. Names are immutable per protocol version. Register code, environment, data provenance and results explicitly.", {"path": PATH, "name": PATH, "kind": {"type": "string", "enum": ["code", "environment", "data", "result", "log", "checkpoint", "other"]}}, ["path", "name", "kind"]),
+    tool("register_artifact", "Freeze an actual workspace file as evidence. Names are immutable within a protocol version and repair round; a new round may reuse a name. Register code, environment, data provenance and results explicitly.", {"path": PATH, "name": PATH, "kind": {"type": "string", "enum": ["code", "environment", "data", "result", "analysis", "log", "checkpoint", "other"]}}, ["path", "name", "kind"]),
     tool("evaluate", "Run trusted evaluation against frozen actual artifacts; missing provenance is not comparable.", {}),
     tool("report", "Build a report from tool facts and trusted evaluation. Narrative is attributed to the model and cannot establish success.", {"narrative": {"type": "string", "maxLength": 16000}}, ["narrative"]),
 ]

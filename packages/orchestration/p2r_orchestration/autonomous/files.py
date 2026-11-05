@@ -71,7 +71,16 @@ def _iso(timestamp):
 
 def _artifact_listing_path(item) -> str:
     version = item.get("protocol_sha256")
-    return "artifacts/" + (version[:12] if version else "unversioned") + "/" + safe_name(item["name"])
+    return "artifacts/" + (version[:12] if version else "unversioned") + _round_segment(item) + "/" + safe_name(item["name"])
+
+
+def _round_segment(item) -> str:
+    return "" if item.get("round") is None else f"/r{int(item['round'])}"
+
+
+def _artifact_dir(snap, item) -> Path:
+    base = snap["task_root"] / "artifacts" / (item.get("protocol_sha256") or "unversioned")
+    return base if item.get("round") is None else base / f"r{int(item['round'])}"
 
 
 def workspace_root(service, row) -> Path | None:
@@ -100,8 +109,7 @@ def list_files(snap) -> dict:
             name = safe_name(item["name"])
         except (ServiceError, ValueError, KeyError, TypeError):
             continue
-        version = item.get("protocol_sha256") or "unversioned"
-        disk = snap["task_root"] / "artifacts" / version / name
+        disk = _artifact_dir(snap, item) / name
         try:
             modified = _iso(disk.lstat().st_mtime)
         except OSError:
@@ -197,7 +205,7 @@ def read_file(snap, source: str, path: str) -> tuple[bytes, str, str]:
         if item is None:
             _not_found()
         name = safe_name(item["name"])
-        root = snap["task_root"] / "artifacts" / (item.get("protocol_sha256") or "unversioned")
+        root = _artifact_dir(snap, item)
         disk = root / name
         if disk.is_symlink() or not disk.resolve().is_relative_to(root.resolve()) or not disk.is_file():
             fail("EVIDENCE_INTEGRITY", "frozen artifact is missing or unsafe", 409)

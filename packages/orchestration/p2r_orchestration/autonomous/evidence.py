@@ -32,9 +32,26 @@ def safe_name(name):
     return path.as_posix()
 
 
-def artifact_root(service, row):
+def current_round(row):
+    return int((row.harness_json or {}).get("repair_round", 0))
+
+
+def artifact_root(service, row, round_=None):
     version = row.protocol_json["sha256"] if row.protocol_json else "unversioned"
-    return service.task_root(row.id) / "artifacts" / version
+    root = service.task_root(row.id) / "artifacts" / version
+    if row.harness_json is None:  # legacy task: unversioned-by-round layout
+        return root
+    return root / f"r{current_round(row) if round_ is None else round_}"
+
+
+def round_artifacts(row):
+    """Artifacts of the current protocol version and the current round."""
+    current = row.protocol_json["sha256"] if row.protocol_json else None
+    if row.harness_json is None:
+        return [a for a in row.artifacts_json if a["protocol_sha256"] == current]
+    round_ = current_round(row)
+    return [a for a in row.artifacts_json
+            if a["protocol_sha256"] == current and a.get("round", 0) == round_]
 
 
 def register(service, target, task_id, args):
@@ -43,10 +60,13 @@ def register(service, target, task_id, args):
         row = service.row(db, task_id)
         root = artifact_root(service, row)
         version = row.protocol_json["sha256"] if row.protocol_json else None
-        if any(a["name"] == name and a["protocol_sha256"] == version for a in row.artifacts_json):
-            fail("ARTIFACT_IMMUTABLE", "register a new protocol version before replacing evidence", 409)
-        if len(row.artifacts_json) >= 256:
-            fail("ARTIFACT_LIMIT", "task artifact count exhausted", 409)
+        round_ = None if row.harness_json is None else current_round(row)
+        scope = [a for a in row.artifacts_json
+                 if a["protocol_sha256"] == version and a.get("round") == round_]
+        if any(a["name"] == name for a in scope):
+            fail("ARTIFACT_IMMUTABLE", "evidence is immutable within a protocol version and repair round", 409)
+        if len(scope) >= 256:
+            fail("ARTIFACT_LIMIT", "round artifact count exhausted", 409)
     destination = root / name
     root.mkdir(parents=True, exist_ok=True)
     if not destination.resolve().is_relative_to(root.resolve()) or destination.is_symlink():
@@ -63,11 +83,14 @@ def register(service, target, task_id, args):
             fail("SECRET_IN_ARTIFACT", "artifact contains a runtime credential")
     info = {"name": name, "kind": args["kind"], "sha256": hashlib.sha256(raw).hexdigest(),
             "bytes": len(raw), "protocol_sha256": version, "source_path": args["path"]}
+    if round_ is not None:
+        info["round"] = round_
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)
-        row.artifacts_json = [*row.artifacts_json, info]
         row.report_json = None
         service.event(db, row, "artifact_frozen", info)
+        info["sequence"] = row.event_sequence
+        row.artifacts_json = [*row.artifacts_json, info]
         db.commit()
     return info
 
@@ -78,13 +101,17 @@ def verified_files(service, row):
         name = safe_name(item["name"])
         version = item["protocol_sha256"] or "unversioned"
         root = service.task_root(row.id) / "artifacts" / version
+        prefix = f"artifacts/{version}"
+        if item.get("round") is not None:
+            root = root / f"r{int(item['round'])}"
+            prefix += f"/r{int(item['round'])}"
         path = root / name
         if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or not path.is_file() or path.stat().st_size > MAX_FILE:
             fail("EVIDENCE_INTEGRITY", "frozen artifact is missing or unsafe", 409)
         raw = path.read_bytes()
         if hashlib.sha256(raw).hexdigest() != item["sha256"]:
             fail("EVIDENCE_INTEGRITY", "frozen artifact hash mismatch", 409)
-        result.append((f"artifacts/{version}/{name}", raw))
+        result.append((f"{prefix}/{name}", raw))
     return result
 
 
@@ -109,7 +136,7 @@ def report(service, db, row, narrative=""):
         calculated = {"verdict": "not_comparable", "comparison_eligible": False,
                       "metrics": {}, "reasons": [str(exc)]}
     current = row.protocol_json["sha256"] if row.protocol_json else None
-    artifacts = [a for a in row.artifacts_json if a["protocol_sha256"] == current]
+    artifacts = round_artifacts(row)
     expected = row.protocol_json["protocol"]["expected_artifacts"] if row.protocol_json else []
     names = {a["name"] for a in artifacts}
     missing = sorted(set(expected) - names)
