@@ -1,7 +1,16 @@
-import type { DocParseMode, DocParseOfflineStatus, DocParseStatus, PaperText } from '../../api-client/guided-types.ts';
+import type { DocParseMode, DocParseOfflineStatus, DocParseStatus, PaperText } from '../../api-client/papers.ts';
 
-// Pure docparse helpers shared by the guided controller and (next) the UI.
+// Pure docparse helpers shared by the upload step and the settings page.
 // Nothing here talks to the network or decides a mode; it only reads DTOs.
+
+// 上传步骤的解析视图状态：status 是全局解析设置（模式 + 离线安装器），
+// 换论文后保留；pdf / needsChoice / text 属于当前论文。
+export interface DocParseView {
+  pdf: boolean;
+  needsChoice: boolean;
+  status: DocParseStatus | null;
+  text: PaperText | null;
+}
 
 // A parse is still owed for this paper: nothing was ever parsed, or the last
 // attempt failed only because the offline component was not ready yet.

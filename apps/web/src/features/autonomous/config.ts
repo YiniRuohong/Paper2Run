@@ -77,6 +77,15 @@ export function protocolApproval(value: unknown): import('../../api-client/auton
 }
 export const terminalState = (state: string) => ['completed', 'succeeded', 'failed', 'stopped', 'cancelled'].includes(state);
 export const stateLabel = (state: string) => ({ created: '已创建', queued: '排队中', starting: '启动中', running: '运行中', paused: '已暂停', blocked: '已阻塞', awaiting_decision: '等待决策', completed: '已完成', succeeded: '已完成', failed: '失败', stopped: '已停止', cancelled: '已取消' }[state] ?? state);
+export const taskStateLabel = stateLabel;
+// 任务状态到 tone 的唯一映射：进行中 run；需要人（暂停/阻塞/待决策）warn；
+// 失败 bad；正常结束 ok；其余 idle。不新造颜色。
+export const taskTone = (state: string): 'ok' | 'run' | 'bad' | 'warn' | 'idle' =>
+  state === 'failed' ? 'bad'
+    : state === 'paused' || state === 'blocked' || state === 'awaiting_decision' ? 'warn'
+    : terminalState(state) ? 'ok'
+    : state === 'running' || state === 'starting' || state === 'queued' ? 'run'
+    : 'idle';
 export function mergeEvents(previous: import('../../api-client/autonomous.ts').AutonomousEvent[], incoming: import('../../api-client/autonomous.ts').AutonomousEvent[]) {
   return [...new Map([...previous, ...incoming].map(e => [e.sequence, e])).values()].sort((a, b) => a.sequence - b.sequence).slice(-500);
 }

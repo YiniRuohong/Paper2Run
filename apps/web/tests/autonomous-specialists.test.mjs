@@ -100,10 +100,13 @@ test('anonymous requests only allow SDK-supported HTTP loopback hosts and omit a
 });
 
 test('autonomous source never persists key or reuse source in browser storage or query', async () => {
-  const page = await readFile(new URL('../src/features/autonomous/AutonomousPage.tsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(page, /localStorage|sessionStorage/);
-  for (const line of page.split('\n').filter(line => /replaceState|query\.get/.test(line))) assert.doesNotMatch(line, /api_key|reuseCredentials|credential_ref/);
+  for (const file of ['../src/features/autonomous/NewExperimentPage.tsx', '../src/features/autonomous/TaskPage.tsx']) {
+    const page = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.doesNotMatch(page, /localStorage|sessionStorage/, file);
+    for (const line of page.split('\n').filter(line => /replaceState|query\.get/.test(line))) assert.doesNotMatch(line, /api_key|reuseCredentials|credential_ref/);
+  }
+  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
   assert.match(page, /setKey\(''\); setReuseCredentials\(''\)/);
   assert.match(page, /专家输出仅建议/);
-  assert.match(page, /共享下方总预算/);
+  assert.match(page, /共享总预算/);
 });

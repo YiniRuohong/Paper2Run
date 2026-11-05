@@ -1,9 +1,8 @@
-import type { DocParseMode } from '../../api-client/guided-types';
+import type { DocParseMode } from '../../api-client/papers';
 import { StatusWord, type Tone } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import type { RealFlowDocParse } from '../guided/realflow-state';
-import { docParseErrorReason, docParseLabel, hasMissingChunks, offlineNotices, otherParseMode, parseActionNotes } from './docparse';
+import { docParseErrorReason, docParseLabel, hasMissingChunks, offlineNotices, otherParseMode, parseActionNotes, type DocParseView } from './docparse';
 import './docparse.css';
 
 // Parse status of the current PDF inside the upload step. It only renders what
@@ -16,7 +15,7 @@ const BACKEND_LABEL = { online_agent: '在线解析（mineru.net）', offline_mi
 const OFFLINE_UNREADY = new Set(['not_installed', 'failed', 'broken']);
 
 export default function ParseProgress({ docparse, busy, onRetry, onChoose, onReopenChoice, onRefresh }: {
-  docparse: RealFlowDocParse;
+  docparse: DocParseView;
   busy: boolean;
   onRetry: () => void;
   onChoose: (mode: DocParseMode) => void;

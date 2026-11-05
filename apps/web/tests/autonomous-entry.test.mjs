@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createAutonomousApi, authenticatedGuidedFetch, initializeAutonomousSession } from '../src/api-client/autonomous.ts';
 
-test('cookie session token from existing live ApiClient reaches autonomous and guided writes', async () => {
+test('cookie session token from the live session reaches autonomous writes', async () => {
   const original = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (path, init) => {
@@ -20,21 +20,37 @@ test('cookie session token from existing live ApiClient reaches autonomous and g
     assert.equal(calls[2].headers.get('X-CSRF-Token'), 'cookie-session-token');
   } finally { globalThis.fetch = original; }
 });
-test('autonomous article entry reuses real upload, mode selection and parse progress with a return route', async () => {
-  const page = await readFile(new URL('../src/features/autonomous/AutonomousPage.tsx', import.meta.url), 'utf8');
-  const shell = await readFile(new URL('../src/features/guided/GuidedPage.tsx', import.meta.url), 'utf8');
-  const flow = await readFile(new URL('../src/features/guided/RealFlowPanel.tsx', import.meta.url), 'utf8');
-  assert.match(page, /href="#\/new\?return=autonomous"/);
-  assert.match(page, /创建项目 \/ 上传 PDF \/ 粘贴论文/);
-  assert.match(page, /!authorized \|\| !projectId \|\| !paperVersion/);
+
+test('entry mounts the autonomous-only app shell and redirects the retired route', async () => {
+  const entry = await readFile(new URL('../src/main.tsx', import.meta.url), 'utf8');
+  assert.match(entry, /lazy\(\(\) => import\('\.\/shell\/AppShell'\)\)/, 'the app shell is the only lazily mounted surface');
+  assert.doesNotMatch(entry, /GuidedPage|MockWorkspace|Phase01Lab|resolveSurface/);
+  const shell = await readFile(new URL('../src/shell/AppShell.tsx', import.meta.url), 'utf8');
+  assert.match(shell, /startsWith\('#\/autonomous'\)/, 'legacy #/autonomous links still land somewhere sensible');
+  assert.match(shell, /location\.replace/);
+  assert.match(shell, /#\/task\//);
+  assert.doesNotMatch(shell, /guided|MockWorkspace/);
+});
+
+test('new-experiment page owns upload, parse progress, layered config and authorized start', async () => {
+  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /ModeDialog/);
+  assert.match(page, /ParseProgress/);
   assert.match(page, /paper_version_id/);
-  assert.match(shell, /返回自主实验并读取论文/);
-  assert.match(shell, /active=\{view === 'autonomous'\}/);
-  assert.match(shell, /<RealFlowPanel api=\{api\}/);
-  assert.match(flow, /ModeDialog/); assert.match(flow, /ParseProgress/);
+  assert.match(page, /授权并启动/);
+  assert.match(page, /parseBlocking/, 'an unfinished parse blocks the start button');
+  assert.match(page, /startBlockReason/, 'the disabled start button explains why');
+  assert.match(page, /crypto\.randomUUID\(\)/, 'parse calls carry an idempotency key');
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
-  assert.match(page, /批准此方案并继续/);
-  assert.match(page, /approval\.changed\.map/);
-  assert.match(page, /`approve:\$\{approval\.id\}`/);
-  assert.match(page, /action === 'resume' && \(task\.state !== 'paused' \|\| task\.pending_decision != null\)/);
+});
+
+test('task page keeps approval, three-state notices, recovery and report sections as first-class surfaces', async () => {
+  const page = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /ApprovalCard/);
+  assert.match(page, /`approve:\$\{approval\.id\}`/, 'approval is an explicit control action, not free text');
+  assert.match(page, /recovery_required/);
+  assert.match(page, /需要恢复/);
+  assert.match(page, /ReportView/);
+  assert.match(page, /UsageView/);
+  assert.doesNotMatch(page, /localStorage|sessionStorage/);
 });

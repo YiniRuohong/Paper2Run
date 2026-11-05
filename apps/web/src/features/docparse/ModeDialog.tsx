@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import type { DocParseMode, DocParseStatus } from '../../api-client/guided-types';
+import type { DocParseMode, DocParseStatus } from '../../api-client/papers';
 import './docparse.css';
 
 // Mode choice for PDF parsing. The choice is required, so Escape and clicking

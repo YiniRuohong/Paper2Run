@@ -43,7 +43,7 @@ export interface WorkbenchProps {
   status?: { text: string; tone: Tone } | null;
   meta?: ReactNode;
   actions?: ReactNode;
-  progress?: string;
+  progress?: ReactNode;
   stages: WbStage[];
   activeStageId?: string | null;
   onSelectStage?: (id: string) => void;
