@@ -331,7 +331,9 @@ def run_worker(service, task_id, bridge, message):
             prompt = json.dumps(service.profiles.clean(opening, bounded=False), ensure_ascii=False)
             candidate = (row.harness_json or {}).get("candidate")
             review_pending = bool(candidate and candidate.get("review_status") == "pending")
-            driver.mark_user_messages_delivered(db, row)  # the opening carries context_json.user_messages
+            # The opening carries context_json.user_messages up to here; it counts as delivered only when sent.
+            opening_messages = driver.user_message_count(db, row)
+            sends_opening = True
             db.commit()
         for action in ("probe", "prepare"):
             with service.lock, service.sessions() as db:
@@ -373,6 +375,7 @@ def run_worker(service, task_id, bridge, message):
             return callback(sdk_message, role="review")
 
         def next_turn():
+            nonlocal sends_opening
             # Program-decided follow-up of a turn: review a pending candidate, or continue with facts.
             # A run that returns without a result is not a turn end; it pauses for explicit resume.
             if not (turn_ended or review_pending):
@@ -385,7 +388,9 @@ def run_worker(service, task_id, bridge, message):
                 session_file = service.row(db, task_id).session_file
             if session_file:
                 config["session_file"] = session_file
+                sends_opening = False
                 return follow
+            sends_opening = True
             # No main session yet: the normal opening prompt plus the follow-up facts/findings.
             return json.dumps(service.profiles.clean({**opening, "continuation": follow}, bounded=False),
                               ensure_ascii=False)
@@ -402,7 +407,9 @@ def run_worker(service, task_id, bridge, message):
                 usage(row)
                 config["limits"] = service.remaining(row)
                 # Messages that arrived while no main process could take a steer (review, between turns).
-                prompt = driver.with_user_messages(db, row, prompt)
+                if sends_opening:
+                    driver.mark_user_messages_delivered(db, row, upto=opening_messages)
+                prompt = driver.with_user_messages(service, db, row, prompt)
                 db.commit()
             turn_ended = False
             bridge.run(config, prompt, callback)

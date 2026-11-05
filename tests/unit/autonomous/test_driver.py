@@ -367,3 +367,51 @@ def test_review_not_started_when_task_not_running(service):
     made = []
     assert driver._attempt(service, task_id, lambda: made.append(1), None, None) == (None, None, True)
     assert made == []
+
+
+def test_steer_during_interrupted_review_reaches_main_after_resume(service):
+    holder = {}
+
+    def steer_then_pause():
+        with service.lock, service.sessions() as db:
+            service.control(db, holder["task_id"], "message", "UNIQUE-STEER-42")
+            service.control(db, holder["task_id"], "pause")
+            db.commit()
+    resumed_main = Main()
+    task_id = prepare(service, [Main([work()]), Review(on_run=steer_then_pause), resumed_main,
+                                Review("issues", [FINDING])], rounds=1)
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    assert wait(service, task_id).state == "paused"
+    with service.lock, service.sessions() as db:
+        service.control(db, task_id, "resume")
+        db.commit()
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert row.harness_json["repair_round"] == 1 and resumed_main.prompts
+    assert "> UNIQUE-STEER-42" in resumed_main.prompts[0]
+    assert all("UNIQUE-STEER-42" not in p for p in resumed_main.prompts[1:])
+    assert row.harness_json["delivered_user_messages"] == 1
+
+
+def test_long_cjk_user_message_delivered_in_full(service):
+    text = "复核期间的用户说明" * 1334  # 12006 characters, beyond the bounded event payload
+    assert len(text) >= 12000
+    holder = {}
+
+    def steer():
+        with service.lock, service.sessions() as db:
+            service.control(db, holder["task_id"], "message", text)
+            db.commit()
+    main = Main([work("r0"), []])
+    task_id = prepare(service, [main, Review("issues", [FINDING], on_run=steer)], rounds=1)
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    wait(service, task_id)
+    assert "> " + text in main.prompts[1]
+
+
+def test_unrecoverable_message_is_quoted_as_truncated_preview():
+    assert driver.quote_message({"truncated": True, "preview": "partial"}) == "> partial [truncated]"
+    assert driver.quote_message("") == "> [empty message]"
+    assert driver.quote_message("a\nb") == "> a\n> b"

@@ -61,27 +61,62 @@ def facts_message(service, db, row, findings=True):
     return service.profiles.clean("\n".join(lines), bounded=False)
 
 
-def user_messages(db, row):
-    """Every user message in journal order (context_json keeps only a bounded tail)."""
-    return [e.payload.get("message", "") for e in db.scalars(
-        select(Event).where(Event.task_id == row.id, Event.type == "user_message").order_by(Event.sequence)).all()]
+def _message_events(db, row):
+    return db.scalars(select(Event).where(Event.task_id == row.id, Event.type == "user_message")
+                      .order_by(Event.sequence)).all()
 
 
-def mark_user_messages_delivered(db, row):
+def user_message_count(db, row):
+    return len(_message_events(db, row))
+
+
+def user_messages(service, db, row):
+    """Every user message in journal order, full text where recoverable.
+
+    The event payload is bounded (a long message becomes {"truncated", "preview"}); context_json keeps the
+    full text of the latest 32, paired one-to-one with the events by control.message."""
+    payloads = [e.payload for e in _message_events(db, row)]
+    tail = row.context_json.get("user_messages", [])
+    offset = max(0, len(payloads) - len(tail))
+    messages = []
+    for index, payload in enumerate(payloads):
+        if index >= offset and isinstance(tail[index - offset], str):
+            messages.append(service.profiles.clean(tail[index - offset], bounded=False))
+        elif isinstance(payload.get("message"), str):
+            messages.append(payload["message"])
+        else:
+            messages.append(payload)  # unrecoverable: quoted as a marked preview
+    return messages
+
+
+def quote_message(message):
+    suffix = ""
+    if isinstance(message, dict):
+        message, suffix = str(message.get("preview", "")), " [truncated]"
+    lines = str(message).splitlines()
+    if not lines:
+        return "> [empty message]" + suffix
+    return "\n".join("> " + line for line in lines) + suffix
+
+
+def mark_user_messages_delivered(db, row, upto=None):
+    """Count messages as delivered once a prompt or live steer carrying them reached the main session."""
     if row.harness_json is not None:
-        row.harness_json = {**row.harness_json, "delivered_user_messages": len(user_messages(db, row))}
+        count = user_message_count(db, row) if upto is None else upto
+        delivered = int(row.harness_json.get("delivered_user_messages", 0))
+        row.harness_json = {**row.harness_json, "delivered_user_messages": max(delivered, count)}
 
 
-def with_user_messages(db, row, prompt):
+def with_user_messages(service, db, row, prompt):
     """Append user messages not yet delivered to the main session, verbatim, then mark them delivered."""
     if row.harness_json is None:
         return prompt
-    messages = user_messages(db, row)
+    messages = user_messages(service, db, row)
     fresh = messages[int(row.harness_json.get("delivered_user_messages", 0)):]
     row.harness_json = {**row.harness_json, "delivered_user_messages": len(messages)}
     if not fresh:
         return prompt
-    quoted = "\n>\n".join("\n".join("> " + line for line in (str(m).splitlines() or [""])) for m in fresh)
+    quoted = "\n>\n".join(quote_message(m) for m in fresh)
     return f"{prompt}\n\nUser messages received since the last turn:\n{quoted}"
 
 
