@@ -253,6 +253,33 @@ def test_stop_idempotency_replay_reconciles_crash_after_admission(client, monkey
     assert final.json()["data"] == replay.json()["data"]
 
 
+def test_decision_endpoint_wiring_envelope_csrf_and_conflict(client, monkeypatch):
+    setup(client)
+    svc = client.app.state.runtime["autonomous_service"]
+    with svc.sessions() as db:
+        row = svc.create_task(db, "project", "owner", {"objective": "decide", "protocol": protocol(),
+                                                       "authorization": {"confirmed": True}})
+        decision = svc.propose(db, row, {**protocol(), "method": "changed"}, "change")["pending_decision"]
+        db.commit(); task_id = row.id
+    launched = []
+    monkeypatch.setattr(svc, "launch", lambda task_id, message=None: launched.append((task_id, message)))
+    path = f"/tasks/{task_id}/decisions/{decision['id']}"
+    assert write(client, "POST", path, {"action": "reject"}, headers={"X-CSRF-Token": "wrong"}).status_code == 403
+    assert write(client, "POST", path, {"action": "defer"}).status_code == 422
+    assert write(client, "POST", path, {"action": "reject", "note": "x" * 4001}).status_code == 422
+    mismatch = write(client, "POST", f"/tasks/{task_id}/decisions/other", {"action": "approve"})
+    assert mismatch.status_code == 409 and mismatch.json()["error"]["code"] == "DECISION_MISMATCH"
+    rejected = write(client, "POST", path, {"action": "reject", "note": "keep it"}, key="reject-once")
+    assert rejected.status_code == 200, rejected.text
+    task = rejected.json()["data"]
+    assert task["id"] == task_id and task["state"] == "queued" and task["pending_decision"] is None
+    assert launched == [(task_id, None)]
+    replay = write(client, "POST", path, {"action": "reject", "note": "keep it"}, key="reject-once")
+    assert replay.json()["data"] == task and len(launched) == 1
+    with svc.sessions() as db:
+        assert svc.row(db, task_id).protocol_json["protocol"]["method"] == "linear predictions"
+
+
 def test_injected_database_roots_are_isolated_but_same_database_is_locked(tmp_path, monkeypatch):
     monkeypatch.delenv("P2R_AUTONOMOUS_DIR", raising=False)
     monkeypatch.delenv("P2R_DEMO_DIR", raising=False)

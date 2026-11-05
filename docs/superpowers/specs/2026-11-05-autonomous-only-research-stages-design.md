@@ -231,5 +231,6 @@
 10. 提交关卡与报告的完整性检查使用同一套规则：入口代码产物和协议 `expected_artifacts` 都是提交条件，因此 `verified` 的报告不会是 `incomplete`（5.4）。
 11. 预算耗尽时结局绑定较早一份已复核快照的情况下，报告按那份快照及其冻结协议生成，而不是按更新的待复核候选或任务当前协议（5.4、5.6）。
 12. 已提交的复核结论在任务停止、暂停或预算耗尽时仍会写入，不会被丢弃后重新付费复核；`facts_message` 在预算耗尽时不抛错（5.5 第 8 步）。
+13. 协议变更的审批有显式决策接口 `POST /api/v1/autonomous/tasks/{task_id}/decisions/{decision_id}`，请求体为 `{action: "approve" | "reject", note?}`（`note` 最长 4000 字符），返回公开任务（5.3）。`decision_id` 必须等于当前 `pending_decision.id`，否则返回 409 `DECISION_MISMATCH`；任务必须处于 `paused`，否则返回 409 `INVALID_STATE`；旧任务、已有结局的任务以及恢复的其余前置条件与恢复共用同一段代码。`approve` 应用提议的协议并写入 `protocol_approved`。`reject` 保留当前协议，写入 `protocol_rejected`（`decision_id`、`proposed_sha256`、`changed`、`note`），并按用户消息的同一条路径把拒绝告知 Pi，然后同样恢复任务。原来的 `control(resume, "approve:<id>")` 仍然有效；存在待审批决策时不带消息的恢复返回 409 `DECISION_PENDING`。
 
 5.10 到 5.12（前端、删除传统模式、Windows）仍是后续工作，本次未改动。

@@ -77,6 +77,7 @@ Pi 自己决定科研步骤，程序不设阶段关卡，`note_progress` 只用�
 `evaluate` 和 `report` 不再是工具，报告由程序在任务到达终态时生成。`harness_json` 为空的旧任务不能恢复（`LEGACY_TASK`），仍可导出；已有结局的任务恢复返回 `TASK_FINISHED`。
 
 应用关闭暂停 Agent 决策，后台实验可继续。重开后显式恢复并按持久启动 ID 对账；停止任务清理实验进程树，不释放租用实例。协议超出授权范围的变更进入待审批状态，只有匹配决策 ID 的批准才能继续。
+`POST /tasks/{task_id}/decisions/{decision_id}`（`approve` 或 `reject`，可附 `note`）显式处理待审批决策：批准应用新协议，拒绝保留当前协议并以用户消息告知 Pi，两者都按恢复的同一路径重新排队。
 
 评测支持 accuracy、RMSE 和 MAE，控制面重算已冻结产物。首版没有独立隐藏标签托管，因此即使实验执行完成，也保留 `not_comparable`；模型叙述单独标记，不作为执行或复现成功证据。ZIP 包含配置、论文上下文、协议、Skills 快照、事件、产物和哈希清单。
 

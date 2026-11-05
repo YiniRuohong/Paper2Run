@@ -61,6 +61,11 @@ class Control(Strict):
     message: str | None = Field(default=None, max_length=16000)
 
 
+class Decision(Strict):
+    action: Literal["approve", "reject"]
+    note: str | None = Field(default=None, max_length=4000)
+
+
 class ImportCapability(Strict):
     source_path: str = Field(min_length=1, max_length=2048)
 
@@ -237,6 +242,13 @@ def events(task_id: str, request: Request, after: int = Query(default=0, ge=0)):
 async def control(task_id: str, request: Request):
     return await mutate(request, Control, lambda s, db, actor, p: s.control(db, task_id, p["action"], p.get("message")),
                         task_id=task_id, access="execute")
+
+
+@router.post("/tasks/{task_id}/decisions/{decision_id}")
+async def decide(task_id: str, decision_id: str, request: Request):
+    return await mutate(request, Decision,
+        lambda s, db, actor, p: s.decide(db, task_id, decision_id, p["action"], p.get("note")),
+        task_id=task_id, access="execute")
 
 
 @router.get("/tasks/{task_id}/export")
