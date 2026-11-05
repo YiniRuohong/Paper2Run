@@ -540,10 +540,12 @@ def test_resume_refused_for_legacy_task(service):
     task_id = create(service)
     with service.sessions() as db:
         row = service.row(db, task_id); row.state = "paused"; row.harness_json = None; db.commit()
+        usage = dict(row.usage_json)
         with pytest.raises(ServiceError) as caught:
             service.control(db, task_id, "resume")
         assert caught.value.code == "LEGACY_TASK" and caught.value.status == 409
         assert "新建任务" in str(caught.value)
+        assert row.state == "paused" and row.usage_json == usage and row.error_json is None  # nothing mutated
         db.rollback()
         assert service.row(db, task_id).state == "paused"
 
@@ -567,5 +569,5 @@ def test_blocked_task_cannot_resume(service):
         db.commit()
         with pytest.raises(ServiceError) as caught:
             service.control(db, task_id, "resume")
-        assert caught.value.code == "INVALID_STATE" and caught.value.status == 409
+        assert caught.value.code == "TASK_FINISHED" and caught.value.status == 409
         assert service.row(db, task_id).state == "stopped"

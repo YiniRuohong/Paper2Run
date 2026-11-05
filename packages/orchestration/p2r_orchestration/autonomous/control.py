@@ -42,6 +42,8 @@ class ControlMixin:
                 worker["bridge"].steer(message)
             return row
         if action == "resume":
+            if row.outcome is not None:
+                fail("TASK_FINISHED", "task has a final outcome and cannot resume", 409)
             if row.state != "paused":
                 fail("INVALID_STATE", "only paused tasks can be resumed", 409)
             if active:

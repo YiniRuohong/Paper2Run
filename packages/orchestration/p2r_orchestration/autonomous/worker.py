@@ -56,7 +56,6 @@ def dispatch(service, target, task_id, name, args, request_id):
             intent = {"job_id": job_id, "command": args["command"], "timeout_seconds": timeout, "state": "submitting",
                       "protocol_sha256": row.protocol_json["sha256"] if row.protocol_json else None,
                       "entrypoint": row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None,
-                      "isolation": (service.workers.get(task_id) or {}).get("isolation") or None,
                       "sequence": row.event_sequence}  # launch sequence; reused intents keep the original
             if previous:
                 if previous["command"] != args["command"]:
@@ -125,13 +124,6 @@ def observe_job(row, observation):
             if any(job.get(k) != v for k, v in observed.items()):
                 row.jobs_json = {**row.jobs_json, launch_id: {**job, **observed}}
             return
-
-
-def isolation_of(observation):
-    """The isolation facts a probe/prepare observation reports (network, filesystem), if any."""
-    if not isinstance(observation, dict):
-        return {}
-    return {key: observation[key] for key in ("network", "filesystem") if observation.get(key)}
 
 
 def run_worker(service, task_id, bridge, message):
@@ -217,10 +209,10 @@ def run_worker(service, task_id, bridge, message):
                     observe_job(row, safe)
                 if row.state == "running":
                     stop_budget = check_budget(db, row) or stop_budget
+                service.event(db, row, "tool_completed", {"id": request_id, "name": name, "result": safe, "is_error": is_error})
                 if row.state == "running" and is_error and safe.get("code") in SAFETY_CODES:
                     driver.block_for_safety(service, db, row, safe)  # a budget stop above takes precedence
                     stop_budget = True
-                service.event(db, row, "tool_completed", {"id": request_id, "name": name, "result": safe, "is_error": is_error})
                 paused = row.state != "running"
                 db.commit()
             if stop_budget:
@@ -346,7 +338,6 @@ def run_worker(service, task_id, bridge, message):
             opening_messages = driver.user_message_count(db, row)
             sends_opening = True
             db.commit()
-        isolation = {}
         for action in ("probe", "prepare"):
             with service.lock, service.sessions() as db:
                 if service.row(db, task_id).state != "running":
@@ -361,25 +352,17 @@ def run_worker(service, task_id, bridge, message):
             if stop_budget:
                 stop_for_budget()
                 return
-            isolation.update(isolation_of(observation))  # prepare, the last action, has the final word
-        service.workers[task_id]["isolation"] = isolation
         # Reconcile handles before the SDK receives further decisions.
         with service.lock, service.sessions() as db:
             jobs = dict(service.row(db, task_id).jobs_json)
         for launch_id, job in jobs.items():
             unsafe = None
-            if job.get("isolation") and isolation and job["isolation"] != isolation:
-                unsafe = {"code": "isolation_changed", "message":
-                          f"job {launch_id} recorded {json.dumps(job['isolation'], sort_keys=True)} "
-                          f"but current probe shows {json.dumps(isolation, sort_keys=True)}"}
-                observation = {"state": "unknown", "error": "isolation changed; job not queried"}
-            else:
-                try:
-                    observation = target.status(job["job_id"])
-                except Exception as exc:
-                    observation = {"state": "unknown", "error": str(exc)}
-                    if getattr(exc, "code", None) in SAFETY_CODES:
-                        unsafe = {"code": exc.code, "message": str(exc)}
+            try:
+                observation = target.status(job["job_id"])
+            except Exception as exc:
+                observation = {"state": "unknown", "error": str(exc)}
+                if getattr(exc, "code", None) in SAFETY_CODES:
+                    unsafe = {"code": exc.code, "message": str(exc)}
             with service.lock, service.sessions() as db:
                 row = service.row(db, task_id)
                 usage(row)

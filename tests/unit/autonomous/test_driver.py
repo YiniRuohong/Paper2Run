@@ -489,47 +489,22 @@ def test_non_safety_target_error_still_pauses(service):
     assert not events(service, task_id, "safety_blocked")
 
 
-def test_job_intent_records_isolation_and_reconcile_blocks_on_change(service):
-    network = {"private_denied": True, "uid": 10001, "public": False}
-
-    class Probed(Target):
-        current = network
-        def prepare(self): return {"ready": True, "network": dict(Probed.current)}
-    service.target_factory = Probed
-    main = Main([[("background", {"command": "true", "launch_id": "L1", "timeout_seconds": 5})]])
-    task_id, row = start(service, [main])
-    assert row.jobs_json["L1"]["isolation"] == {"network": network}
-    # The same task resumes against a changed isolation record.
-    with service.sessions() as db:
-        row = service.row(db, task_id)
-        row.state, row.error_json, row.outcome = "paused", None, None
-        row.harness_json = {**row.harness_json, "no_progress": 0}
-        service.control(db, task_id, "resume")
-        db.commit()
-    Probed.current = {**network, "private_denied": False}
-    service.bridge_factory = lambda: Main()
-    service.workers.pop(task_id, None)
-    service.launch(task_id)
-    row = wait(service, task_id)
-    assert_blocked(service, task_id, row, "isolation_changed")
-    assert "L1" in events(service, task_id, "safety_blocked")[0]["message"]
-
-
-def test_reconcile_with_unchanged_isolation_continues(service):
-    network = {"private_denied": True, "uid": 10001}
-
-    class Probed(Target):
-        def prepare(self): return {"ready": True, "network": dict(network)}
-    service.target_factory = Probed
+def test_resume_with_changed_but_passing_network_is_not_blocked(service):
+    """A re-created container probes differently; prepare enforces isolation, reconcile must not second-guess it."""
+    class Recreated(Target):
+        def prepare(self): return {"ready": True, "network": {"private_denied": True, "uid": 10001, "errors": ["new"]}}
+    service.target_factory = Recreated
     task_id = prepare(service, [Main()])
     with service.sessions() as db:
         row = service.row(db, task_id)
         row.jobs_json = {"L1": {"job_id": "a" * 64, "command": "true", "state": "completed",
-                                "isolation": {"network": network}}}
+                                "isolation": {"network": {"private_denied": True, "uid": 10001, "errors": ["old"]}}}}
         db.commit()
     service.launch(task_id)
     row = wait(service, task_id)
-    assert row.outcome is None and not events(service, task_id, "safety_blocked")
+    assert row.outcome is None and row.state != "stopped"
+    assert not events(service, task_id, "safety_blocked")
+    assert events(service, task_id, "job_reconciled")
 
 
 def test_budget_stop_preempts_safety_block(service):
