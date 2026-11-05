@@ -226,7 +226,8 @@ def protocol_and_objective(args, source):
         "and scikit-learn versions, environment.txt with actual Python and pip freeze output, and run.log with "
         "real training output. Register EVERY expected artifact using register_artifact: .py as code, "
         "requirements/environment as environment, dataset/split/provenance/labels as data, predictions as result, "
-        "run.log as log. Then invoke submit_candidate and end the turn. Do not merely describe work. Do not change the frozen "
+        "run.log as log. submit_candidate accepts a candidate only when the successful entrypoint run comes after "
+        "the latest code registration; end the turn after submitting. Do not merely describe work. Do not change the frozen "
         "protocol; repair code/dependencies as needed within it. Explicitly report exploratory/not_comparable; "
         "there is no paper reference metric and this is not a reproduction of paper results."
     )

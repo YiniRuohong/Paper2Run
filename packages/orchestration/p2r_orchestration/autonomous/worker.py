@@ -271,6 +271,7 @@ def run_worker(service, task_id, bridge, message):
                 elif row.harness_json is not None:
                     # The program decides what follows a turn (driver.after_turn), never the result text.
                     turn_ended = True
+                    driver.mark_user_messages_delivered(db, row)  # steered into the live turn
                     service.event(db, row, "turn_ended", {"state": row.state})
                 elif row.state == "running":
                     # Legacy task (pre-harness): keep the original result -> report path.
@@ -330,6 +331,7 @@ def run_worker(service, task_id, bridge, message):
             prompt = json.dumps(service.profiles.clean(opening, bounded=False), ensure_ascii=False)
             candidate = (row.harness_json or {}).get("candidate")
             review_pending = bool(candidate and candidate.get("review_status") == "pending")
+            driver.mark_user_messages_delivered(db, row)  # the opening carries context_json.user_messages
             db.commit()
         for action in ("probe", "prepare"):
             with service.lock, service.sessions() as db:
@@ -399,6 +401,8 @@ def run_worker(service, task_id, bridge, message):
                     return
                 usage(row)
                 config["limits"] = service.remaining(row)
+                # Messages that arrived while no main process could take a steer (review, between turns).
+                prompt = driver.with_user_messages(db, row, prompt)
                 db.commit()
             turn_ended = False
             bridge.run(config, prompt, callback)
@@ -429,21 +433,28 @@ def run_worker(service, task_id, bridge, message):
                 settled["total_tokens"] = settled.get("total_tokens", 0) + pending_tokens
                 settled["unverified_token_reservation"] = settled.get("unverified_token_reservation", 0) + pending_tokens
             row.usage_json = settled
-            outcome, reason = driver.budget_outcome(row) if budget_stopped and row.outcome is None else (None, None)
-            if outcome:
-                # A submitted candidate decides the outcome; the lifecycle state stays the budget stop.
-                candidate = row.harness_json["candidate"]
-                if candidate.get("review_status") == "pending":
-                    row.harness_json = {**row.harness_json, "candidate": {**candidate, "review_status": "unavailable"}}
-                evidence.report(service, db, row, candidate["summary"], outcome=outcome, reason=reason)
-                row.outcome = outcome
-                service.event(db, row, "task_finished", {"state": row.state, "outcome": outcome,
-                                                         "verdict": "not_comparable", "reason": reason})
-            elif budget_stopped and row.outcome is None:
-                # Budget cancellation forbids new work, not the report for the
-                # admitted response. The SDK may emit aborted instead of result.
-                narrative = last_response if last_response is not None else (row.report_json or {}).get("model_narrative", "")
-                evidence.report(service, db, row, narrative)
+            try:
+                outcome, reason, snapshot = (driver.budget_outcome(row) if budget_stopped and row.outcome is None
+                                             else (None, None, None))
+                if outcome:
+                    # A submitted candidate decides the outcome; the lifecycle state stays the budget stop.
+                    candidate = row.harness_json["candidate"]
+                    if candidate.get("review_status") == "pending":
+                        candidate = {**candidate, "review_status": "unavailable"}
+                    row.harness_json = {**row.harness_json, "candidate": candidate, "outcome_snapshot_sha256": snapshot}
+                    evidence.report(service, db, row, candidate["summary"], outcome=outcome, reason=reason,
+                                    outcome_snapshot=snapshot)
+                    row.outcome = outcome
+                    service.event(db, row, "task_finished", {"state": row.state, "outcome": outcome,
+                        "verdict": "not_comparable", "reason": reason, "outcome_snapshot_sha256": snapshot})
+                elif budget_stopped and row.outcome is None:
+                    # Budget cancellation forbids new work, not the report for the
+                    # admitted response. The SDK may emit aborted instead of result.
+                    narrative = last_response if last_response is not None else (row.report_json or {}).get("model_narrative", "")
+                    evidence.report(service, db, row, narrative)
+            except Exception as exc:
+                # Settlement and worker_exited below must always commit.
+                service.event(db, row, "report_failed", {"code": getattr(exc, "code", "report_error"), "message": str(exc)})
             if row.state == "running":
                 row.state = "paused"
                 row.error_json = {"code": "recovery_required", "message": "SDK stopped; explicit resume required."}

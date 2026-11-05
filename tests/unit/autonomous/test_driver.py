@@ -105,6 +105,8 @@ def test_pass_gives_verified(service):
     assert row.report_json["candidate"]["snapshot_sha256"] == row.harness_json["candidate"]["snapshot_sha256"]
     assert row.report_json["evaluation"]["metrics"]["mae"] == 0
     assert row.report_json["model_narrative"] == "candidate r0"
+    sha = row.harness_json["candidate"]["snapshot_sha256"]
+    assert row.harness_json["outcome_snapshot_sha256"] == sha == row.report_json["outcome_snapshot_sha256"]
     assert len(main.prompts) == 1
     recorded = events(service, task_id, "review_recorded")
     assert recorded == [{"snapshot_sha256": row.harness_json["candidate"]["snapshot_sha256"],
@@ -153,7 +155,8 @@ def test_review_failure_retries_once_then_unavailable(service):
     assert [f["attempt"] for f in failed] == [1, 2] and "node binary missing" in failed[1]["reason"]
     assert not events(service, task_id, "review_recorded") and len(main.prompts) == 1
     review_root = service.task_root(task_id) / "review" / row.harness_json["candidate"]["snapshot_sha256"]
-    assert (review_root / "attempt-1").is_dir() and (review_root / "attempt-2").is_dir()
+    assert len(list(review_root.glob("attempt-1-*"))) == 1 and len(list(review_root.glob("attempt-2-*"))) == 1
+    assert row.harness_json["outcome_snapshot_sha256"] == row.harness_json["candidate"]["snapshot_sha256"]
 
 
 def test_no_progress_three_turns_incomplete(service):
@@ -205,10 +208,15 @@ def test_budget_exhausted_during_review_gives_review_unavailable(service, review
     if reviewed:
         assert row.outcome == "completed_with_issues"
         assert row.report_json["outcome_reason"] == "budget_exhausted"
+        earlier = row.harness_json["reviews"][-1]["snapshot_sha256"]
+        assert earlier != row.harness_json["candidate"]["snapshot_sha256"]
+        assert row.harness_json["outcome_snapshot_sha256"] == earlier
+        assert row.report_json["outcome_snapshot_sha256"] == earlier
     else:
         assert row.outcome == "review_unavailable"
         assert row.report_json["outcome"] == "review_unavailable"
         assert row.report_json["outcome_reason"] == "budget_exhausted"
+        assert row.report_json["outcome_snapshot_sha256"] == row.harness_json["candidate"]["snapshot_sha256"]
     assert events(service, task_id, "task_finished")[-1]["reason"] == "budget_exhausted"
 
 
@@ -239,6 +247,8 @@ def test_resume_with_pending_review_reruns_same_snapshot(service):
     assert len(events(service, task_id, "candidate_frozen")) == 1
     assert [r["snapshot_sha256"] for r in events(service, task_id, "review_recorded")] == [snapshot]
     assert not events(service, task_id, "review_failed")
+    review_root = service.task_root(task_id) / "review" / snapshot
+    assert len(list(review_root.glob("attempt-1-*"))) == 2  # interrupted session files never mixed
 
 
 def test_review_usage_charged_without_touching_main_session(service):
@@ -279,3 +289,81 @@ def test_fingerprint_counts_artifacts_ended_jobs_and_candidate(service):
     main = Main([work()])
     task_id, row = start(service, [main, Review("pass")])
     assert driver.fingerprint(row) == [len(row.artifacts_json), 1, row.harness_json["candidate"]["snapshot_sha256"]]
+
+
+def test_user_message_during_review_reaches_next_turn_once(service):
+    holder = {}
+
+    def steer():
+        with service.lock, service.sessions() as db:
+            service.control(db, holder["task_id"], "message", "Please also report the seed used.")
+            db.commit()
+    main = Main([work("r0"), []])
+    task_id = prepare(service, [main, Review("issues", [FINDING], on_run=steer)], rounds=1)
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert row.state == "incomplete" and len(main.prompts) == 4
+    assert "User messages received since the last turn:" in main.prompts[1]
+    assert "> Please also report the seed used." in main.prompts[1]
+    assert all("Please also report the seed used." not in p for p in main.prompts[2:])
+    assert not any("User messages received" in p for p in main.prompts[2:])
+    assert row.harness_json["delivered_user_messages"] == 1
+
+
+def test_message_steered_into_live_turn_is_not_repeated(service):
+    holder = {}
+
+    class Steering(Main):
+        def run(self, config, prompt, callback):
+            if not self.prompts:
+                with service.lock, service.sessions() as db:
+                    service.control(db, holder["task_id"], "message", "live steer")
+                    db.commit()
+            super().run(config, prompt, callback)
+    main = Steering()
+    task_id = prepare(service, [main])
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    wait(service, task_id)
+    assert all("live steer" not in p for p in main.prompts[1:])
+
+
+def test_integrity_failure_at_budget_exit_still_settles(service):
+    holder = {}
+
+    def corrupt():
+        with service.sessions() as db:
+            sha = service.row(db, holder["task_id"]).harness_json["candidate"]["snapshot_sha256"]
+        (service.task_root(holder["task_id"]) / "candidates" / sha / "artifacts" / "main.py").write_text("tampered")
+    # An admitted review call without usage, then a budget error; the frozen copy is altered before exit.
+    exhausted = Review(on_run=corrupt, messages=({"type": "event", "event": {"type": "turn_start"}},
+                                                 {"type": "error", "code": "budget_exceeded", "message": "budget"}))
+    task_id = prepare(service, [Main([work()]), exhausted])
+    holder["task_id"] = task_id
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert events(service, task_id, "worker_exited")
+    assert "active_since" not in row.usage_json and "pending_token_reservation" not in row.usage_json
+    assert row.usage_json["calls"] == 1  # the admitted review call is settled
+    assert row.outcome == "review_unavailable"
+    assert any("integrity" in reason for reason in row.report_json["evaluation"]["reasons"])
+
+
+def test_review_of_different_snapshot_is_failed_attempt(service, monkeypatch):
+    monkeypatch.setattr(driver, "run_review", lambda *args: {"verdict": "pass", "findings": [],
+                                                              "snapshot_sha256": "0" * 64})
+    task_id, row = start(service, [Main([work()]), Review(), Review()])
+    assert row.outcome == "review_unavailable"
+    assert [f["reason"] for f in events(service, task_id, "review_failed")] == ["snapshot_changed"] * 2
+    assert not events(service, task_id, "review_recorded")
+
+
+def test_review_not_started_when_task_not_running(service):
+    task_id = create(service, protocol=protocol())
+    with service.sessions() as db:
+        service.row(db, task_id).state = "paused"
+        db.commit()
+    made = []
+    assert driver._attempt(service, task_id, lambda: made.append(1), None, None) == (None, None, True)
+    assert made == []

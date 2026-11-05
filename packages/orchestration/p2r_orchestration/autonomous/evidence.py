@@ -11,6 +11,7 @@ from sqlalchemy import select
 from p2r_evaluation.autonomous import evaluate_artifacts
 from p2r_evaluation.reference_verification import verify_reference_values
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
+from p2r_orchestration.service import ServiceError
 from .security import fail, digest
 
 def verify_export_zip(raw):
@@ -191,12 +192,24 @@ def candidate_root(service, row, candidate):
     return root
 
 
-def report(service, db, row, narrative="", outcome=None, reason=None):
+INTEGRITY_FAILED = "frozen candidate integrity check failed"
+
+
+def report(service, db, row, narrative="", outcome=None, reason=None, outcome_snapshot=None):
     harness = row.harness_json or {}
     candidate = harness.get("candidate")
     # A candidate report describes the frozen snapshot, never the live round.
-    root = candidate_root(service, row, candidate) if candidate else None
+    root, intact = None, True
+    if candidate:
+        try:
+            root = candidate_root(service, row, candidate)
+        except ServiceError as exc:
+            if getattr(exc, "code", None) != "EVIDENCE_INTEGRITY":
+                raise
+            intact = False  # still report: an integrity failure is evidence, never a crash at exit
     try:
+        if not intact:
+            raise ValueError(INTEGRITY_FAILED)
         calculated = evaluation_at(service, row, root) if candidate else evaluation(service, row)
     except (ValueError, OSError) as exc:
         calculated = {"verdict": "not_comparable", "comparison_eligible": False,
@@ -215,6 +228,8 @@ def report(service, db, row, narrative="", outcome=None, reason=None):
     verification = None
     if row.reference_values_json is not None and row.protocol_json:
         try:
+            if not intact:
+                raise ValueError(INTEGRITY_FAILED)
             verification = verify_reference_values(
                 row.protocol_json, root or artifact_root(service, row), row.reference_values_json,
                 scope=row.reference_scope or "", user_confirmed_sources=row.reference_sources_confirmed,
@@ -229,6 +244,7 @@ def report(service, db, row, narrative="", outcome=None, reason=None):
               "completion_gate": {"entrypoint": entrypoint, "frozen_code_sha256": frozen_code["sha256"] if frozen_code else None,
                   "rule": "Approved entrypoint appears in an observed command with exit_code=0; entrypoint code and code/environment/data/result artifacts are frozen. This does not prove scientific validity or that artifact contents came from that command."},
               "verdict": "not_comparable", "outcome": outcome, "outcome_reason": reason,
+              "outcome_snapshot_sha256": outcome_snapshot,
               "candidate": candidate, "reviews": harness.get("reviews", []),
               "model_narrative": service.profiles.clean(narrative),
               "evaluation": calculated, "artifacts": artifacts, "missing_artifacts": missing,

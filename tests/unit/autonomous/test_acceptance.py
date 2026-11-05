@@ -112,6 +112,8 @@ def test_specialists_objective_requests_choice_not_fixed_assignment():
     assert "research_delegate" in objective and "at least one" in objective
     assert "Explain" in objective and "unverified advisory" in objective
     assert "background" in objective and "submit_candidate" in objective
+    assert "successful entrypoint run comes after the latest code registration" in objective
+    assert "Then invoke" not in objective
 
 
 def delegation_fixture(models=("model-a",)):

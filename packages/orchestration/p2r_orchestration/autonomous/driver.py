@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import json
 
+from sqlalchemy import select
+
+from p2r_persistence.autonomous import AutonomousEventRecord as Event
 from . import evidence
 from .candidate import gate
 from .review import run_review
@@ -58,24 +61,52 @@ def facts_message(service, db, row, findings=True):
     return service.profiles.clean("\n".join(lines), bounded=False)
 
 
-def finish(service, db, row, outcome, reason=None):
+def user_messages(db, row):
+    """Every user message in journal order (context_json keeps only a bounded tail)."""
+    return [e.payload.get("message", "") for e in db.scalars(
+        select(Event).where(Event.task_id == row.id, Event.type == "user_message").order_by(Event.sequence)).all()]
+
+
+def mark_user_messages_delivered(db, row):
+    if row.harness_json is not None:
+        row.harness_json = {**row.harness_json, "delivered_user_messages": len(user_messages(db, row))}
+
+
+def with_user_messages(db, row, prompt):
+    """Append user messages not yet delivered to the main session, verbatim, then mark them delivered."""
+    if row.harness_json is None:
+        return prompt
+    messages = user_messages(db, row)
+    fresh = messages[int(row.harness_json.get("delivered_user_messages", 0)):]
+    row.harness_json = {**row.harness_json, "delivered_user_messages": len(messages)}
+    if not fresh:
+        return prompt
+    quoted = "\n>\n".join("\n".join("> " + line for line in (str(m).splitlines() or [""])) for m in fresh)
+    return f"{prompt}\n\nUser messages received since the last turn:\n{quoted}"
+
+
+def finish(service, db, row, outcome, reason=None, snapshot=None):
+    """Terminal outcome bound to the snapshot that decided it (default: the current candidate)."""
     candidate = (row.harness_json or {}).get("candidate")
+    snapshot = snapshot or (candidate["snapshot_sha256"] if candidate else None)
+    row.harness_json = {**row.harness_json, "outcome_snapshot_sha256": snapshot}
     evidence.report(service, db, row, narrative=candidate["summary"] if candidate else "",
-                    outcome=outcome, reason=reason)
+                    outcome=outcome, reason=reason, outcome_snapshot=snapshot)
     row.outcome, row.state = outcome, "completed"
     payload = {"state": row.state, "outcome": outcome, "verdict": "not_comparable"}
     service.event(db, row, "task_finished", {**payload, "reason": reason} if reason else payload)
 
 
 def budget_outcome(row):
-    """Outcome when the budget runs out: (outcome, reason), or (None, None) to keep the lifecycle-only result."""
+    """Outcome when the budget runs out: (outcome, reason, deciding snapshot), or Nones to keep the
+    lifecycle-only result. completed_with_issues names the last reviewed snapshot, not a newer pending one."""
     harness = row.harness_json or {}
     candidate = harness.get("candidate")
     if harness.get("reviews"):
-        return "completed_with_issues", "budget_exhausted"
+        return "completed_with_issues", "budget_exhausted", harness["reviews"][-1]["snapshot_sha256"]
     if candidate and candidate.get("review_status") == "pending":
-        return "review_unavailable", "budget_exhausted"
-    return None, None
+        return "review_unavailable", "budget_exhausted", candidate["snapshot_sha256"]
+    return None, None, None
 
 
 class _ReviewHandle:
@@ -92,16 +123,23 @@ class _ReviewHandle:
 
 
 def _attempt(service, task_id, bridge_factory, model, account):
-    """One review session. Returns (review, error); the main bridge is restored afterwards."""
-    with service.lock:
+    """One review session. Returns (review, error, skipped); the main bridge is restored afterwards.
+
+    skipped: the task stopped running before the session could start (no bridge, no attempt counted)."""
+    review, error = None, None
+    with service.lock, service.sessions() as db:
+        # Same locked block as registration, so pause/stop either sees the review handle or prevents it.
+        if service.row(db, task_id).state != "running":
+            return None, None, True
         worker = service.workers.get(task_id)
         main = worker.get("bridge") if worker else None
-    review, error = None, None
-    try:
-        bridge = bridge_factory()
+        try:
+            bridge = bridge_factory()
+        except Exception as exc:
+            return None, exc, False
         if worker is not None:
-            with service.lock:
-                worker["bridge"] = _ReviewHandle(bridge)
+            worker["bridge"] = _ReviewHandle(bridge)
+    try:
         review = run_review(service, task_id, bridge, model, account)
     except Exception as exc:  # every review failure is one failed attempt (budget excepted below)
         error = exc
@@ -109,12 +147,14 @@ def _attempt(service, task_id, bridge_factory, model, account):
         if worker is not None:
             with service.lock:
                 worker["bridge"] = main
-    return review, error
+    return review, error, False
 
 
 def _review(service, task_id, bridge_factory, model, account):
     while True:
-        review, error = _attempt(service, task_id, bridge_factory, model, account)
+        review, error, skipped = _attempt(service, task_id, bridge_factory, model, account)
+        if skipped:
+            return "finished", None
         if error is not None and getattr(error, "code", None) in BUDGET_ERRORS:
             raise error  # the worker records the budget cancellation; budget_outcome decides
         with service.lock, service.sessions() as db:
@@ -126,8 +166,12 @@ def _review(service, task_id, bridge_factory, model, account):
             harness = row.harness_json
             candidate = harness["candidate"]
             attempt = int(candidate.get("attempts", 0)) + 1
+            reason = None
             if error is not None:
                 reason = getattr(error, "reason", None) or f"{type(error).__name__}: {error}"
+            elif review.get("snapshot_sha256") != candidate["snapshot_sha256"]:
+                reason = "snapshot_changed"  # a verdict only counts for the snapshot it reviewed
+            if reason is not None:
                 candidate = {**candidate, "attempts": attempt}
                 if attempt >= REVIEW_ATTEMPTS:
                     candidate["review_status"] = "unavailable"

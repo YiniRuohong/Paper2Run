@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+from uuid import uuid4
 
 from . import evidence
 from .security import fail
@@ -125,7 +126,9 @@ class FrozenTarget:
 
 
 def run_review(service, task_id, bridge, model, account):
-    """Run one fresh, read-only review session. Returns {"verdict", "findings"} or raises ReviewFailed."""
+    """Run one fresh, read-only review session.
+
+    Returns {"verdict", "findings", "snapshot_sha256"} (the snapshot actually reviewed) or raises ReviewFailed."""
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)
         candidate = (row.harness_json or {}).get("candidate")
@@ -146,8 +149,10 @@ def run_review(service, task_id, bridge, model, account):
                                   for a in candidate["artifacts"]]}
         prompt = json.dumps(service.profiles.clean({"paper": row.context_json, "protocol": row.protocol_json,
             "candidate": manifest, "evaluation": calculated}, bounded=False), ensure_ascii=False)
-        session = task_root / "review" / candidate["snapshot_sha256"] / f"attempt-{int(candidate.get('attempts', 0)) + 1}"
-    session.mkdir(parents=True, exist_ok=True)
+        # A fresh directory per session start: an interrupted session's files never mix with the next one's.
+        session = (task_root / "review" / candidate["snapshot_sha256"]
+                   / f"attempt-{int(candidate.get('attempts', 0)) + 1}-{uuid4().hex[:8]}")
+    session.mkdir(parents=True, exist_ok=False)
     config = {"cwd": str(session), "session_dir": str(session), "model": model,
               "system_prompt": REVIEW_PROMPT, "tools": REVIEW_TOOLS, "limits": limits}
     outcome = {"review": None, "error": None}
@@ -186,4 +191,4 @@ def run_review(service, task_id, bridge, model, account):
     if outcome["review"] is None:
         raise ReviewFailed("review session ended without a valid submit_review")
     assert set(outcome["review"]) == {"verdict", "findings"}
-    return outcome["review"]
+    return {**outcome["review"], "snapshot_sha256": candidate["snapshot_sha256"]}

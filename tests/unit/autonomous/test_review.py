@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -101,14 +102,16 @@ def test_run_review_returns_verdict(service):
     task_id, _, snap, _ = frozen(service)
     bridge = Scripted([("read", {"path": "main.py"}), ("submit_review", {"verdict": "pass", "findings": []})])
     result, seen = review(service, task_id, bridge)
-    assert result == {"verdict": "pass", "findings": []}
+    assert result == {"verdict": "pass", "findings": [], "snapshot_sha256": snap["snapshot_sha256"]}
     assert bridge.responses[0]["is_error"] is False
     assert bridge.responses[0]["result"]["content"] == "content of main.py"
     assert bridge.responses[1] == {"type": "tool_result", "id": "t1", "result": {"recorded": True}, "is_error": False}
     assert [m["type"] for m in seen] == ["ready", "result"]
     config = bridge.config
-    expected = service.task_root(task_id) / "review" / snap["snapshot_sha256"] / "attempt-1"
-    assert config["session_dir"] == str(expected) and config["cwd"] == str(expected)
+    session = Path(config["session_dir"])
+    assert session.parent == service.task_root(task_id) / "review" / snap["snapshot_sha256"]
+    assert session.name.startswith("attempt-1-") and len(session.name) == len("attempt-1-") + 8
+    assert config["cwd"] == str(session)
     assert "specialists" not in config and "session_file" not in config
     assert config["system_prompt"] == REVIEW_PROMPT and config["tools"] == REVIEW_TOOLS
     with service.sessions() as db:
@@ -132,20 +135,21 @@ def test_issues_requires_finding(service):
 
 
 def test_issues_with_evidence_is_returned(service):
-    task_id, *_ = frozen(service)
+    task_id, _, snap, _ = frozen(service)
     finding = {"description": "metric differs from protocol", "evidence": ["predictions.json"]}
     bridge = Scripted([("submit_review", {"verdict": "issues", "findings": [finding]})])
-    assert review(service, task_id, bridge)[0] == {"verdict": "issues", "findings": [finding]}
+    assert review(service, task_id, bridge)[0] == {"verdict": "issues", "findings": [finding],
+                                                   "snapshot_sha256": snap["snapshot_sha256"]}
 
 
 def test_long_findings_survive_intact(service):
-    task_id, *_ = frozen(service)
+    task_id, _, snap, _ = frozen(service)
     findings = [{"description": f"发现{i}：" + "结果与协议不一致" * 490, "evidence": ["predictions.json", "日志" * 400]}
                 for i in range(20)]
     assert all(len(f["description"]) <= 4000 for f in findings)
     bridge = Scripted([("submit_review", {"verdict": "issues", "findings": findings})])
     result = review(service, task_id, bridge)[0]
-    assert result == {"verdict": "issues", "findings": findings}
+    assert result == {"verdict": "issues", "findings": findings, "snapshot_sha256": snap["snapshot_sha256"]}
 
 
 @pytest.mark.parametrize("arguments", [
@@ -206,3 +210,12 @@ def test_evaluation_at_evaluates_given_root(service):
         assert custody in result["reasons"] and "within_tolerance" not in result
         with pytest.raises(ValueError):  # live round holds non-JSON predictions
             evidence.evaluation(service, row)
+
+
+def test_each_review_session_gets_a_fresh_directory(service):
+    task_id, *_ = frozen(service)
+    first, second = Scripted([]), Scripted([("submit_review", {"verdict": "pass", "findings": []})])
+    with pytest.raises(ReviewFailed):
+        review(service, task_id, first)
+    review(service, task_id, second)
+    assert first.config["session_dir"] != second.config["session_dir"]
