@@ -105,6 +105,7 @@ def test_pass_gives_verified(service):
     assert row.report_json["candidate"]["snapshot_sha256"] == row.harness_json["candidate"]["snapshot_sha256"]
     assert row.report_json["evaluation"]["metrics"]["mae"] == 0
     assert row.report_json["model_narrative"] == "candidate r0"
+    assert row.report_json["status"] != "incomplete" and row.report_json["successful_execution_observed"] is True
     sha = row.harness_json["candidate"]["snapshot_sha256"]
     assert row.harness_json["outcome_snapshot_sha256"] == sha == row.report_json["outcome_snapshot_sha256"]
     assert len(main.prompts) == 1

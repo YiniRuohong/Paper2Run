@@ -12,7 +12,8 @@ from p2r_persistence.autonomous import AutonomousEventRecord as Event
 
 from .test_service import Target, create, protocol, service  # noqa: F401
 
-KINDS = [("main.py", "code"), ("env.json", "environment"), ("data.json", "data"), ("predictions.json", "result")]
+KINDS = [("main.py", "code"), ("env.json", "environment"), ("data.json", "data"), ("predictions.json", "result"),
+         ("labels.json", "result")]
 
 
 def running(service):
@@ -63,7 +64,20 @@ def test_gate_lists_missing_items(service):
     task_id = create(service)
     assert gate(service, task_id) == [
         "frozen protocol", "code artifact", "environment artifact", "data artifact", "result artifact",
-        "successful entrypoint run after latest code registration"]
+        "entrypoint code artifact", "successful entrypoint run after latest code registration"]
+
+
+def test_gate_requires_entrypoint_code_and_expected_artifacts(service):
+    task_id, target = running(service)
+    register(service, target, task_id, "helper.py", "code")
+    record_tool_result(service, task_id, "execute", run(service, target, task_id, "formal"))
+    for name, kind in KINDS[1:4]:
+        register(service, target, task_id, name, kind)
+    assert gate(service, task_id) == ["entrypoint code artifact", "expected artifact labels.json"]
+    register(service, target, task_id, "labels.json", "result")
+    register(service, target, task_id, "main.py", "code")
+    record_tool_result(service, task_id, "execute", run(service, target, task_id, "after-entrypoint"))
+    assert gate(service, task_id) == []
 
 
 def test_gate_requires_run_after_latest_code(service):
@@ -173,6 +187,7 @@ def test_note_progress_records_event(service):
 
 def test_prompt_has_no_step_order():
     assert "submit_candidate" in SYSTEM_PROMPT and "max_repair_rounds" in SYSTEM_PROMPT
+    assert "protocol entrypoint" in SYSTEM_PROMPT and "expected_artifacts" in SYSTEM_PROMPT
     for phrase in ("Step 1", "first,", "then "):
         assert phrase not in SYSTEM_PROMPT
 

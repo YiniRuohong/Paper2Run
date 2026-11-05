@@ -181,6 +181,13 @@ def entrypoint_executions(db, row):
     return executions
 
 
+def entrypoint_code(artifacts, entrypoint):
+    """The code artifact that is the protocol entrypoint, matched by artifact name or source path."""
+    if not entrypoint:
+        return None
+    return next((a for a in artifacts if a["kind"] == "code" and entrypoint in (a["name"], a.get("source_path"))), None)
+
+
 def candidate_root(service, row, candidate):
     """Frozen candidate artifacts, hash-checked against the snapshot manifest."""
     root = service.task_root(row.id) / "candidates" / candidate["snapshot_sha256"] / "artifacts"
@@ -222,9 +229,13 @@ def report(service, db, row, narrative="", outcome=None, reason=None, outcome_sn
     missing_kinds = sorted({"code", "environment", "data", "result"} - kinds)
     executions = entrypoint_executions(db, row)
     entrypoint = row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None
-    frozen_code = next((a for a in artifacts if a["kind"] == "code" and
-                        entrypoint in (a["name"], a["source_path"])), None)
-    observed_success = bool(frozen_code) and any(f["matches_protocol_entrypoint"] and f["result"].get("exit_code") == 0 for f in executions)
+    frozen_code = entrypoint_code(artifacts, entrypoint)
+    if candidate:
+        # The candidate's own formal run, checked as a qualifying entrypoint run when it was frozen.
+        observed_success = bool(frozen_code) and candidate["run"].get("exit_code") == 0
+    else:
+        observed_success = bool(frozen_code) and any(f["matches_protocol_entrypoint"] and f["result"].get("exit_code") == 0
+                                                     for f in executions)
     verification = None
     if row.reference_values_json is not None and row.protocol_json:
         try:

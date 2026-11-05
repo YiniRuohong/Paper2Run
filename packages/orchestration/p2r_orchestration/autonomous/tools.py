@@ -23,7 +23,7 @@ TOOLS = [
     tool("propose_protocol", "Propose a protocol version. Changes outside authorized fields pause until the user approves via control.", {"protocol": {"type": "object"}, "reason": S}, ["protocol", "reason"]),
     tool("register_artifact", "Freeze an actual workspace file as evidence. Names are immutable within a protocol version and repair round; a new round may reuse a name. Register code, environment, data provenance and results explicitly.", {"path": PATH, "name": PATH, "kind": {"type": "string", "enum": ["code", "environment", "data", "result", "analysis", "log", "checkpoint", "other"]}}, ["path", "name", "kind"]),
     tool("note_progress", "Record a short progress note for the user. It has no effect on evidence or outcome.", {"phase": {"type": "string", "minLength": 1, "maxLength": 120}, "summary": {"type": "string", "minLength": 1, "maxLength": 2000}}, ["phase", "summary"]),
-    tool("submit_candidate", "Submit the current results as a candidate for evaluation and independent review. Requires a frozen protocol; code, environment, data and result artifacts registered; and a successful direct entrypoint run observed after the latest code registration. Ends your part of this turn.", {"summary": S}, ["summary"]),
+    tool("submit_candidate", "Submit the current results as a candidate for evaluation and independent review. Requires a frozen protocol; code, environment, data and result artifacts registered, including the entrypoint code and every expected artifact; and a successful direct entrypoint run observed after the latest code registration. Ends your part of this turn.", {"summary": S}, ["summary"]),
 ]
 
 SYSTEM_PROMPT = """You are the Paper2Run research agent. Use only the provided isolated-target tools.
@@ -36,7 +36,9 @@ The target working directory is already /work. Run the approved experiment entry
 redirection, or chained echo/exit commands that hide its status. Read output with logs; save it separately with write if needed.
 Register actual code, environment, data provenance and result files with register_artifact; names are immutable within a repair round.
 submit_candidate is accepted only when all of these hold: the protocol is frozen; code, environment, data and result artifacts
-are registered in the current round; the entrypoint ran successfully (exit_code 0) after the latest code registration.
+are registered in the current round; one registered code artifact is the protocol entrypoint (by name or source path); every
+protocol expected_artifacts name is registered in the current round; the entrypoint ran successfully (exit_code 0) after the
+latest code registration.
 After a candidate is submitted, evidence is frozen and you must end the turn. The trusted evaluation and an independent review
 run in another session; any findings arrive in your next message. You may repair and resubmit for at most max_repair_rounds
 rounds (stated in the initial message); each new round starts with a fresh artifact set.

@@ -4,11 +4,12 @@ from __future__ import annotations
 import hashlib
 import shutil
 
-from .evidence import (MAX_FILE, artifact_root, current_round, ensure_not_under_review,
+from .evidence import (MAX_FILE, artifact_root, current_round, ensure_not_under_review, entrypoint_code,
                        entrypoint_executions, round_artifacts, safe_name)
 from .security import digest, fail
 
 REQUIRED_KINDS = ("code", "environment", "data", "result")
+ENTRYPOINT_ITEM = "entrypoint code artifact"
 RUN_ITEM = "successful entrypoint run after latest code registration"
 LOG_PAGE = 1_000_000
 
@@ -26,9 +27,16 @@ def qualifying_run(db, row):
 
 
 def gate(db, row):
+    """Missing submit_candidate requirements, in a stable order; the same rules report() applies."""
     missing = [] if row.protocol_json else ["frozen protocol"]
-    kinds = {a["kind"] for a in round_artifacts(row)}
+    artifacts = round_artifacts(row)
+    kinds = {a["kind"] for a in artifacts}
     missing += [f"{kind} artifact" for kind in REQUIRED_KINDS if kind not in kinds]
+    protocol = row.protocol_json["protocol"] if row.protocol_json else {}
+    if entrypoint_code(artifacts, protocol.get("entrypoint")) is None:
+        missing.append(ENTRYPOINT_ITEM)
+    names = {a["name"] for a in artifacts}
+    missing += [f"expected artifact {name}" for name in protocol.get("expected_artifacts", []) if name not in names]
     if qualifying_run(db, row) is None:
         missing.append(RUN_ITEM)
     return missing
