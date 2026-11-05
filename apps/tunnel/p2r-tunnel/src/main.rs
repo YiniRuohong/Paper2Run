@@ -1,4 +1,4 @@
-mod keys;
+use p2r_tunnel::keys;
 
 use std::path::PathBuf;
 
