@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Dot, type Tone } from '../ui/Card';
 import { AppMark, Icon } from '../ui/Icon';
-import { taskStateLabel, taskTone } from '../features/autonomous/config';
+import { taskDisplay } from '../features/autonomous/config';
 import type { Health, RecentTask } from './hooks';
 
 export type View = 'overview' | 'new' | 'task' | 'settings';
@@ -42,8 +42,9 @@ export function Sidebar({ view, taskId, recent, recentFailed, health, host, onHi
           {recent && recent.length === 0 && <p className="side-sub-empty">还没有任务</p>}
           {recent && recent.length > 0 && <ul className="side-sub">
             {recent.map(t => {
-              const tone: Tone = taskTone(t.state);
-              const label = taskStateLabel(t.state);
+              const shown = taskDisplay(t);
+              const tone: Tone = shown.tone;
+              const label = shown.lifecycle ? `${shown.text}，${shown.lifecycle}` : shown.text;
               const current = view === 'task' && taskId === t.id;
               return <li key={t.id}>
                 <a href={taskHref(t.id)} className={`side-item side-sub-item${current ? ' on' : ''}`} aria-current={current ? 'page' : undefined} title={`${t.objective} · ${label}`}>

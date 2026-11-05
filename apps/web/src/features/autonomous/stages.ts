@@ -142,6 +142,24 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
   return { stages, active: lastStarted, started };
 }
 
+// ---- 由事件流得出的只读列表（候选复核卡、安全终止提示用）----
+
+export interface ReviewFailure { sequence: number; snapshotSha256: string | null; attempt: number | null; reason: string | null; time: string | null }
+/** 未完成的复核尝试（review_failed）。 */
+export function reviewFailures(events: AutonomousEvent[]): ReviewFailure[] {
+  return events.filter(e => e.type === 'review_failed').map(e => {
+    const p = rec(e.payload);
+    return { sequence: e.sequence, snapshotSha256: str(p.snapshot_sha256), attempt: typeof p.attempt === 'number' ? p.attempt : null, reason: str(p.reason), time: clock(e.created_at) };
+  });
+}
+
+/** 安全终止：结局为 blocked_by_safety 或出现 safety_blocked 事件。code 未知时为 null。 */
+export function safetyBlock(task: Pick<AutonomousTask, 'outcome' | 'report'> | null, events: AutonomousEvent[]): { code: string | null } | null {
+  const event = [...events].reverse().find(e => e.type === 'safety_blocked');
+  if (!event && task?.outcome !== 'blocked_by_safety') return null;
+  return { code: (event && str(rec(event.payload).code)) ?? str(rec(task?.report).outcome_reason) };
+}
+
 export function toWbFiles(items: AutonomousFile[]): WbFile[] {
   return items.map(f => ({ path: f.path, bytes: f.bytes, mediaType: f.media_type, sha256: f.sha256, badge: f.source === 'artifact' ? '证据' : undefined }));
 }

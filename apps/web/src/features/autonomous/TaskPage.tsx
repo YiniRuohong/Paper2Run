@@ -6,18 +6,20 @@ import { Workbench, type WbContent, type WbFile } from '../../ui/workbench/Workb
 import { Badge, Card, CardHeader } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { buildStages, toWbFiles } from './stages';
-import { mergeEvents, protocolApproval, stateLabel, terminalState } from './config';
+import { buildStages, safetyBlock, toWbFiles } from './stages';
+import { errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { ApprovalCard } from './ApprovalCard';
+import { CandidateCard } from './CandidateCard';
 import { ReportView } from './ReportView';
 import { UsageView } from './UsageView';
 import './autonomous.css';
 
 const defaultApi = createAutonomousApi();
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+// 已知错误码换成中文说明；code 与 request_id 始终保留。
 export const errorDetail = (error: unknown) =>
   error instanceof ApiError
-    ? `${error.message} (${error.code}${error.requestId ? ` · ${error.requestId}` : ''})`
+    ? `${errorExplanation(error.code) ?? error.message} (${error.code}${error.requestId ? ` · ${error.requestId}` : ''})`
     : error instanceof Error ? error.message : String(error);
 
 type Recovery = { needed: boolean; retainedJobs: string[] };
@@ -150,11 +152,15 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
       if (Array.isArray(retained)) recovery = { ...recovery, retainedJobs: retained.map(String) };
     }
   }
-  if (task && terminalState(task.state)) recovery = { needed: false, retainedJobs: [] };
+  // 有结局的任务已结束：不再提示恢复、暂停或停止。
+  const hasOutcome = task?.outcome != null;
+  if (task && (terminalState(task.state) || hasOutcome)) recovery = { needed: false, retainedJobs: [] };
   const needsRecovery = recovery.needed && !keysInjected;
 
+  const display = task ? taskDisplay(task) : null;
+  const safety = safetyBlock(task, events);
   const approval = protocolApproval(task?.pending_decision);
-  const running = task ? !terminalState(task.state) && task.state !== 'paused' : false;
+  const running = task ? !terminalState(task.state) && task.state !== 'paused' && !hasOutcome : false;
   const terminal = task ? terminalState(task.state) : false;
   const paused = task?.state === 'paused';
   const stopped = task ? task.state === 'stopped' || task.state === 'cancelled' : false;
@@ -164,11 +170,14 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
 
   const mainProfileId = task?.config_snapshot?.model?.provider_profile ?? '';
   const mainProfile = profiles.find(p => p.id === mainProfileId) ?? null;
-  const canResume = !!task && paused && task.pending_decision == null && !needsRecovery;
-  const resumeHint = !paused ? ''
+  const canResume = !!task && paused && !hasOutcome && task.pending_decision == null && !needsRecovery;
+  const resumeHint = hasOutcome ? '任务已有结局，不能继续'
+    : !paused ? ''
     : task?.pending_decision != null ? '请先处理上方决策'
     : needsRecovery ? '请先重新输入模型密钥'
     : '';
+  const pauseHint = hasOutcome ? '任务已有结局' : task && !terminal && task.state !== 'running' ? '只有运行中的任务可以暂停' : undefined;
+  const messageHint = hasOutcome ? '任务已有结局，不再接收指令' : terminal ? '任务已结束' : undefined;
 
   const taskSkills = task?.config_snapshot?.harness?.skills ?? [];
   const skillSnapshot = taskSkills.map(id => skills.find(s => s.id === id) ?? null);
@@ -176,11 +185,15 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   return <Workbench
     eyebrow={<>自主实验{task ? <> · <span className="ui-mono">{task.id}</span></> : null}</>}
     title={task?.objective ?? '正在读取任务…'}
-    status={task ? {
-      text: stateLabel(task.state),
-      tone: task.state === 'failed' ? 'bad' : needsRecovery || paused || task.pending_decision != null ? 'warn' : terminal ? 'ok' : 'run',
+    status={task && display ? {
+      text: display.text,
+      tone: !hasOutcome && needsRecovery && display.tone !== 'bad' ? 'warn' : display.tone,
     } : null}
-    meta={task ? <><span>更新于 {task.updated_at || '—'}</span><span>{events.length} 条事件</span></> : <span>任务的阶段、命令输出和产物会在这里持续更新。</span>}
+    meta={task && display ? <>
+      {display.lifecycle && <span>生命周期：{display.lifecycle}</span>}
+      {display.caption && <span>{display.caption}</span>}
+      <span>更新于 {task.updated_at || '—'}</span><span>{events.length} 条事件</span>
+    </> : <span>任务的阶段、命令输出和产物会在这里持续更新。</span>}
     progress={<span className="auto-progress">进度 · {timeline.stages.filter(st => st.mark === 'done').length} / {timeline.stages.length}<Badge tone="idle" title="阶段由前端根据事件流归纳；harness 阶段状态机上线（契约 C1）后改为后端判定">按事件归纳</Badge></span>}
     stages={timeline.stages}
     activeStageId={task ? timeline.active : null}
@@ -196,7 +209,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
         <label className="ui-field auto-taskbar-field"><span className="ui-field-label">项目任务</span>
           <select value={taskId} disabled={busy} onChange={e => { if (e.target.value) window.location.hash = `#/task/${encodeURIComponent(e.target.value)}`; }}>
             {!tasks.some(t => t.id === taskId) && <option value={taskId}>{taskId}</option>}
-            {tasks.map(t => <option key={t.id} value={t.id}>{t.objective} · {stateLabel(t.state)}</option>)}
+            {tasks.map(t => <option key={t.id} value={t.id}>{t.objective} · {taskDisplay(t).text}</option>)}
           </select>
         </label>
         <a className="btn btn-secondary" href="#/new">新建实验</a>
@@ -210,11 +223,14 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
       {task && <>
         <p className="wb-live-head">
           {running && <span className="wb-live-dot" aria-hidden="true" />}
-          <b>{stateLabel(task.state)}</b> · 第 {timeline.stages.findIndex(st => st.id === timeline.active) + 1}/{timeline.stages.length} 阶段 · {events.length} 条事件 · 断线重连会从事件游标继续读取
+          <b>{display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {timeline.stages.findIndex(st => st.id === timeline.active) + 1}/{timeline.stages.length} 阶段 · {events.length} 条事件 · 断线重连会从事件游标继续读取
         </p>
 
-        {paused && !approval && <div className="ui-callout tone-warn" role="status"><Icon name="clock" /><span>AI 调度已暂停；后台训练作业可能仍在运行，暂停不会停止远端计费。</span></div>}
-        {stopped && <div className="ui-callout tone-idle" role="status"><Icon name="info" /><span>任务已结束；停止任务不会停止远端实例计费。</span></div>}
+        {safety && <div className="ui-callout tone-bad" role="alert"><Icon name="shield" />
+          <span>容器隔离校验失败，任务已安全终止，不能恢复。代码：<code className="ui-mono">{safety.code ?? '未知'}</code>。仍可导出 ZIP 保留证据。</span>
+        </div>}
+        {paused && !approval && !hasOutcome && <div className="ui-callout tone-warn" role="status"><Icon name="clock" /><span>AI 调度已暂停；后台训练作业可能仍在运行，暂停不会停止远端计费。</span></div>}
+        {stopped && !hasOutcome && <div className="ui-callout tone-idle" role="status"><Icon name="info" /><span>任务已结束；停止任务不会停止远端实例计费。</span></div>}
         {task.state === 'failed' && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" /><span>任务失败。导出 ZIP 可保留全部证据与日志。</span></div>}
 
         {needsRecovery && <Card className="auto-recovery">
@@ -257,7 +273,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
         </div>}
 
         <div className="auto-actions">
-          <button type="button" className="btn btn-secondary" disabled={busy || terminal || task.state !== 'running'} onClick={() => void act(async () => { await controlTask(task.id, 'pause'); })}>暂停</button>
+          <button type="button" className="btn btn-secondary" disabled={busy || terminal || hasOutcome || task.state !== 'running'} title={pauseHint} onClick={() => void act(async () => { await controlTask(task.id, 'pause'); })}>暂停</button>
           <button type="button" className="btn btn-secondary" disabled={busy || terminal || !canResume} title={resumeHint || undefined} onClick={() => void act(async () => { await controlTask(task.id, 'resume'); })}>继续</button>
           {resumeHint && <span className="ui-help">{resumeHint}</span>}
           <button type="button" className="btn btn-secondary" disabled={busy || terminal} title="停止任务（不会停止远端实例计费）" onClick={() => void act(async () => { await controlTask(task.id, 'stop'); })}>停止</button>
@@ -269,9 +285,12 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
             <textarea rows={2} value={message} onChange={e => setMessage(e.target.value)} placeholder="例如：先用小数据集跑通，再扩大规模" />
           </label>
           <div className="auto-actions">
-            <button type="button" className="btn btn-primary" disabled={busy || !message.trim() || terminal} onClick={() => void act(async () => { await controlTask(task.id, 'message', message.trim()); })}>发送指令</button>
+            <button type="button" className="btn btn-primary" disabled={busy || !message.trim() || terminal || hasOutcome} title={messageHint} onClick={() => void act(async () => { await controlTask(task.id, 'message', message.trim()); })}>发送指令</button>
+            {messageHint && <span className="ui-help">{messageHint}</span>}
           </div>
         </div>
+
+        <CandidateCard task={task} events={events} />
 
         {task.report != null && <ReportView report={task.report} />}
 

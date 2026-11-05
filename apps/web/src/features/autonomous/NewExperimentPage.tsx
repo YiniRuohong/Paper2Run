@@ -10,7 +10,7 @@ import { Icon } from '../../ui/Icon';
 import ParseProgress from '../docparse/ParseProgress';
 import ModeDialog from '../docparse/ModeDialog';
 import { canParseNow, isParsePending } from '../docparse/docparse';
-import { defaultConfig, modelReference, parseProtocol, profileRequest, researchTaskTypes, reusableProfiles, validateConfig } from './config';
+import { DEFAULT_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS, defaultConfig, modelReference, parseProtocol, profileRequest, researchTaskTypes, reusableProfiles, validateConfig } from './config';
 import { errorDetail } from './TaskPage';
 import './autonomous.css';
 
@@ -378,6 +378,8 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
           <label key={name} className="ui-field"><span className="ui-field-label">{['最长运行时间（秒）', '模型调用上限', '模型 Token 上限', '存储上限（字节）'][i]}</span>
             <input type="number" min="1" step="1" value={limits[name]} onChange={e => update('limits', { ...limits, [name]: Number(e.target.value) })} /></label>
         ))}
+        <label className="ui-field"><span className="ui-field-label">修复轮次上限<small>独立复核发现问题后 Pi 最多修复的轮数，0–{MAX_REPAIR_ROUNDS}；0 表示只复核一次</small></span>
+          <input type="number" min="0" max={MAX_REPAIR_ROUNDS} step="1" value={limits.max_repair_rounds ?? DEFAULT_REPAIR_ROUNDS} onChange={e => update('limits', { ...limits, max_repair_rounds: Number(e.target.value) })} /></label>
         <label className="ui-field"><span className="ui-field-label">GPU 设备（逗号分隔，可留空）</span>
           <input value={limits.gpu_devices.join(',')} onChange={e => update('limits', { ...limits, gpu_devices: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} /></label>
       </div>

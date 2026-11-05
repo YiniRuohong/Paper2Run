@@ -1,7 +1,8 @@
-import { Badge, Card, CardHeader, StatusWord } from '../../ui/Card';
+import { Badge, Card, CardHeader, KV, KVList, StatusWord } from '../../ui/Card';
 import { CopyButton } from '../../ui/Controls';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
+import { outcomeLabel, outcomeReasonLabel, outcomeTone } from './config';
 import { parseReport, type ExperimentReport } from './report';
 
 // 报告视图（P0-6）：程序判定与模型叙述严格分区。
@@ -20,6 +21,7 @@ export function ReportView({ report, onOpenEvent }: { report: unknown; onOpenEve
     </Card>;
   }
   return <div className="auto-report">
+    <OutcomeCard report={parsed} />
     <ConclusionCard report={parsed} />
     <GateCard report={parsed} />
     <EvidenceCard report={parsed} />
@@ -44,6 +46,29 @@ export function ReportView({ report, onOpenEvent }: { report: unknown; onOpenEve
       </div>
     </Card>
   </div>;
+}
+
+// 结局：程序按候选复核结果判定，与下方的比较结论（verdict）分开。
+function OutcomeCard({ report }: { report: ExperimentReport }) {
+  const label = outcomeLabel(report.outcome);
+  const tone = outcomeTone(report.outcome);
+  const reason = outcomeReasonLabel(report.outcomeReason);
+  const sha = report.outcomeSnapshotSha256;
+  const caption = report.outcome === 'verified' ? '复核通过不等于复现成立；可比性见下方结论。' : '结局由程序根据冻结候选与独立复核判定，不来自模型自述。';
+  return <Card>
+    <CardHeader icon="shield" title="结局" status={label && tone ? { text: label, tone } : { text: '无结局', tone: 'idle' }}
+      subtitle={label ? caption : '该报告没有程序判定的结局：旧版任务，或任务结束时没有可复核的候选结果。'} />
+    {label && <div className="ui-card-section">
+      <KVList>
+        <KV label="原因" value={reason ?? '—'} mono={reason === report.outcomeReason && reason !== null} />
+        <KV label="判定所依据的候选快照">
+          {sha
+            ? <><span className="ui-mono" title={sha}>{sha.slice(0, 16)}…</span><CopyButton value={sha} label="复制候选快照 SHA256" /></>
+            : <span className="ui-mono">—</span>}
+        </KV>
+      </KVList>
+    </div>}
+  </Card>;
 }
 
 function ConclusionCard({ report }: { report: ExperimentReport }) {

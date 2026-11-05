@@ -32,6 +32,8 @@ export interface RecentTask {
   projectId: string;
   objective: string;
   state: string;
+  /** 程序判定的结局；null 表示尚未判定。 */
+  outcome: string | null;
   updatedAt: string;
 }
 
@@ -46,7 +48,7 @@ export async function loadAutonomousTasks(api: AutonomousApi, papers: PapersApi,
       const list = await api.tasks(project.id);
       if (signal?.aborted) return;
       for (const task of list) {
-        tasks.push({ id: task.id, projectId: task.project_id || project.id, objective: task.objective, state: task.state, updatedAt: task.updated_at ?? task.created_at ?? '' });
+        tasks.push({ id: task.id, projectId: task.project_id || project.id, objective: task.objective, state: task.state, outcome: task.outcome ?? null, updatedAt: task.updated_at ?? task.created_at ?? '' });
       }
     } catch {
       failedProjects += 1;

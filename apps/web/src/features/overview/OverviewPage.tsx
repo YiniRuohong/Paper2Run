@@ -4,7 +4,7 @@ import { createPapersApi, type PapersApi } from '../../api-client/papers';
 import { Badge, Card, CardHeader, SectionHead, StatusWord } from '../../ui/Card';
 import { Segmented } from '../../ui/Controls';
 import { Icon } from '../../ui/Icon';
-import { taskStateLabel, taskTone, terminalState } from '../autonomous/config';
+import { taskBucket, taskDisplay } from '../autonomous/config';
 import { loadAutonomousTasks, type RecentTask } from '../../shell/hooks';
 import { taskHref } from '../../shell/Sidebar';
 
@@ -28,11 +28,8 @@ const when = (iso: string) => {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-const bucket = (task: RecentTask): Filter => {
-  if (task.state === 'failed') return 'failed';
-  if (terminalState(task.state)) return 'done';
-  return 'active';
-};
+// 有结局的任务一律算已结束（安全终止归入失败），即使生命周期状态是 paused / stopped。
+const bucket = (task: RecentTask): Filter => taskBucket(task);
 
 // 总览（#/）：全部项目的自主任务列表。只读；新建任务在「新建实验」里完成。
 export default function OverviewPage({ api = defaultApi, papers = defaultPapers }: { api?: AutonomousApi; papers?: PapersApi }) {
@@ -105,7 +102,9 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
         <button type="button" className="btn btn-secondary" onClick={() => setFilter('all')}>显示全部</button>
       </div>}
       {visible.length > 0 && <ul className="ui-list">
-        {visible.map(t => <li key={t.id}>
+        {visible.map(t => {
+          const shown = taskDisplay(t);
+          return <li key={t.id}>
           <a className="ui-row" href={taskHref(t.id)}>
             <span className="ui-tile" aria-hidden="true"><Icon name="flask" /></span>
             <span className="ui-row-main">
@@ -113,13 +112,15 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
               <span className="ui-row-sub ui-mono">{t.id}</span>
             </span>
             <span className="ui-row-end">
-              <StatusWord tone={taskTone(t.state)}>{taskStateLabel(t.state)}</StatusWord>
-              {t.state === 'paused' && <Badge tone="warn">后台作业可能仍在运行</Badge>}
+              <StatusWord tone={shown.tone}>{shown.text}</StatusWord>
+              {shown.lifecycle && <span>{shown.lifecycle}</span>}
+              {shown.pausedNotice && <Badge tone="warn">后台作业可能仍在运行</Badge>}
               <time>{when(t.updatedAt)}</time>
               <Icon name="chevron-right" size={14} />
             </span>
           </a>
-        </li>)}
+        </li>;
+        })}
       </ul>}
     </section>}
   </div>;

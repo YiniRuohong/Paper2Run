@@ -19,7 +19,7 @@ async function harness(options = {}) {
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React } }).outputText;
   const slots = []; let cursor = 0; let effects = [];
   const timers = [];
-  const calls = { control: [], saveProfile: [] };
+  const calls = { control: [], saveProfile: [], decide: [], task: 0 };
   const makeTask = (id, over = {}) => ({
     id, project_id: 'A', objective: `goal ${id}`, state: 'paused', usage: {}, report: null, error: null,
     pending_decision: null, created_at: '', updated_at: '2026-11-05T00:00:00Z',
@@ -30,14 +30,15 @@ async function harness(options = {}) {
     capabilities: async () => [],
     profiles: async () => options.profiles ?? [],
     tasks: async () => [makeTask('ta'), makeTask('tb')],
-    task: async id => makeTask(id, options.taskOver),
+    task: async id => { calls.task += 1; return makeTask(id, options.taskOver); },
     events: async (_id, after) => {
       const all = options.events ?? [];
       return { events: all.filter(e => e.sequence > after), next_cursor: all.length ? Math.max(...all.map(e => e.sequence)) : after };
     },
     files: async () => ({ items: [], truncated: false, workspace_available: false }),
     saveProfile: async body => { calls.saveProfile.push(body); const { api_key, ...saved } = body; return { ...saved, secret_configured: !!api_key }; },
-    control: async (id, action, text) => { calls.control.push({ id, action, text }); return makeTask(id); },
+    control: async (id, action, text) => { calls.control.push({ id, action, text }); if (options.controlError) throw options.controlError; return makeTask(id); },
+    decide: async (id, decisionId, action, note) => { calls.decide.push({ id, decisionId, action, note }); if (options.decideError) throw options.decideError; return makeTask(id, { state: 'queued' }); },
     exportTask: async () => {},
   };
   const react = {
@@ -57,6 +58,8 @@ async function harness(options = {}) {
     '../../ui/Disclosure': { Disclosure: box('Disclosure') },
     '../../ui/Icon': { Icon: () => null },
     './ApprovalCard': { ApprovalCard: box('ApprovalCard') },
+    './CandidateCard': { CandidateCard: box('CandidateCard') },
+    './ActivityViews': { ProgressNotes: box('ProgressNotes'), SpecialistCalls: box('SpecialistCalls') },
     './ReportView': { ReportView: box('ReportView') },
     './UsageView': { UsageView: box('UsageView') },
     './autonomous.css': {},
@@ -83,6 +86,7 @@ async function harness(options = {}) {
   render(); await settle(); await settle();
   return {
     nodes, calls, api, render, settle, makeTask,
+    text: () => JSON.stringify(tree),
     poll: () => { const fn = timers.shift(); if (fn) fn(); },
     switchTask: async id => { currentTaskId = id; await settle(); },
     button: label => nodes().find(n => n.type === 'button' && (n.children ?? []).flat(Infinity).includes(label)),
@@ -166,4 +170,42 @@ test('a late poll response cannot overwrite the task after switching tasks', asy
   const workbench = h.nodes().find(n => n.type === 'Workbench');
   assert.equal(workbench.props.title, 'goal tb', 'the late ta response must not replace the tb view');
   assert.equal(workbench.props.status.text, '运行中');
+});
+
+test('a task with an outcome is finished: resume is disabled with the reason and pause/stop copy is gone', async () => {
+  for (const state of ['paused', 'stopped']) {
+    const h = await harness({ taskOver: { state, outcome: 'completed_with_issues', repair_round: 3 } });
+    const workbench = h.nodes().find(n => n.type === 'Workbench');
+    assert.equal(workbench.props.status.text, '完成·有未解决问题', state);
+    assert.equal(workbench.props.status.tone, 'warn', state);
+    const resume = h.button('继续');
+    assert.equal(resume.props.disabled, true, state);
+    assert.equal(resume.props.title, '任务已有结局，不能继续', state);
+    const text = h.text();
+    assert.doesNotMatch(text, /后台训练作业可能仍在运行|暂停不会停止远端计费|停止任务不会停止远端实例计费/, state);
+    assert.match(text, /已暂停|已停止/, 'the lifecycle state stays visible as secondary text');
+    assert.ok(h.nodes().some(n => n.type === 'CandidateCard'), 'the candidate review card is on the page');
+  }
+});
+
+test('safety termination shows the bad callout with its code and keeps export available', async () => {
+  const events = [{ sequence: 1, type: 'safety_blocked', payload: { code: 'ISOLATION_PROBE_FAILED', message: 'probe', outcome_snapshot_sha256: null }, created_at: '' }];
+  const h = await harness({ events, taskOver: { state: 'stopped', outcome: 'blocked_by_safety' } });
+  const callout = h.nodes().find(n => n.type === 'div' && /tone-bad/.test(n.props.className ?? '') && JSON.stringify(n.children).includes('容器隔离校验失败，任务已安全终止，不能恢复。'));
+  assert.ok(callout, 'safety callout renders');
+  assert.match(JSON.stringify(callout.children), /ISOLATION_PROBE_FAILED/);
+  assert.equal(h.button('导出 ZIP').props.disabled, false);
+  // A safety_blocked event alone (outcome not yet persisted) also shows it.
+  const early = await harness({ events, taskOver: { state: 'stopping', outcome: null } });
+  assert.match(early.text(), /容器隔离校验失败，任务已安全终止，不能恢复。/);
+});
+
+test('LEGACY_TASK and TASK_FINISHED errors get a specific explanation and keep code and request_id', async () => {
+  const h = await harness({ controlError: new ApiError('raw', 409, 'LEGACY_TASK', 'req-9') });
+  h.button('继续').props.onClick(); await h.settle();
+  const alert = h.nodes().find(n => n.type === 'div' && n.props.role === 'alert');
+  const text = JSON.stringify(alert.children);
+  assert.match(text, /该任务创建于新版 harness 之前，只能导出/);
+  assert.match(text, /LEGACY_TASK/);
+  assert.match(text, /req-9/);
 });

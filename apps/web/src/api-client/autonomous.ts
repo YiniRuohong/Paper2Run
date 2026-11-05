@@ -13,16 +13,37 @@ export interface ProjectConfig {
   specialists?: ResearchSpecialist[];
   harness: { adapter: 'pi'; skills: string[] };
   target: { kind: 'local' | 'ssh'; profile: string; ssh_config_alias?: string; remote_workspace?: string; allocation: 'dedicated'; isolation: 'required'; image: 'paper2run-experiment:1' };
-  limits: { wall_time_seconds: number; max_model_calls: number; max_model_tokens: number; storage_bytes: number; gpu_devices: string[] };
+  /** max_repair_rounds: 0–10；旧配置没有该键，后端按 3 处理。 */
+  limits: { wall_time_seconds: number; max_model_calls: number; max_model_tokens: number; storage_bytes: number; max_repair_rounds?: number; gpu_devices: string[] };
   network: { public_internet: true; host_and_metadata_access: false };
   experiment: { objective: string; protocol_change_policy: 'version_and_pause_if_outside_authorization' };
 }
 export interface ProtocolApproval {
   id: string; kind: 'protocol_approval'; proposed: { protocol: Record<string, unknown>; sha256: string }; changed: string[]; reason: string;
 }
+export type TaskOutcome = 'verified' | 'completed_with_issues' | 'review_unavailable' | 'blocked_by_safety';
+export type ReviewStatus = 'pending' | 'issues' | 'pass' | 'unavailable';
+export interface CandidateArtifact {
+  name: string; kind: string; sha256: string; bytes: number; source_path: string; round: number; sequence: number; protocol_sha256: string;
+}
+/** 冻结候选快照（candidate.py freeze）。 */
+export interface TaskCandidate {
+  snapshot_sha256: string; round: number; protocol_sha256: string;
+  protocol?: { protocol: Record<string, unknown>; sha256: string };
+  artifacts: CandidateArtifact[];
+  run: { job_id: string; exit_code: number; sequence: number };
+  summary: string; review_status: ReviewStatus; attempts: number;
+}
+export interface ReviewFinding { description: string; evidence: string[] }
+export interface TaskReview { snapshot_sha256: string; round: number; attempt: number; verdict: 'pass' | 'issues'; findings: ReviewFinding[] }
 export interface AutonomousTask {
   id: string; project_id: string; state: string; objective: string; config_snapshot: ProjectConfig;
   usage: Record<string, unknown>; created_at: string; updated_at: string; report?: unknown; error?: unknown; pending_decision?: unknown;
+  /** 程序判定的结局；null 表示尚未判定。旧后端不返回这些字段。 */
+  outcome?: TaskOutcome | null;
+  repair_round?: number;
+  candidate?: TaskCandidate | null;
+  reviews?: TaskReview[];
 }
 export interface AutonomousEvent { sequence: number; type: string; payload: unknown; created_at: string }
 export interface AutonomousFile {
