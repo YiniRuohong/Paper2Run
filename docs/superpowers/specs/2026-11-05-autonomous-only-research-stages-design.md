@@ -77,12 +77,11 @@
 
 ### 5.2 新增状态
 
-通过新的 alembic 迁移新增：
+通过 alembic 迁移 0022 在 `autonomous_tasks` 新增两列：
 - `outcome`：结局（见 5.6），到终态之前为空；
-- `repair_round`：当前证据轮次，从 0 开始；
-- 当前候选的快照哈希，以及复核状态（无 / 进行中 / 已记录）。
+- `harness_json`：控制面的 harness 状态。新建任务写入 `{"version": 2, "repair_round": 0, "no_progress": 0, "fingerprint": null, "candidate": null, "reviews": []}`，之后还会出现 `outcome_snapshot_sha256` 和 `delivered_user_messages`。`harness_json` 为空表示这是 harness 改造之前创建的旧任务。
 
-`state` 保持原有的生命周期含义，暂停、停止、恢复、预算这些机制都不变。
+`repair_round`、当前候选（快照哈希、复核状态、尝试次数）和历次复核记录都放在 `harness_json` 里，不单独建列。`state` 保持原有的生命周期含义，暂停、停止、恢复、预算这些机制都不变。
 
 ### 5.3 工具
 
@@ -98,38 +97,60 @@
 `submit_candidate` 依次检查以下条件，任何一项不满足都拒绝，并列出缺少的具体项：
 1. 已有冻结的协议版本；
 2. 当前轮次中已登记了 `code`、`environment`、`data`、`result` 四类产物；
-3. 至少有一个后台作业以退出码 0 结束，它的 argv 与协议入口一致（沿用现有"直接用解释器启动入口"的规则），并且在当前轮次最后一次登记 `code` 之后才结束。
+3. 至少有一次入口运行以退出码 0 结束，它的 argv 与协议入口一致（沿用现有"直接用解释器启动入口"的规则），并且该作业的**启动序号**晚于当前轮次最后一次登记 `code` 的序号。按启动序号而不是结束时间或观察时间判断，所以重新查询一个旧作业不会让它变成"新鲜"的运行。
 
-检查通过后冻结快照：协议版本、四类产物的名称/路径/sha256、正式运行作业的 id 与退出码。对这些内容做规范化序列化后计算哈希。快照引用的产物文件和正式运行作业的日志会一并复制到宿主侧的证据存储。最后写入 `candidate_frozen` 事件。
+检查通过后冻结快照：协议版本、轮次、正式运行作业的 id/退出码/启动序号、四类产物的名称/类别/sha256。对这些内容做规范化序列化后计算哈希。快照引用的产物按哈希校验后复制到 `task_root/candidates/<sha>/artifacts/`，正式运行作业的日志分页取回，写入 `task_root/candidates/<sha>/logs/`。最后写入 `candidate_frozen` 事件，候选的复核状态为 `pending`。
 
-### 5.5 评测、复核与自动修复（在 `submit_candidate` 调用内同步完成）
+候选处于 `pending` 期间，`register_artifact`、`submit_candidate` 和 `propose_protocol` 一律被拒绝（`CANDIDATE_UNDER_REVIEW`），证据在复核结束前不会再变。`submit_candidate` 的返回值告诉 Pi 结束本轮。
 
-1. 运行现有的可信评测，可比性结论原样保存。
-2. 新开一个 harness 会话作为复核者：使用新的会话文件，模型沿用主 Agent 的配置。复核者只有 `read`、`logs`、`status` 和 `submit_review` 这几个工具，而且这些工具指向一个只读目标，只能访问冻结副本和作业记录，**不连接实验容器**。复核者的输入包括：论文上下文、冻结协议、快照清单、评测结果。
-3. `submit_review` 的结构：`verdict: pass | issues`；`findings[]`，每条包含描述和引用的证据（产物名或作业 id）。`issues` 至少要带一条 finding。复核结果绑定到快照哈希，写入 `review_recorded` 事件。
+### 5.5 评测、复核与自动修复（在提交候选的那一轮结束后由程序执行）
+
+复核不放在 `submit_candidate` 调用内同步完成。harness 对单次工具调用有 300 秒的超时上限（`apps/harness/bridge.mjs:305`），一次复核会超过它。所以 `submit_candidate` 只负责冻结并立即返回，Pi 结束当前轮次后，由 `driver.after_turn` 接手：
+
+1. 运行现有的可信评测（对冻结副本重算），可比性结论原样保存。
+2. 新开一个 harness 会话作为复核者：使用新的会话目录，模型沿用主 Agent 的配置（允许同一个模型）。复核者只有 `read`、`logs`、`status` 和 `submit_review` 这几个工具，这些工具指向 `FrozenTarget`，只能访问冻结副本和冻结日志，**不连接实验容器**。复核者的输入包括：论文上下文、冻结协议、快照清单、评测结果。复核期间，用户的引导消息不会送到复核者，只会留在库里，等主会话取用。
+3. `submit_review` 的结构：`verdict: pass | issues`；`findings[]`，每条包含描述和引用的证据（产物名、源路径或日志摘录）。`issues` 至少要带一条带证据的 finding。复核结果绑定到快照哈希，写入 `review_recorded` 事件。
 4. 根据结果分支：
-   - `pass` → 进入终态 `verified`，程序生成报告。
-   - `issues`，且修复轮次没用完 → `repair_round + 1`，把 findings 原样返回给 Pi。怎么修、修哪里、要不要改协议，都由 Pi 决定。修好后再次调用 `submit_candidate`。
+   - `pass` → 结局 `verified`，程序生成报告。
+   - `issues`，且修复轮次没用完 → `repair_round + 1`，findings 原样写进下一条续写消息送给 Pi。怎么修、修哪里、要不要改协议，都由 Pi 决定。修好后再次调用 `submit_candidate`。
    - `issues`，且轮次已用完 → 结局 `completed_with_issues`。
-   - 复核会话超时、模型失败，或输出无法解析：重试 1 次，仍失败就是 `review_unavailable`。
-5. 修复轮次上限默认 3 次，写在项目配置的预算里，用户可以调小。复核消耗的 token 和时间计入同一个任务预算。
-6. 如果预算在复核过程中耗尽：之前已有复核过的候选，结局为 `completed_with_issues`；没有的话，结局为 `review_unavailable`，原因记为 `budget_exhausted`。
-7. 恢复：复核过程中如果暂停或应用退出，恢复时只要还没有已记录的复核结果，就针对同一份快照重新复核。因为复核结果绑定快照，重复复核是幂等的。
+   - 复核会话失败、超时或没有产出合法的 `submit_review`：重试 1 次（共 2 次尝试），仍失败就是 `review_unavailable`，原因记为 `review_failed`。
+5. 修复轮次上限是 `limits.max_repair_rounds`，默认 3，取值 0 到 10，用户可以调小。复核消耗的 token 和时间计入同一个任务预算。
+6. 如果预算在复核过程中耗尽：此前已有复核记录的，结局为 `completed_with_issues`，原因记为 `budget_exhausted`，绑定最近一次被复核的快照；没有的话，结局为 `review_unavailable`，原因同样是 `budget_exhausted`。
+7. 恢复：复核过程中如果暂停或应用退出，候选仍是 `pending`。恢复后针对同一份快照重新复核。复核结果只对它所复核的那份快照有效，快照对不上就算一次失败的尝试。
 
 ### 5.6 结局
 
 | outcome | 唯一进入条件 |
 |---|---|
 | `verified` | 最新候选有一条绑定其快照哈希的 `pass` 复核记录 |
-| `completed_with_issues` | 最新候选的复核结果是 `issues`，并且修复轮次已用完；或者预算耗尽，但已经存在复核过的候选 |
-| `review_unavailable` | 复核会话重试后仍失败；或者预算在复核过程中耗尽，且此前没有复核过的候选 |
-| `blocked_by_safety` | 容器隔离完整性校验失败（iptables 规则被篡改，或宿主/元数据地址可以访问）。第一次发生就终止，不能恢复。现在这类错误只会让任务暂停，这里改为终止 |
+| `completed_with_issues` | 最新候选的复核结果是 `issues`，并且修复轮次已用完；或者预算耗尽，但已经存在复核记录 |
+| `review_unavailable` | 复核会话两次尝试都失败；或者预算耗尽时候选还在等待复核，且此前没有复核记录 |
+| `blocked_by_safety` | 容器隔离完整性校验失败，错误码为 `isolation_changed`、`network_isolation_failed` 或 `host_addresses_changed`。第一次发生就终止，不能恢复。此前这类错误只会让任务暂停 |
 
-`SECRET_IN_ARTIFACT`、路径逃逸等仍然按单次调用拒绝，不会让任务终止。没有产出候选就停止、失败或耗尽预算的任务，保持现有的生命周期状态，`outcome` 为空。界面要分开展示两件事：结局（复核层面）和可比性（评测层面）。`verified` 的文案写"已复核"，不写"复现成功"。
+每个结局都写入 `outcome_snapshot_sha256`，记录是哪份快照决定了它（没有候选时为空）。评测结论 `verdict` 在所有结局下都是 `not_comparable`，结局不改变可比性。
+
+状态和结局的对应：
+- `verified`、`completed_with_issues`（复核耗尽轮次）、`review_unavailable`（复核失败）：`state` 为 `completed`。
+- 预算耗尽后得出的结局：`state` 保持 `stopped`，`outcome` 有值。预算停止仍然是生命周期上的停止，结局只说明复核层面的结果。
+- `blocked_by_safety`：`state` 最终为 `stopped`，`outcome` 为 `blocked_by_safety`，所有作业被取消。它不可撤销。若有候选正在等待复核，该候选标为复核不可用，不再复核。
+- 任何有 `outcome` 的任务再调用恢复，返回 `TASK_FINISHED`。
+
+`SECRET_IN_ARTIFACT`、路径逃逸等仍然按单次调用拒绝，不会让任务终止。没有产出候选就停止、失败或耗尽预算的任务，保持现有的生命周期状态，`outcome` 为空。报告由程序在任务到达终态时生成，`evaluate` 和 `report` 不再是工具。界面要分开展示两件事：结局（复核层面）和可比性（评测层面）。`verified` 的文案写"已复核"，不写"复现成功"。
 
 ### 5.7 会话中途结束
 
-如果主会话以 `result` 结束，但任务还没有到达终态，Python 会以续写消息自动继续同一个会话。续写消息**只陈述事实**：已登记的产物、作业状态、`submit_candidate` 还缺哪几项、剩余预算和剩余修复轮次。它不建议下一步做什么。如果连续 3 次续写都没有进展（没有新的已登记产物、没有作业结束、没有新提交的候选），任务就以 `incomplete` 结束，`outcome` 为空。续写同样消耗 token 预算。
+如果主会话的一轮结束，但任务还没有到达终态，也没有待复核的候选，Python 会以续写消息继续同一个会话。续写消息**只陈述事实**：
+- 当前修复轮次和剩余修复轮次；
+- 当前轮次已登记的产物（名称、类别）；
+- 各作业的状态、退出码和命令；
+- `submit_candidate` 还缺哪几项，没有缺项时写"none"；
+- 剩余预算；
+- 最近一次复核的 findings，原文。
+
+自上一轮以来用户发来的消息也会附在续写后面，逐条原文引用（过长的消息只能引用预览，并标注 `[truncated]`）。续写消息不建议下一步做什么。
+
+连续 3 次续写都没有进展，任务就以 `incomplete` 结束，`outcome` 为空。进展按三个量的指纹判断：已登记产物数、已结束作业数、当前候选的快照哈希。三者都没变就算一次无进展，有变化则计数清零。续写同样消耗 token 预算。
 
 ### 5.8 证据按轮次存储
 
@@ -137,7 +158,7 @@
 
 ### 5.9 迁移前的自主任务
 
-`outcome`/`repair_round` 为空的旧自主任务不能恢复，控制接口返回"该任务创建于新版 harness 之前，请新建任务"，但仍可只读导出。
+`harness_json` 为空的旧自主任务不能恢复，控制接口返回 `LEGACY_TASK`："该任务创建于新版 harness 之前，请新建任务"，但仍可只读导出。已经有结局的任务恢复时返回 `TASK_FINISHED`。
 
 ### 5.10 删除传统模式
 
@@ -189,3 +210,19 @@
 - 两个不变量测试通过；前端 `typecheck` 与 `test` 通过。
 - 真实端到端：至少一个任务用真实模型和 Docker 跑到四种结局之一，并且最好经历过一次修复。记录在验收文档中。
 - Windows：有实机时完成一次端到端运行；没有实机时如实标注"未实机验证"，并给出单元测试覆盖范围。
+
+## 8. 实现偏差
+
+后端已按本设计实现（提交到 `d645fe2`）。下面几处与原文不同，以代码为准：
+
+1. 复核在提交候选的那一轮结束后执行，不在 `submit_candidate` 内同步执行。原因是单次工具调用 300 秒的超时（5.5）。
+2. 新增状态放在 `outcome` 列和 `harness_json` 中，不单独建 `repair_round` 与快照哈希列（5.2）。
+3. 运行"新鲜度"按作业启动序号比较，不按结束时间（5.4）。
+4. 候选待复核期间，`register_artifact`、`submit_candidate`、`propose_protocol` 被拒绝（5.4）。
+5. 预算耗尽得出结局时，`state` 保持 `stopped`，不改成 `completed`（5.6）。
+6. 每个结局记录 `outcome_snapshot_sha256`；评测 `verdict` 始终为 `not_comparable`（5.6）。
+7. 续写消息还包含自上一轮以来收到的用户消息，并在同一条续写里带上最近的 findings（5.7）。
+8. 旧任务以 `harness_json` 为空识别，而不是 `outcome`/`repair_round` 为空（5.9）。
+9. 复核进行时，暂停、停止和应用退出会中止复核会话，用户消息不转发给复核者（5.5）。
+
+5.10 到 5.12（前端、删除传统模式、Windows）仍是后续工作，本次未改动。

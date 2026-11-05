@@ -67,6 +67,15 @@ L0  p2r_contracts
 
 模型凭据只在控制面内存及 SDK 进程认证层使用，不挂入实验容器。SDK 的文件、命令、后台任务、日志及采集能力均由自定义工具转给 `sandbox/autonomous/ExecutionTarget`。每个自主任务有独立容器与工作区；同任务的实验进程共享工作区。
 
+Pi 自己决定科研步骤，程序不设阶段关卡，`note_progress` 只用于展示。程序只把守结果出口，链路是：候选 → 复核 → 结局。
+
+1. 候选（`autonomous/candidate.py`）：`submit_candidate` 是唯一的证据关卡。要求协议已冻结；当前轮次已登记 code、environment、data、result 四类产物；有一次入口运行成功，且其作业启动序号晚于最近一次 code 登记。通过后在 `task_root/candidates/<sha>/` 下冻结快照（哈希校验过的产物副本和分页取回的作业日志）。候选待复核期间，`register_artifact`、`submit_candidate`、`propose_protocol` 被拒绝（`CANDIDATE_UNDER_REVIEW`）。证据按轮次存放：`artifacts/<protocol_sha>/r<round>/<name>`。
+2. 复核（`autonomous/review.py`）：在提交候选的那一轮结束之后执行，不在工具调用内同步执行，因为 harness 单次工具调用上限是 300 秒。复核是新的 harness 会话，只有读取冻结副本的只读工具和 `submit_review`，不连接实验容器，允许与主 Agent 同一个模型。
+3. 驱动（`autonomous/driver.py`）：每一轮结束后由 `after_turn` 决定后续。有待复核的候选就复核，失败重试一次。复核有问题且轮次未用完，就把 findings 放进续写消息交给 Pi 修复，上限为 `limits.max_repair_rounds`（默认 3，范围 0 到 10）。没有候选时发只陈述事实的续写，连续 3 次无进展则以 `incomplete` 结束，不产生结局。
+4. 结局：`verified`、`completed_with_issues`、`review_unavailable`、`blocked_by_safety` 四种，由程序写入 `autonomous_tasks.outcome` 和 `outcome_snapshot_sha256`，评测结论始终是 `not_comparable`。预算耗尽时 `state` 保持 `stopped`，`outcome` 有值。隔离完整性失败（`isolation_changed`、`network_isolation_failed`、`host_addresses_changed`）直接得到 `blocked_by_safety`，任务终止且不可恢复。
+
+`evaluate` 和 `report` 不再是工具，报告由程序在任务到达终态时生成。`harness_json` 为空的旧任务不能恢复（`LEGACY_TASK`），仍可导出；已有结局的任务恢复返回 `TASK_FINISHED`。
+
 应用关闭暂停 Agent 决策，后台实验可继续。重开后显式恢复并按持久启动 ID 对账；停止任务清理实验进程树，不释放租用实例。协议超出授权范围的变更进入待审批状态，只有匹配决策 ID 的批准才能继续。
 
 评测支持 accuracy、RMSE 和 MAE，控制面重算已冻结产物。首版没有独立隐藏标签托管，因此即使实验执行完成，也保留 `not_comparable`；模型叙述单独标记，不作为执行或复现成功证据。ZIP 包含配置、论文上下文、协议、Skills 快照、事件、产物和哈希清单。
