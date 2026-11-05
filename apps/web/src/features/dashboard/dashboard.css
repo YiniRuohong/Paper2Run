@@ -80,3 +80,6 @@
   .dash-search { width: 100%; }
   .task-time { display: none; }
 }
+
+/* task detail inside the workbench live pane */
+.wb-pane .detail { gap: 14px; }

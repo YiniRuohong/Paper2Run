@@ -6,6 +6,7 @@
 
 .shell { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); height: 100dvh; overflow: hidden; background: var(--bg); }
 .shell.side-closed { grid-template-columns: minmax(0, 1fr); }
+.shell.wide { --page-w: 1480px; }
 
 /* ---------- sidebar ---------- */
 .side { display: flex; flex-direction: column; min-height: 0; background: var(--side); border-right: 1px solid var(--line); }

@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine as _create_engine, event, text
+from sqlalchemy import Boolean, Column, JSON, String, create_engine as _create_engine, event, false, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.schema import CreateColumn
 
 
 class Base(DeclarativeBase):
@@ -64,9 +65,30 @@ def create_session_factory(engine):
     return sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
 
 
+def _ensure_reference_columns(engine: Engine) -> None:
+    """Bridge pre-0021 create_all databases without adopting migration history.
+
+    Keep this limited to additive reference metadata: create_all installations
+    cannot safely replay the full Alembic chain. Revision 0021 also checks for
+    these columns so either initialization order is safe.
+    """
+    columns = (
+        Column("reference_values_json", JSON(), nullable=True),
+        Column("reference_scope", String(8192), nullable=True),
+        Column("reference_sources_confirmed", Boolean(), nullable=False, server_default=false()),
+    )
+    with engine.begin() as connection:
+        existing = {column["name"] for column in inspect(connection).get_columns("autonomous_tasks")}
+        for column in columns:
+            if column.name not in existing:
+                definition = CreateColumn(column).compile(dialect=connection.dialect)
+                connection.execute(text(f"ALTER TABLE autonomous_tasks ADD COLUMN {definition}"))
+
+
 def init_db(engine) -> None:
-    from . import models  # noqa: F401
+    from . import models, autonomous  # noqa: F401
     Base.metadata.create_all(engine)
+    _ensure_reference_columns(engine)
     install_append_only_guards(engine)
 
 

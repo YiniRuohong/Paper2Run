@@ -217,6 +217,30 @@ def test_real_extraction_flow_over_provider_session(seeded):
     assert_database_has_no_plaintext_key(app)
 
 
+def test_re_extraction_replaces_an_unused_extraction(seeded):
+    app, ids = seeded
+    transport = ScriptedTransport()
+    rewire_extraction_service(app, transport)
+
+    with TestClient(app) as client:
+        paper_id = upload_text_paper(client, ids["project"], key="text-again")
+        transport.body = openai_body(json.dumps(document(paper_id)))
+        session_id = create_provider_session(client, key="provider-again")
+        first = request_extraction(client, paper_id, session_id, key="extract-1")
+        second = request_extraction(client, paper_id, session_id, key="extract-2")
+        assert first.status_code == 202, first.text
+        assert second.status_code == 202, second.text
+        new_id = second.json()["data"]["extraction_id"]
+        assert new_id != first.json()["data"]["extraction_id"]
+        fetched = client.get(f"/api/v1/papers/{paper_id}/extraction", headers={"X-Actor-ID": "owner"})
+        assert fetched.json()["data"]["extraction_id"] == new_id
+        assert len(transport.calls) == 2
+
+    with app.state.runtime["session_factory"]() as db:
+        rows = db.query(ExtractionRecord).filter_by(paper_id=paper_id).all()
+        assert [row.id for row in rows] == [new_id]
+
+
 def test_provider_auth_failure_returns_safe_code_and_persists_nothing(seeded):
     app, ids = seeded
     transport = ScriptedTransport(b"", status=401)

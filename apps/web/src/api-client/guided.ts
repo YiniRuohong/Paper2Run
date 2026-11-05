@@ -93,6 +93,20 @@ export interface GuidedApi {
   uninstallOffline(): Promise<DocParseStatus>;
   parsePaper(paperId: string, key: string): Promise<DocParseAccepted>;
   getPaperText(paperId: string, signal?: AbortSignal): Promise<PaperText>;
+  /** Raw bytes of a read-only resource (artifact preview); errors use the API envelope. */
+  readBlob(path: string, signal?: AbortSignal): Promise<Blob>;
+}
+
+/** http:// on 127.0.0.0/8, ::1 or localhost — a local model server. */
+export function isLoopbackHttp(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl.trim());
+    if (url.protocol !== 'http:') return false;
+    const host = url.hostname.toLowerCase();
+    return host === 'localhost' || host === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(host);
+  } catch {
+    return false;
+  }
 }
 
 export const GUIDED_PATHS = {
@@ -1035,6 +1049,9 @@ export function createGuidedApi(actorId: string, fetcher: Fetcher = fetch): Guid
       api_key: input.api_key,
       endpoint_alias: input.endpoint_alias,
       revision: '1',
+      // Plain-http is only accepted for loopback model servers; the backend
+      // still rejects non-loopback hosts even with this flag.
+      ...(isLoopbackHttp(input.base_url) ? { allow_local_http: true } : {}),
     }, input.key), validateProviderSessionSummary);
   }
 
@@ -1158,7 +1175,14 @@ export function createGuidedApi(actorId: string, fetcher: Fetcher = fetch): Guid
     return read(GUIDED_PATHS.paperText(paperId), validatePaperText, signal);
   }
 
+  async function readBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+    const response = await send(path, { method: 'GET', headers: { Accept: '*/*' } }, signal);
+    if (!response.ok) throw errorEnvelope(await responsePayload(response).catch(() => null), response);
+    return response.blob();
+  }
+
   return {
+    readBlob,
     read, readArray, write, receipt, download, runEvents, createProject, uploadPaperPdf, createTextPaper, getPaper, createProviderSession, deleteProviderSession, createExtraction, getExtraction, createEnvironmentCheck, createSshVerification, createCodegen, readAttemptCode,
     getDocParseStatus, setDocParseMode, startOfflineInstall, cancelOfflineInstall, uninstallOffline, parsePaper, getPaperText,
   };

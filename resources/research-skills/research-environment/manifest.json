@@ -1,0 +1,1 @@
+{"id":"research-environment","version":"1.0.0","name":"环境配置","description":"探测依赖与隔离环境","entrypoint":"SKILL.md","capabilities":["environment"],"compatibility":["paper2run.skills.v1"]}

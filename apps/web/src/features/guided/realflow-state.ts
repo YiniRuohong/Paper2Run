@@ -108,6 +108,7 @@ export type RealFlowAction =
   | { type: 'run'; value: GuidedRun }
   | { type: 'report'; value: GuidedReportStatus }
   | { type: 'events'; value: GuidedRunEvent[] }
+  | { type: 'run-reset' }
   | { type: 'export'; exportId: string };
 
 export const REALFLOW_TRAINING_FIELDS = ['seed', 'max_epochs', 'learning_rate', 'batch_size'] as const;
@@ -206,6 +207,8 @@ export function canRealViewStep(s: RealFlowState, step: RealFlowStep): boolean {
   return s.envCheck?.decision === 'ready' || s.ssh !== null;
 }
 
+// Terminal outcomes that may be re-executed as a new Run (e.g. after regenerating code).
+export function isRetryableRunStatus(status: string | null | undefined): boolean { return status === 'failed' || status === 'cancelled'; }
 function sameRun(s: RealFlowState, value: GuidedRun): boolean { return s.runId === null || s.runId === value.run_id; }
 
 // Everything derived from a candidate choice is invalidated when the choice
@@ -280,6 +283,9 @@ export function realFlowReducer(s: RealFlowState, a: RealFlowAction): RealFlowSt
   // loading/error phase never fabricates or destroys code by itself.
   if (a.type === 'codegen-phase') return { ...s, codegenPhase: a.phase };
   if (a.type === 'codegen') return { ...s, codegen: a.value, codegenPhase: 'ready', error: null };
+  // A terminal failed/cancelled Run is history: drop it so the next submission
+  // creates a brand-new Run (new Idempotency-Key, fresh event cursor).
+  if (a.type === 'run-reset') return { ...s, runId: null, run: null, report: null, reportStatus: null, exportId: null, events: [], error: null };
   if (a.type === 'run') {
     if (!sameRun(s, a.value)) return s;
     return { ...s, runId: a.value.run_id, run: a.value, error: null };

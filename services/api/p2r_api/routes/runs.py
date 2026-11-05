@@ -931,6 +931,29 @@ def read_artifact_text(artifact_id: str, request: Request, offset: str = "0", li
         db.close()
 
 
+@router.get("/artifacts/{artifact_id}/raw")
+def read_artifact_raw(artifact_id: str, request: Request):
+    from p2r_orchestration.autonomous.evidence import MAX_FILE
+    from p2r_orchestration.autonomous.files import raw_headers
+    unknown_params = sorted(set(request.query_params))
+    if unknown_params:
+        err("VALIDATION_ERROR", "unknown query parameter", 422, {"parameters": unknown_params})
+    db = request.app.state.runtime["session_factory"]()
+    try:
+        metadata, content, media_type = _registered_artifact(request, db, artifact_id)
+        if len(content) > MAX_FILE:
+            err("FILE_TOO_LARGE", "artifact exceeds preview size limit", 413)
+        filename = metadata.get("filename") if isinstance(metadata, dict) else getattr(metadata, "filename", None)
+        if not isinstance(filename, str) or not filename:
+            filename = metadata.get("path") if isinstance(metadata, dict) else None
+        if not isinstance(filename, str) or not filename:
+            filename = "artifact-" + artifact_id[:12]
+        content_type, headers = raw_headers(media_type, content, filename)
+        return Response(content=content, headers={**headers, "Content-Type": content_type})
+    finally:
+        db.close()
+
+
 @router.get("/artifacts/{artifact_id}/download")
 def download_artifact(artifact_id: str, request: Request):
     db = request.app.state.runtime["session_factory"]()

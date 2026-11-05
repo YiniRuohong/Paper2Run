@@ -1,0 +1,1 @@
+{"id":"data-preparation","version":"1.0.0","name":"数据准备","description":"记录数据来源、划分与校验","entrypoint":"SKILL.md","capabilities":["data"],"compatibility":["paper2run.skills.v1"]}

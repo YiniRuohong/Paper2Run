@@ -73,6 +73,11 @@ def test_paste_text_creates_paper_version_hash_and_is_idempotent(seeded):
                            headers={"X-Actor-ID": "owner"}).json()["data"]
         expected = hashlib.sha256(TEXT_BODY.encode()).hexdigest()
         assert paper["sha256"] == expected
+        with app.state.runtime["session_factory"]() as db:
+            version = db.scalar(select(PaperVersionRecord).where(PaperVersionRecord.paper_id == data["paper_id"]))
+            assert paper["paper_version_id"] == version.id
+        listed = client.get(f"/api/v1/projects/{ids['project']}/papers", headers={"X-Actor-ID": "owner"}).json()["data"]
+        assert listed[0]["paper_version_id"] == paper["paper_version_id"]
 
         # content round-trip is byte-exact and text/plain
         content = client.get(f"/api/v1/papers/{data['paper_id']}/content",
@@ -193,7 +198,7 @@ def test_invalid_utf8_text_rejected(seeded):
 
 def test_pdf_upload_still_works(seeded):
     app, ids = seeded
-    pdf = minimal_pdf(["Real PDF text"]).rstrip(b"\r\n")
+    pdf = minimal_pdf(["Real PDF text"]) + b"\r\n\r\n"
     with TestClient(app) as client:
         result = client.post(
             f"/api/v1/projects/{ids['project']}/papers",

@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useMemo, useEffect, useRef, useState } from 'react';
 import type { GuidedApi } from '../../api-client/guided';
 import type { GuidedExport, GuidedTrainingForm } from '../../api-client/guided-types';
 import { RealFlowController } from './realflow';
-import { candidateBlockedReason, candidateKey, isSandboxRecipeSelected, realFlowSteps, REALFLOW_TRAINING_FIELDS, REALFLOW_TRAINING_LABELS, type RealFlowState, type RealFlowStep } from './realflow-state';
-import { nextViewableStep, stepRows, type StepRow } from './realflow-summary';
+import { candidateBlockedReason, candidateKey, isRetryableRunStatus, isSandboxRecipeSelected, realFlowSteps, REALFLOW_TRAINING_FIELDS, REALFLOW_TRAINING_LABELS, type RealFlowState, type RealFlowStep } from './realflow-state';
+import { nextViewableStep, stepRows } from './realflow-summary';
 import { pollExports, pollRunAndReport, readReport } from './readback';
 import { Badge, KV, KVList, StatusWord, type Tone } from '../../ui/Card';
 import { CopyButton, Switch } from '../../ui/Controls';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
 import ModeDialog from '../docparse/ModeDialog';
+import { Workbench, type WbContent, type WbFile, type WbStage, type StageMark } from '../../ui/workbench/Workbench';
+import { flowRecords, RUN_TONE } from './realflow-files';
 import ParseProgress from '../docparse/ParseProgress';
 import { canExtract } from '../docparse/docparse';
 
@@ -18,14 +20,41 @@ import { canExtract } from '../docparse/docparse';
 // It shares the honest-wording rules of the guided demo: nothing here may
 // present a fake/unverified result as real, and the provider api_key only
 // lives in React state (never localStorage).
-// Presentation: a vertical stack of step cards. The current step is expanded,
-// other viewable steps collapse to a one-line summary, locked steps are dimmed.
+// Presentation: the shared task workbench. Left: the step timeline (viewable
+// steps are clickable, locked ones inert); centre「实时」: the current step's
+// card; right: the task's records and exported artifacts as a file tree.
 
 const SUPPORT_BADGE: Record<string, string> = {
   supported: 'supported（可执行）',
   requires_review: 'requires_review（需人工复核，禁用）',
   unsupported: 'unsupported（不可执行，禁用）',
 };
+// Extracted values may be structured (e.g. `task` as an object); render them
+// as compact JSON instead of "[object Object]".
+function fieldValueText(value: unknown): string {
+  if (value === null || value === undefined) return '（空）';
+  if (typeof value !== 'object') return String(value);
+  const json = JSON.stringify(value);
+  return json.length > 280 ? `${json.slice(0, 280)}…` : json;
+}
+
+// Some models return each warning as a JSON object string; show its message
+// (plus the quoted source when present) instead of the raw JSON.
+function warningText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{')) return raw;
+  try {
+    const obj = JSON.parse(trimmed) as Record<string, unknown>;
+    const message = [obj.warning, obj.message, obj.detail].find(v => typeof v === 'string') as string | undefined;
+    if (!message) return raw;
+    const ref = obj.source_ref && typeof obj.source_ref === 'object' ? obj.source_ref as Record<string, unknown> : null;
+    const quote = typeof ref?.quote === 'string' ? ref.quote : null;
+    return quote ? `${message}（来源：“${quote.length > 60 ? `${quote.slice(0, 60)}…` : quote}”）` : message;
+  } catch {
+    return raw;
+  }
+}
+
 const EVIDENCE_STATUS_TEXT: Record<string, string> = {
   supported: 'supported（有来源支撑）',
   inferred: 'inferred（推断，未直接给出）',
@@ -119,7 +148,8 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
     if (!state?.runId || !state.exportId) return;
     return pollExports({ api, runId: state.runId, exportId: state.exportId, onValue: setExports, onError: () => setError('导出状态读取失败，请刷新。') });
   }, [api, state?.runId, state?.exportId, readRev]);
-  if (!controller || !state) return <p role="status" className="page-loading">正在初始化真实流程…</p>;
+  const records = useMemo(() => state ? flowRecords(state, report, exports) : null, [state, report, exports]);
+  if (!controller || !state || !records) return <p role="status" className="page-loading">正在初始化真实流程…</p>;
   const call = async (fn: () => unknown | Promise<unknown>) => {
     if (busy) return;
     setBusy(true); setError(null);
@@ -293,8 +323,8 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
     </>}
     {state.step === 'execute' && <>
       {sandboxCodeMissing && <p className="ui-callout tone-warn" role="alert">当前候选 recipe 为 sandbox_python，需先在「复现代码」步骤生成代码后才能创建 Run。</p>}
-      {state.envCheck?.decision === 'ready' && <div className="flow-actions"><button disabled={busy || sandboxCodeMissing} className="btn btn-primary" onClick={() => void call(() => controller.startRun('local-cpu'))}>{state.runId ? '刷新 Run 状态' : '启动本机 Run（local-cpu）'}</button></div>}
-      {state.envCheck?.decision === 'blocked' && sshVerified && <div className="flow-actions"><button disabled={busy || sandboxCodeMissing} className="btn btn-primary" onClick={() => void call(() => controller.startRun('ssh'))}>{state.runId ? '刷新 Run 状态' : '创建 SSH Run（仅登记已验证目标）'}</button></div>}
+      {state.envCheck?.decision === 'ready' && <div className="flow-actions"><button disabled={busy || sandboxCodeMissing} className="btn btn-primary" onClick={() => void call(() => controller.startRun('local-cpu'))}>{!state.runId ? '启动本机 Run（local-cpu）' : isRetryableRunStatus(state.run?.status) ? '重新执行（新 Run）' : '刷新 Run 状态'}</button></div>}
+      {state.envCheck?.decision === 'blocked' && sshVerified && <div className="flow-actions"><button disabled={busy || sandboxCodeMissing} className="btn btn-primary" onClick={() => void call(() => controller.startRun('ssh'))}>{!state.runId ? '创建 SSH Run（仅登记已验证目标）' : isRetryableRunStatus(state.run?.status) ? '重新执行（新 Run）' : '刷新 Run 状态'}</button></div>}
       {state.envCheck?.decision === 'blocked' && !sshVerified && <p className="ui-callout tone-warn" role="alert">环境 blocked：未完成 SSH 验证前不提供执行入口。</p>}
       <p role="status" className="flow-status">{runStatusText}</p>
       {state.ssh && <p className="ui-callout tone-warn"><Icon name="alert" /><span>SSH Run 说明：远程执行当前没有受控适配器，Run 只会登记已验证目标（status=created），不会执行任何远程命令。</span></p>}
@@ -327,40 +357,50 @@ export default function RealFlowPanel({ api }: { api: GuidedApi }) {
     {(error?.includes('UNCONFIRMED') || state.error?.includes('WRITE_UNCONFIRMED') || controller.hasRetry()) && <div className="flow-actions"><button disabled={busy} className="btn btn-secondary" onClick={() => void call(() => controller.retryWrite())}>先以原 Idempotency-Key 与请求体重放，再继续其他写入</button></div>}
     {nextStep && <div className="flow-next"><button disabled={busy} className="btn btn-secondary" onClick={() => controller.viewStep(nextStep)}>下一步：{STEP_TITLE[nextStep]}<Icon name="chevron-right" size={14} /></button></div>}
   </section>;
+  const currentIndex = Math.max(0, steps.indexOf(state.step));
+  const stages: WbStage[] = rows.map(row => {
+    const mark: StageMark = row.step === state.step ? (busy || state.busy ? 'running' : 'current') : row.mark === 'current' ? 'current' : row.mark;
+    return {
+      id: row.step, title: STEP_TITLE[row.step], mark,
+      summary: row.step === state.step ? row.summary ?? STEP_HINT[row.step] : row.summary,
+      disabled: row.step !== state.step && !row.viewable,
+      items: records.items[row.step],
+    };
+  });
+  const runTone = runStatus ? RUN_TONE[runStatus] ?? 'idle' : null;
+  const loadRecord = async (file: WbFile, signal: AbortSignal): Promise<WbContent> => {
+    const text = records.text.get(file.path);
+    if (text !== undefined) return { text };
+    const artifact = records.artifacts.get(file.path);
+    if (artifact) return { blob: await api.readBlob(`/artifacts/${encodeURIComponent(artifact)}/raw`, signal) };
+    throw new Error('该文件已不在当前任务中');
+  };
   return <section className="flow">
-    <header className="flow-intro">
-      <h1>新建复现任务</h1>
-      <p>跟随下面的步骤，从上传论文一路走到可核验的复现报告。</p>
-    </header>
-    <ol className="flow-stack" aria-label="真实流程步骤">
-      {rows.map((row, i) => row.step === state.step
-        ? <li key={row.step} className="flow-step is-current" aria-current="step">
-          <div className="flow-head">
-            <StepMarker row={row} index={i} />
-            <span className="flow-head-text"><b>{STEP_TITLE[row.step]}</b><small>第 {i + 1} 步 / 共 {steps.length} 步 · {STEP_HINT[row.step]}</small></span>
-          </div>
-          {body}
-        </li>
-        : <li key={row.step} className={`flow-step is-${row.mark}`}>
-          <button type="button" className="flow-head" aria-expanded={false} disabled={busy || !row.viewable} onClick={() => controller.viewStep(row.step)}>
-            <StepMarker row={row} index={i} />
-            <span className="flow-head-text"><b>{STEP_TITLE[row.step]}</b>{row.summary && <small title={row.summary}>{row.summary}</small>}</span>
-            {row.viewable && <Icon name="chevron-right" size={14} className="flow-chev" />}
-          </button>
-        </li>)}
-    </ol>
-    <footer className="guided-footer">
-      <button disabled={busy} className="btn btn-ghost" onClick={() => void call(async () => { try { await controller.pollRun(); await controller.pollReport(); } finally { setReadRev(x => x + 1); } })}><Icon name="refresh" size={14} />刷新（只读）</button>
-      {state.note && <span role="note">{state.note}</span>}
-    </footer>
+    <Workbench
+      eyebrow={<>新建复现任务 · 第 {currentIndex + 1} / {steps.length} 步</>}
+      title={state.paper?.title || '从一篇论文开始复现'}
+      status={runStatus && runTone ? { text: `Run ${runStatus}`, tone: runTone } : { text: STEP_TITLE[state.step], tone: 'accent' }}
+      meta={<>
+        {state.paper ? <span>论文 <code className="ui-mono">{state.paper.paper_id}</code></span> : <span>跟随左侧步骤，从上传论文走到可核验的复现报告。</span>}
+        {state.provider && <span>模型 <code className="ui-mono">{state.provider.modelId}</code></span>}
+        {state.note && <span role="note">{state.note}</span>}
+      </>}
+      actions={<button disabled={busy} className="btn btn-secondary btn-sm" onClick={() => void call(async () => { try { await controller.pollRun(); await controller.pollReport(); } finally { setReadRev(x => x + 1); } })}><Icon name="refresh" size={14} />刷新（只读）</button>}
+      progress={`进度 · ${rows.filter(r => r.mark === 'done').length} / ${steps.length}`}
+      stages={stages}
+      activeStageId={state.step}
+      stagesBusy={busy}
+      onSelectStage={id => { if (id !== state.step) controller.viewStep(id as RealFlowStep); }}
+      files={records.files}
+      filesEmpty="上传论文后，这里会依次出现抽取结果、实验方案、环境检查、复现代码、运行事件、报告与导出文件。"
+      filesNote={<>「记录」是服务器返回的真实数据；导出文件按 SHA-256 从服务器读取。</>}
+      loadFile={loadRecord}
+    >
+      <p className="wb-live-head"><span className="wb-live-dot" aria-hidden="true" /><b>{STEP_TITLE[state.step]}</b> · 第 {currentIndex + 1} 步 / 共 {steps.length} 步 · {STEP_HINT[state.step]}</p>
+      {body}
+    </Workbench>
     {state.docparse.needsChoice && laterFor !== (state.paper?.paper_id ?? null) && <ModeDialog status={state.docparse.status} busy={busy || state.busy} onChoose={mode => void call(() => controller.chooseParseMode(mode))} onLater={() => setLaterFor(state.paper?.paper_id ?? '')} />}
   </section>;
-}
-
-function StepMarker({ row, index }: { row: StepRow; index: number }) {
-  if (row.mark === 'done') return <span className="flow-mark is-done"><Icon name="check" size={13} /><span className="sr-only">已完成</span></span>;
-  if (row.mark === 'attention') return <span className="flow-mark is-attention"><Icon name="alert" size={13} /><span className="sr-only">需要注意</span></span>;
-  return <span className="flow-mark" aria-hidden="true">{index + 1}</span>;
 }
 
 function ExtractionView({ extraction, selectedId, onSelect }: { extraction: NonNullable<RealFlowState['extraction']>; selectedId: string | null; onSelect: (key: string) => void }) {
@@ -389,12 +429,12 @@ function ExtractionView({ extraction, selectedId, onSelect }: { extraction: NonN
         })}
       </ul>}
     </div>
-    {extraction.warnings.length > 0 && <p className="ui-callout tone-warn"><Icon name="alert" /><span>warnings：{extraction.warnings.join('；')}</span></p>}
+    {extraction.warnings.length > 0 && <div className="ui-callout tone-warn"><Icon name="alert" /><span>warnings：<ul className="flow-warnings">{extraction.warnings.map((w, i) => <li key={i}>{warningText(w)}</li>)}</ul></span></div>}
     <div className="flow-nested">
       <Disclosure title="字段与证据状态" count={fields.length} defaultOpen>
         <ul className="ui-list">
           {fields.map(([name, field]) => <li key={name} className="ui-row">
-            <span className="ui-row-main"><span className="ui-row-title ui-mono">{name}</span><span className="ui-row-sub">{field.value === null || field.value === undefined ? '（空）' : String(field.value)}</span></span>
+            <span className="ui-row-main"><span className="ui-row-title ui-mono">{name}</span><span className="ui-row-sub">{fieldValueText(field.value)}</span></span>
             <span className="ui-row-end"><Badge tone={EVIDENCE_STATUS_TONE[field.evidence_status ?? ''] ?? 'idle'}>{EVIDENCE_STATUS_TEXT[field.evidence_status ?? ''] ?? field.evidence_status ?? 'unknown'}</Badge><span>refs: {field.source_refs.length}</span></span>
           </li>)}
         </ul>

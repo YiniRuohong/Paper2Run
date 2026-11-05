@@ -86,3 +86,11 @@ button.flow-head:hover .flow-chev { color: var(--muted); }
 @media (max-width: 640px) {
   .flow-body { padding-left: 16px; }
 }
+
+/* Inside the workbench live pane the step card needs no rail indent. */
+.wb-pane .flow-body { padding: 0; gap: 14px; }
+.wb-pane .flow-body > p:first-child { font-size: 13.5px; }
+.wb-pane .flow-next { margin-top: 4px; }
+
+/* extraction warnings list (one item per model warning) */
+.flow-warnings { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; }

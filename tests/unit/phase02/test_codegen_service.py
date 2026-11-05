@@ -224,8 +224,9 @@ def test_provider_request_shape(store):
     service = CodegenService(provider, store)
     run_generate(service)
     request = provider.requests[-1]
-    assert request.max_output_tokens == 3000
-    assert request.timeout_seconds == 240.0
+    # Generous ceilings so reasoning models can think before writing code.
+    assert request.max_output_tokens == 32_000
+    assert request.timeout_seconds == 300.0
     assert request.json_schema == {
         "name": "codegen",
         "strict": True,
@@ -251,6 +252,15 @@ def test_non_json_provider_response_maps_to_provider_error(store):
 
 
 def test_wrong_shape_payload_maps_to_provider_error(store):
-    service = CodegenService(FakeProvider({"code": LEGAL_CODE}), store)  # notes missing
-    with pytest.raises(ProviderError):
-        run_generate(service)
+    for bad in ({"notes": "no code"}, {"code": "   ", "notes": "blank"}, {"code": 7, "notes": "x"}):
+        service = CodegenService(FakeProvider(bad), store)
+        with pytest.raises(ProviderError):
+            run_generate(service)
+
+
+def test_notes_are_optional_and_code_fences_are_stripped(store):
+    service = CodegenService(FakeProvider({"code": f"```python\n{LEGAL_CODE}```"}), store)
+    result = run_generate(service)
+    assert result["notes"] == ""
+    assert not result["code"].startswith("```")
+    assert result["code"].strip() == LEGAL_CODE.strip()

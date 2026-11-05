@@ -1,0 +1,1 @@
+{"id":"implementation-lookup","version":"1.0.0","name":"官方实现查找","description":"核查代码出处、版本与授权","entrypoint":"SKILL.md","capabilities":["implementation"],"compatibility":["paper2run.skills.v1"]}

@@ -1,0 +1,1 @@
+{"id":"background-training","version":"1.0.0","name":"长时间训练","description":"后台任务与恢复证据","entrypoint":"SKILL.md","capabilities":["background"],"compatibility":["paper2run.skills.v1"]}

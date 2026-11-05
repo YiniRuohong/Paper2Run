@@ -11,6 +11,7 @@ from .provider_sessions import router as provider_sessions_router
 from .environment import router as environment_router
 from .codegen import router as codegen_router
 from .docparse import router as docparse_router
+from .autonomous import router as autonomous_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -25,5 +26,6 @@ router.include_router(provider_sessions_router)
 router.include_router(environment_router)
 router.include_router(codegen_router)
 router.include_router(docparse_router)
+router.include_router(autonomous_router)
 
 __all__ = ["router"]

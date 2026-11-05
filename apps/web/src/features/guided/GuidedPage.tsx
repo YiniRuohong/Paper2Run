@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { createGuidedApi } from '../../api-client/guided';
+import { authenticatedGuidedFetch } from '../../api-client/autonomous';
 import { backendHost, getDesktop } from '../../desktop';
 import { useBackendHealth, useRecentTasks } from '../../shell/hooks';
 import { Sidebar, type View } from '../../shell/Sidebar';
@@ -18,14 +19,16 @@ import '../dashboard/dashboard.css';
 //   #/task/<id>   任务详情 (read-only)
 //   #/settings    设置 (theme, local service, desktop paths)
 // The offline teaching fixture remains a backend regression path, not a UI entry.
-const api = createGuidedApi('demo-user');
+const api = createGuidedApi('demo-user', authenticatedGuidedFetch);
 const Dashboard = lazy(() => import('../dashboard/Dashboard'));
 const TaskDetail = lazy(() => import('../dashboard/TaskDetail'));
 const Settings = lazy(() => import('../settings/Settings'));
 
-interface Route { view: View; taskId: string | null }
+const AutonomousPage = lazy(() => import('../autonomous/AutonomousPage'));
+interface Route { view: View | 'autonomous'; taskId: string | null }
 const routeFromHash = (): Route => {
   const h = window.location.hash;
+  if (h.startsWith('#/autonomous')) return { view: 'autonomous', taskId: null };
   if (h.startsWith('#/new')) return { view: 'new', taskId: null };
   if (h.startsWith('#/task/')) return { view: 'task', taskId: decodeURIComponent(h.slice('#/task/'.length)) };
   if (h.startsWith('#/settings')) return { view: 'settings', taskId: null };
@@ -52,6 +55,8 @@ export default function GuidedPage() {
   const { view, taskId } = route;
   // The flow holds its progress (and the provider api_key) only in memory, so it
   // stays mounted once opened; leaving the page must not discard it.
+  const autonomousOpened = useRef(false);
+  if (view === 'autonomous') autonomousOpened.current = true;
   const flowOpened = useRef(false);
   if (view === 'new') flowOpened.current = true;
   const [flowKey, setFlowKey] = useState(0);
@@ -61,12 +66,15 @@ export default function GuidedPage() {
   const taskTitle = view === 'task' ? recent.tasks?.find(t => t.paperId === taskId)?.title ?? '任务详情' : '';
   const crumbs: [string, string] = view === 'overview' ? ['工作区', '总览']
     : view === 'new' ? ['工作区', '新建任务']
+    : view === 'autonomous' ? ['工作区', '自主实验']
     : view === 'task' ? ['任务', taskTitle]
     : ['Paper2Run', '设置'];
   const canRefresh = view === 'overview' || view === 'task';
 
-  return <div className={`shell${sideOpen ? '' : ' side-closed'}`}>
-    {sideOpen && <Sidebar view={view} taskId={taskId} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />}
+  // Workbench views (three columns) get a wider page than the reading views.
+  const wide = view === 'new' || view === 'task' || view === 'autonomous';
+  return <div className={`shell${sideOpen ? '' : ' side-closed'}${wide ? ' wide' : ''}`}>
+    {sideOpen && <Sidebar view={view === 'autonomous' ? 'new' : view} taskId={taskId} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />}
     {sideOpen && <button type="button" className="side-scrim" aria-label="关闭侧栏" tabIndex={-1} onClick={() => setSideOpen(false)} />}
     <main className="main" id="main">
       <header className="main-head drag">
@@ -75,12 +83,15 @@ export default function GuidedPage() {
           <span>{crumbs[0]}</span><i aria-hidden="true">/</i><b aria-current="page" title={crumbs[1]}>{crumbs[1]}</b>
         </nav>
         <div className="main-actions">
+          <a className="btn btn-sm btn-secondary" href="#/autonomous">自主实验</a>
           {canRefresh && <button type="button" className="btn btn-icon" aria-label="刷新" title="刷新" aria-busy={busy} onClick={refresh}><Icon name="refresh" spin={busy} /></button>}
+          {view === 'new' && window.location.hash.includes('return=autonomous') && <a className="btn btn-primary btn-sm" href="#/autonomous">返回自主实验并读取论文</a>}
           {view === 'new' && <button type="button" className="btn btn-sm" onClick={restartFlow}>重新开始</button>}
         </div>
       </header>
       <div className="main-body">
         <div className={`page page-${view}`}>
+          {autonomousOpened.current && <div hidden={view !== 'autonomous'}><Suspense fallback={<p role="status" className="page-loading">加载自主实验…</p>}><AutonomousPage guided={api} active={view === 'autonomous'} /></Suspense></div>}
           {view === 'task' && taskId !== null
             ? <Suspense fallback={<p role="status" className="page-loading">加载任务…</p>}><TaskDetail key={taskId} api={api} paperId={taskId} onBack={goOverview} refreshSignal={refreshTick} /></Suspense>
             : view === 'overview'

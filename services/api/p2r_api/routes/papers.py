@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from sqlalchemy.orm import object_session
 from p2r_artifacts.store import LocalArtifactStore, ArtifactIntegrityError, ArtifactNotFoundError
@@ -17,7 +17,7 @@ from p2r_docparse.errors import DocParseError
 from p2r_docparse.pdf import count_pages
 from p2r_orchestration.docparse_jobs import enqueue_paper_parse
 from p2r_orchestration.service import ServiceError
-from p2r_persistence.models import OperationRecord, PaperRecord, PaperVersionRecord, ExtractionRecord, SourceRefRecord
+from p2r_persistence.models import ExperimentRecord, OperationRecord, PaperRecord, PaperVersionRecord, ExtractionRecord, SourceRefRecord
 from p2r_persistence.repositories import IdempotencyRepository
 from ..auth import csrf_token, validate_csrf, validate_origin, require_project_access
 from ..dependencies import actor_id
@@ -45,12 +45,20 @@ def _parse_multipart(content_type: str, body: bytes) -> dict[str, tuple[str | No
     match = re.search(r'boundary=(?:"([^"]+)"|([^;]+))', content_type, re.I)
     if not match:
         _error("VALIDATION_ERROR", "multipart boundary is required")
-    boundary = (match.group(1) or match.group(2)).encode()
+    boundary = (match.group(1) or match.group(2)).strip().encode()
+    # A delimiter is a complete framing line, not an arbitrary occurrence in
+    # binary PDF data. Its leading CRLF belongs to framing; payload CR/LF bytes
+    # before that remain part of the source and its content-addressed hash.
+    delimiter = re.compile(rb'(?:\A|\r\n)--' + re.escape(boundary)
+                           + rb'(?P<closing>--)?[ \t]*(?:\r\n|\Z)')
+    markers = list(delimiter.finditer(body))
+    if len(markers) < 2 or not markers[-1].group("closing"):
+        _error("VALIDATION_ERROR", "multipart closing boundary is required")
     parts = {}
-    for chunk in body.split(b"--" + boundary)[1:]:
-        if chunk.startswith(b"--"): break
-        chunk = chunk.strip(b"\r\n")
-        if not chunk: continue
+    for current, following in zip(markers, markers[1:]):
+        if current.group("closing"):
+            break
+        chunk = body[current.end():following.start()]
         head, sep, value = chunk.partition(b"\r\n\r\n")
         if not sep: continue
         headers = head.decode("latin1").split("\r\n")
@@ -58,7 +66,7 @@ def _parse_multipart(content_type: str, body: bytes) -> dict[str, tuple[str | No
         name = re.search(r'name="([^"]+)"', disposition)
         if not name: continue
         filename = re.search(r'filename="([^"]*)"', disposition)
-        parts[name.group(1)] = (filename.group(1) if filename else None, value.rstrip(b"\r\n"))
+        parts[name.group(1)] = (filename.group(1) if filename else None, value)
     return parts
 
 
@@ -66,7 +74,11 @@ def _paper_json(row: PaperRecord) -> dict:
     db = object_session(row)
     extraction = db.scalar(select(ExtractionRecord).where(ExtractionRecord.paper_id == row.id).order_by(ExtractionRecord.created_at.desc()))
     operation = db.scalar(select(OperationRecord).where(OperationRecord.resource_id == row.id, OperationRecord.status.in_(['queued', 'running'])).order_by(OperationRecord.created_at.desc()))
-    return {"paper_id": row.id, "project_id": row.project_id, "title": row.title,
+    version = db.scalar(select(PaperVersionRecord).where(
+        PaperVersionRecord.paper_id == row.id, PaperVersionRecord.sha256 == row.sha256,
+    ).order_by(PaperVersionRecord.version.desc()))
+    return {"paper_id": row.id, "paper_version_id": version.id if version else None,
+            "project_id": row.project_id, "title": row.title,
             "status": row.status, "sha256": row.sha256, "page_count": row.page_count,
             "content_available": True, "current_extraction_id": extraction.id if extraction else None,
             "active_operation_id": operation.id if operation else None, "processing_consent": {"accepted_at": row.created_at.isoformat(), "policy_version": "1"},
@@ -459,6 +471,16 @@ async def create_extraction(paper_id: str, request: Request):
                 for warning in text_record.warnings_json or []:
                     if warning not in extracted["warnings"]:
                         extracted["warnings"].append(warning)
+            # Re-extraction: one extraction row per (paper, content). Replace an
+            # earlier row only while no experiment cites it; a cited extraction
+            # is immutable provenance and must never change underneath it.
+            previous = db.scalar(select(ExtractionRecord).where(
+                ExtractionRecord.paper_id == paper.id, ExtractionRecord.content_sha256 == paper.sha256))
+            if previous is not None:
+                if db.scalar(select(ExperimentRecord.id).where(ExperimentRecord.extraction_id == previous.id).limit(1)) is not None:
+                    _error("EXTRACTION_IN_USE", "the current extraction is used by an experiment and cannot be replaced", status=409)
+                db.execute(delete(SourceRefRecord).where(SourceRefRecord.extraction_id == previous.id))
+                db.delete(previous); db.flush()
             operation = OperationRecord(kind="paper_extraction", resource_id=paper.id, status="succeeded")
             db.add(operation); db.flush()
             ext = ExtractionRecord(paper_id=paper.id, content_sha256=paper.sha256, status="ready", payload_json=extracted)

@@ -24,6 +24,7 @@ def build_runtime(*, db_url: str | None = None, session_factory: Any = None,
                   supervisor: Any = None, artifact_store: Any = None,
                   allowed_origin: str | None = None, secure_cookies: bool = True,
                   development_auth: bool = False, docparse_service: Any = None) -> dict[str, Any]:
+    injected_persistence = session_factory is not None or db_url is not None
     if session_factory is None:
         engine = create_engine(db_url or os.getenv("P2R_DATABASE_URL", "sqlite:///p2r.sqlite3"))
         init_db(engine)
@@ -37,7 +38,22 @@ def build_runtime(*, db_url: str | None = None, session_factory: Any = None,
         from p2r_orchestration.docparse_service import DocParseService
         docparse_service = DocParseService(docparse_root())
     store = ProviderSecretStore()
-    return {"session_factory": session_factory, "supervisor": supervisor, "artifact_store": artifact_store,
+    from p2r_orchestration.autonomous import AutonomousService
+    autonomous_root = None
+    if not os.getenv("P2R_AUTONOMOUS_DIR") and not os.getenv("P2R_DEMO_DIR"):
+        if injected_persistence:
+            with session_factory() as db:
+                bind = db.get_bind()
+                url = bind.url
+            if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
+                database = Path(url.database).resolve()
+                autonomous_root = database.parent / (database.name + ".autonomous")
+            elif artifact_store is not None and hasattr(artifact_store, "root"):
+                autonomous_root = Path(artifact_store.root).resolve() / "autonomous-control"
+        elif artifact_store is not None and hasattr(artifact_store, "root"):
+            autonomous_root = Path(artifact_store.root).resolve() / "autonomous-control"
+    autonomous = AutonomousService(session_factory, autonomous_root, artifact_store=artifact_store)
+    return {"autonomous_service": autonomous, "session_factory": session_factory, "supervisor": supervisor, "artifact_store": artifact_store,
             "allowed_origin": allowed_origin, "secure_cookies": secure_cookies,
             "development_auth": development_auth,
             "docparse_service": docparse_service,

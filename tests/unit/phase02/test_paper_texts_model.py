@@ -96,7 +96,7 @@ def test_status_constraint(tmp_path):
 def test_migration_heads():
     cfg = Config(str(ROOT / "packages/persistence/alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "packages/persistence/alembic"))
-    assert ScriptDirectory.from_config(cfg).get_current_head() == "0019"
+    assert ScriptDirectory.from_config(cfg).get_current_head() == "0021"
 
 
 def test_migration_0019_creates_and_drops_paper_texts(tmp_path):

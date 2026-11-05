@@ -18,9 +18,11 @@ from pydantic import ValidationError
 from p2r_docparse.context import trim_for_context
 
 from .article_schema import ExtractionDocument
+from .lenient_extraction import normalize_extraction_payload
 from .providers import CompletionRequest, Message, NormalizedEvent, ProviderError
 
 EXTRACTION_PHASE = "article_extraction"
+EXTRACTION_MAX_OUTPUT_TOKENS = 32_000
 RESPONSE_SCHEMA_VERSION = "article-extraction.v1"
 
 _SYSTEM_PROMPT = (
@@ -38,9 +40,9 @@ _SYSTEM_PROMPT = (
     "learning_rate/batch_size) or sandbox_python version 1 (a "
     "platform-generated and human-reviewed self-contained standard-library "
     "Python script, executed in a local sandbox; parameters seed/"
-    "max_seconds; prefer proposing it with execution_support 'supported' "
+    "max_seconds; prefer proposing it with support_status 'supported' "
     "whenever the article's experiment can be approximated by a "
-    "self-contained script). Set execution_support 'supported' only when "
+    "self-contained script). Set support_status 'supported' only when "
     "the article's experiment can actually be reproduced by one of these "
     "registered recipes; use 'review_required' or 'unsupported' otherwise. "
     "Never invent unregistered recipe ids. The JSON object must contain "
@@ -240,9 +242,12 @@ class ExtractionService:
             prompt_version=prompt_version,
             policy_version=policy_version,
             response_schema_version=RESPONSE_SCHEMA_VERSION,
-            # Full-document structured extraction on a slow gateway can take
-            # well over the 60s default; 120s stays inside the 300s cap.
-            timeout_seconds=120.0,
+            # Reasoning models spend most of their output budget thinking
+            # before the JSON appears, and slow gateways stretch that further:
+            # use the full 300s request cap and a budget that leaves room for
+            # both. The budget is a ceiling, not a target, for other models.
+            timeout_seconds=300.0,
+            max_output_tokens=EXTRACTION_MAX_OUTPUT_TOKENS,
             json_schema={
                 "name": "article_extraction",
                 "strict": True,
@@ -269,6 +274,9 @@ class ExtractionService:
             raise ProviderError("invalid_response") from None
         if not isinstance(payload, dict):
             raise ProviderError("invalid_response")
+        # Map formatting drift onto the contract (reported as a warning);
+        # the strict model validation and provenance checks below still run.
+        payload = normalize_extraction_payload(payload, paper_id=paper_id, pdf_sha256=paper_sha256)
         try:
             document = ExtractionDocument.model_validate(payload)
         except ValidationError:

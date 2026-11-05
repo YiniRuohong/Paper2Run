@@ -142,6 +142,9 @@ function runtimePaths() {
       python: IS_WIN ? path.join(res, 'python', 'python.exe') : path.join(res, 'python', 'bin', 'python3.12'),
       serve: path.join(res, 'backend', 'serve.py'),
       web: path.join(res, 'web'),
+      node: IS_WIN ? path.join(res, 'node', 'node.exe') : path.join(res, 'node', 'bin', 'node'),
+      harness: path.join(res, 'harness'),
+      skills: path.join(res, 'research-skills'),
     };
   }
   const repo = path.resolve(__dirname, '..', '..');
@@ -149,23 +152,54 @@ function runtimePaths() {
     python: IS_WIN ? path.join(repo, '.venv', 'Scripts', 'python.exe') : path.join(repo, '.venv', 'bin', 'python'),
     serve: path.join(__dirname, 'backend', 'serve.py'),
     web: path.join(repo, 'apps', 'web', 'dist'),
+    node: process.env.P2R_NODE_BINARY || path.join(__dirname, '.runtime', `${process.platform}-${process.arch}`, 'node', ...(IS_WIN ? ['node.exe'] : ['bin', 'node'])),
+    harness: process.env.P2R_HARNESS_DIR || path.join(repo, 'apps', 'harness'),
+    skills: process.env.P2R_SKILLS_DIR || path.join(repo, 'resources', 'research-skills'),
   };
 }
 
-function backendEnv(web) {
+function backendEnv(runtime) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
     // PYTHONHOME/PYTHONPATH must not redirect the bundled interpreter, and
     // ELECTRON_* must not leak into anything the backend launches.
-    if (!/^(PYTHON|ELECTRON_)/i.test(key)) env[key] = value;
+    if (!/^(PYTHON|ELECTRON_|NODE_OPTIONS$|NODE_PATH$)/i.test(key)) env[key] = value;
   }
   return {
     ...env,
     PYTHONUTF8: '1',
     PYTHONIOENCODING: 'utf-8',
     P2R_DEMO_DIR: dataDir,
-    P2R_WEB_DIST: web,
+    P2R_WEB_DIST: runtime.web,
+    P2R_NODE_BINARY: runtime.node,
+    P2R_HARNESS_DIR: runtime.harness,
+    P2R_SKILLS_DIR: runtime.skills,
   };
+}
+
+function checkAutonomousRuntime(runtime) {
+  if (IS_WIN) {
+    writeLog('[desktop] 自主模式在 Windows 暂不可用：技能注册表需要 POSIX flock/no-follow；旧流程可继续使用。Windows Node 资源不代表自主模式已受支持。\n');
+    return;
+  }
+  const missing = [runtime.node, path.join(runtime.harness, 'bridge.mjs'),
+    path.join(runtime.harness, 'node_modules', '@earendil-works', 'pi-coding-agent', 'package.json'), runtime.skills]
+    .find((file) => !fs.existsSync(file));
+  if (missing) {
+    writeLog(`[desktop] autonomous mode unavailable: missing ${missing}; run scripts/desktop/build_harness.py or scripts/launch.py in development\n`);
+    return;
+  }
+  execFile(runtime.node, ['-p', 'process.versions.node'], { env: backendEnv(runtime), timeout: 10_000, windowsHide: true }, (error, stdout) => {
+    const version = String(stdout).trim();
+    const [major, minor] = version.split('.').map(Number);
+    if (error || !Number.isInteger(major) || !Number.isInteger(minor) || major < 22 || (major === 22 && minor < 19)) {
+      writeLog('[desktop] autonomous mode unavailable: Node >=22.19 required or runtime failed to start\n');
+    }
+  });
+  // Docker absence only affects local autonomous experiments, never app startup.
+  execFile('docker', ['info', '--format', '{{.ServerVersion}}'], { env: backendEnv(runtime), timeout: 10_000, windowsHide: true }, (error) => {
+    if (error) writeLog('[desktop] local autonomous experiments unavailable: Docker daemon not ready; start Docker and retry the target probe\n');
+  });
 }
 
 function healthOk(port) {
@@ -186,6 +220,7 @@ function startBackend() {
   setSplash({ state: 'starting' });
 
   const runtime = runtimePaths();
+  checkAutonomousRuntime(runtime);
   const missing = [runtime.python, runtime.serve].find((file) => !fs.existsSync(file));
   if (missing) {
     failBackend(`找不到后端运行时：${missing}`);
@@ -201,7 +236,7 @@ function startBackend() {
   try {
     child = spawn(runtime.python, args, {
       cwd: dataDir,
-      env: backendEnv(runtime.web),
+      env: backendEnv(runtime),
       // stdin stays an open pipe: serve.py exits on EOF, so the backend dies
       // with this process even after SIGKILL or a crash.
       stdio: ['pipe', 'pipe', 'pipe'],

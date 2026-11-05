@@ -2,7 +2,7 @@ import { GUIDED_PATHS as P, GuidedApiError, validateBootstrap, validateConfirmat
 import type { GuidedApi } from '../../api-client/guided.ts';
 import type { DocParseMode, DocParseStatus, GuidedCandidateExperiment, GuidedSSHAuthInput, PaperText } from '../../api-client/guided-types.ts';
 import { canExtract, canParseNow, isParsePending } from '../docparse/docparse.ts';
-import { applyTrainingToSpec, candidateBlockedReason, createRealFlowState, findCandidate, isSandboxRecipeSelected, parseTrainingForm, realFlowReducer, type RealFlowState, type RealFlowStep } from './realflow-state.ts';
+import { applyTrainingToSpec, candidateBlockedReason, createRealFlowState, findCandidate, isRetryableRunStatus, isSandboxRecipeSelected, parseTrainingForm, realFlowReducer, type RealFlowState, type RealFlowStep } from './realflow-state.ts';
 
 // Controller for the real article flow (paper upload → provider session →
 // extraction → spec → environment → run). No storage option exists on
@@ -454,9 +454,12 @@ export class RealFlowController {
     if (s.extraction.extraction_id === null) throw Error('EXTRACTION_NOT_READY');
     parseTrainingForm(s.training); // Fail fast: refuse invalid numbers before any write.
     const projectId = s.projectId ?? s.paper.project_id;
+    // One submission, three distinct writes: derive a stable per-write key so
+    // a global (actor, key) receipt store never sees one key on two paths,
+    // while a replay of the same submission still reuses the exact keys.
     return this.submit('spec', async key => {
       if (!this.state.experimentId) {
-        const experiment = await this.api.write({ key, path: P.experiments(projectId), body: JSON.stringify({
+        const experiment = await this.api.write({ key: `${key}:experiment`, path: P.experiments(projectId), body: JSON.stringify({
           paper_id: this.state.paper!.paper_id,
           extraction_id: this.state.extraction!.extraction_id,
           candidate_experiment_id: candidate.id,
@@ -475,7 +478,7 @@ export class RealFlowController {
           return { base_revision_id: d.base_revision_id as string | null, spec };
         }, this.reads.signal);
         const spec = applyTrainingToSpec(draftValue.spec, this.state.training);
-        const revision = await this.api.write({ key, path: `/projects/${encodeURIComponent(projectId)}/spec-revisions`, body: JSON.stringify({
+        const revision = await this.api.write({ key: `${key}:revision`, path: `/projects/${encodeURIComponent(projectId)}/spec-revisions`, body: JSON.stringify({
           experiment_id: this.state.experimentId,
           base_revision_id: draftValue.base_revision_id,
           spec,
@@ -486,7 +489,7 @@ export class RealFlowController {
       if (!this.state.confirmationId) {
         const revision = await this.api.read(P.revision(this.state.revisionId!), validateRevision, this.reads.signal);
         if (revision.id !== this.state.revisionId || revision.experiment_id !== this.state.experimentId) throw Error('RESOURCE_MISMATCH');
-        const confirmation = await this.api.write({ key, path: P.confirm(revision.id), body: JSON.stringify({
+        const confirmation = await this.api.write({ key: `${key}:confirm`, path: P.confirm(revision.id), body: JSON.stringify({
           spec_hash: revision.spec_hash,
           policy_hash: revision.policy_hash,
           accept_budget: true,
@@ -594,6 +597,10 @@ export class RealFlowController {
     if (isSandboxRecipeSelected(s) && s.codegen === null) throw Error('SANDBOX_CODE_REQUIRED');
     const body: Record<string, unknown> = { spec_revision_id: s.revisionId, confirmation_id: s.confirmationId };
     if (mode === 'ssh') body.execution = { kind: 'ssh', ssh_verification_id: s.ssh!.ssh_verification_id, confirmed: true };
+    if (isRetryableRunStatus(s.run?.status)) {
+      this.requireNoPendingRetry();
+      this.dispatch({ type: 'run-reset' });
+    }
     return this.submit('run', async key => {
       if (!this.state.runId) {
         const accepted = await this.api.write({ key, path: P.runs(s.projectId!), body: JSON.stringify(mode === 'ssh' ? { ...body, mode: 'ssh' } : body), state: 'prepared' }, validateRunAccepted);

@@ -175,16 +175,58 @@ def test_non_standard_json_constant_is_rejected():
     reject(lambda: run_extract(service(provider)))
 
 
-def test_schema_mismatch_is_rejected():
+def _normalization_warning(result):
+    return [w for w in result["extraction"]["warnings"] if w.startswith("Model output was normalized leniently")]
+
+
+def test_invalid_evidence_status_is_downgraded_never_upgraded():
     provider = FakeProvider(completed_events(json.dumps(payload(
         title=evidence("Deep learning", "unsupported-claim"),
     ))))
-    reject(lambda: run_extract(service(provider)))
+    result = run_extract(service(provider))
+    assert result["extraction"]["title"]["evidence_status"] == "inferred"
+    assert "title evidence_status" in _normalization_warning(result)[0]
 
 
-def test_unknown_field_is_rejected_by_schema():
+def test_unknown_field_is_dropped_with_a_warning():
     provider = FakeProvider(completed_events(json.dumps(payload(extra_field="x"))))
-    reject(lambda: run_extract(service(provider)))
+    result = run_extract(service(provider))
+    assert "extra_field" not in result["extraction"]
+    assert "extra_field" in _normalization_warning(result)[0]
+
+
+def test_bare_values_and_drifted_shapes_are_normalized():
+    body = payload(task={"task_type": "simulation", "reported_results": ["err < 0.003"]},
+                   methods="Monte Carlo sampling", warnings="single warning")
+    body.pop("datasets")
+    provider = FakeProvider(completed_events(json.dumps(body)))
+    result = run_extract(service(provider))
+    extraction = result["extraction"]
+    assert extraction["task"] == {"value": {"task_type": "simulation", "reported_results": ["err < 0.003"]},
+                                  "evidence_status": "inferred", "source_refs": []}
+    assert extraction["methods"] == [{"value": "Monte Carlo sampling", "evidence_status": "inferred", "source_refs": []}]
+    assert extraction["datasets"] == []
+    assert extraction["warnings"][0] == "single warning"
+    assert len(_normalization_warning(result)) == 1
+
+
+def test_common_field_aliases_are_read_as_contract_fields():
+    body = payload(
+        candidate_experiments=[{"id": "c-1", "recipe_id": "sandbox_python", "recipe_version": 1,
+                                "execution_support": "supported"}],
+        source_refs=[{"id": "ref-1", "paper_id": PAPER_ID, "text": "classify images",
+                      "pdf_sha256": PAPER_SHA256}],
+    )
+    result = run_extract(service(FakeProvider(completed_events(json.dumps(body)))))
+    spec = result["extraction"]["candidate_experiments"][0]
+    assert (spec["candidate_id"], spec["support_status"], spec["recipe_version"]) == ("c-1", "supported", "1")
+    assert result["extraction"]["source_refs"][0]["quote"] == "classify images"
+    assert "execution_support read as support_status" in _normalization_warning(result)[0]
+
+
+def test_clean_output_gets_no_normalization_warning():
+    provider = FakeProvider(completed_events(json.dumps(payload())))
+    assert _normalization_warning(run_extract(service(provider))) == []
 
 
 def test_source_ref_paper_id_mismatch_is_rejected():
@@ -205,12 +247,23 @@ def test_source_ref_pdf_hash_mismatch_is_rejected():
     reject(lambda: run_extract(service(provider)))
 
 
-def test_missing_source_ref_pdf_hash_is_rejected():
+def test_missing_source_ref_pdf_hash_is_filled_from_current_paper():
     provider = FakeProvider(completed_events(json.dumps(payload(
         source_refs=[{"id": "ref-1", "paper_id": PAPER_ID,
                       "quote": "classify images", "page": 1}],
     ))))
-    reject(lambda: run_extract(service(provider)))
+    result = run_extract(service(provider))
+    assert result["extraction"]["source_refs"][0]["pdf_sha256"] == PAPER_SHA256
+    assert "pdf_sha256 filled" in _normalization_warning(result)[0]
+
+
+def test_source_ref_without_quote_is_dropped_not_invented():
+    provider = FakeProvider(completed_events(json.dumps(payload(
+        source_refs=[{"id": "ref-1", "paper_id": PAPER_ID, "pdf_sha256": PAPER_SHA256}],
+    ))))
+    result = run_extract(service(provider))
+    assert result["extraction"]["source_refs"] == []
+    assert "has no quote" in _normalization_warning(result)[0]
 
 
 def test_missing_completed_event_is_rejected():

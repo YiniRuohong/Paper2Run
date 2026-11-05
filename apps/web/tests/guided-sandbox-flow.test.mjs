@@ -222,6 +222,26 @@ test('run gate: sandbox_python refuses Runs until code exists; other recipes are
   assert.equal(c2.getSnapshot().codegenPhase, 'ready');
 });
 
+test('a failed Run can be re-executed as a brand-new Run with a fresh key; a running Run only refreshes', async () => {
+  const h = harness(), c = h.create();
+  await reachConfirmed(c, 'c-sb');
+  await c.checkEnvironment();
+  await c.generateCode();
+  h.overrides.set('GET /runs/r', () => envelope({ ...run, status: 'failed' }));
+  await c.startRun('local-cpu');
+  assert.equal(c.getSnapshot().run.status, 'failed');
+  h.overrides.set('POST /projects/prj/runs', () => envelope({ ...runAccepted, run_id: 'r2' }, 202));
+  h.overrides.set('GET /runs/r2', () => envelope({ ...run, run_id: 'r2', status: 'running' }));
+  h.overrides.set('GET /runs/r2/events', () => new Response('', { headers: { 'Content-Type': 'text/event-stream' } }));
+  await c.startRun('local-cpu');
+  const posts = h.calls.filter(x => x.method === 'POST' && x.path === '/api/v1/projects/prj/runs');
+  assert.equal(posts.length, 2, 'the failed Run is not reused');
+  assert.notEqual(posts[0].headers.get('Idempotency-Key'), posts[1].headers.get('Idempotency-Key'));
+  assert.equal(c.getSnapshot().runId, 'r2');
+  await c.startRun('local-cpu');
+  assert.equal(h.calls.filter(x => x.method === 'POST' && x.path === '/api/v1/projects/prj/runs').length, 2, 'a live Run is refreshed, never duplicated');
+});
+
 // ---------------------------------------------------------------------------
 // regenerate + readback
 // ---------------------------------------------------------------------------

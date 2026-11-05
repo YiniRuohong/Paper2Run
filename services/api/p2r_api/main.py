@@ -78,6 +78,23 @@ def _install_docparse_worker_lifespan(app: FastAPI) -> None:
     app.router.lifespan_context = docparse_lifespan
 
 
+def _install_autonomous_lifespan(app: FastAPI) -> None:
+    from contextlib import asynccontextmanager
+    previous = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def autonomous_lifespan(fastapi_app):
+        async with previous(fastapi_app):
+            service = fastapi_app.state.runtime['autonomous_service']
+            service.recover()
+            try:
+                yield
+            finally:
+                service.shutdown()
+
+    app.router.lifespan_context = autonomous_lifespan
+
+
 def create_app(*, db_url: str | None = None, session_factory=None, supervisor=None, artifact_store=None, allowed_origin: str | None = None, secure_cookies: bool = True, development_auth: bool = False, docparse_service=None) -> FastAPI:
     app = FastAPI(title="p2r-api")
     # Preserve the explicit demo/supervisor test harness while keeping the
@@ -88,9 +105,14 @@ def create_app(*, db_url: str | None = None, session_factory=None, supervisor=No
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
         request.state.request_id = str(uuid4())
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request.state.request_id
-        return response
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = request.state.request_id
+            return response
+        finally:
+            identity_db = getattr(request.state, "identity_db", None)
+            if identity_db is not None:
+                identity_db.close()
 
     @app.exception_handler(ServiceError)
     async def service_error(request: Request, exc: ServiceError):
@@ -115,6 +137,7 @@ def create_app(*, db_url: str | None = None, session_factory=None, supervisor=No
         return JSONResponse({"status": "ok", "service": "p2r-api"})
 
     app.include_router(router, prefix="/api/v1")
+    _install_autonomous_lifespan(app)
     return app
 
 

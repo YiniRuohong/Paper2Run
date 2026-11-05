@@ -1,0 +1,1 @@
+{"id":"experiment-debugging","version":"1.0.0","name":"实现与调试","description":"最小试跑与可追溯修复","entrypoint":"SKILL.md","capabilities":["debug"],"compatibility":["paper2run.skills.v1"]}

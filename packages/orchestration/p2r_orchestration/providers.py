@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Mapping
@@ -202,6 +203,60 @@ class Provider(Protocol):
     async def estimate_usage(self, request: CompletionRequest) -> UsageEstimate: ...
 
 
+_COMPLETE_FINISH_REASONS = frozenset({None, "stop", "end_turn", "stop_sequence", "eos", "eos_token"})
+
+
+def _message_text(content: Any) -> str | None:
+    """Assistant text from a string or an array of text parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                return None
+            if part.get("type") in ("text", "output_text") and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+            elif part.get("type") not in ("reasoning", "thinking"):
+                return None
+        return "".join(parts) if parts else None
+    return None
+
+
+_FENCE = re.compile(r"```(?:json|JSON)?\s*\n(.*?)\n?```", re.DOTALL)
+
+
+def extract_json_text(text: str) -> str:
+    """Return the JSON document inside ``text``; raise ValueError if none.
+
+    Accepts a bare document, one inside a markdown code fence, or the first
+    balanced object/array embedded in surrounding prose. NaN/Infinity stay
+    rejected. The returned string is the document alone, re-serialized only
+    when it had to be cut out of other text.
+    """
+    stripped = text.strip()
+    candidates = [stripped]
+    candidates += [match.group(1).strip() for match in _FENCE.finditer(text)]
+    for candidate in candidates:
+        try:
+            json.loads(candidate, parse_constant=_reject_json_constant)
+            return candidate
+        except (ValueError, json.JSONDecodeError):
+            continue
+    decoder = json.JSONDecoder(parse_constant=_reject_json_constant)
+    # Only the first opening brace/bracket may start the document: retrying
+    # later positions could promote a nested fragment of a rejected document.
+    starts = sorted(index for index in (stripped.find("{"), stripped.find("[")) if index >= 0)
+    for start in starts:
+        try:
+            value, _ = decoder.raw_decode(stripped, start)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+    raise ValueError("no JSON document in model output")
+
+
 class OpenAICompatibleProvider:
     def __init__(self, config: ProviderConfig, *, transport: AsyncTransport | None = None,
                  max_response_bytes: int = 4 * 1024 * 1024,
@@ -225,28 +280,31 @@ class OpenAICompatibleProvider:
         key = self._secret_resolver() if self._secret_resolver is not None else os.environ.get(self.config.secret_env)
         if not key or any(ord(character) < 32 or ord(character) == 127 for character in key):
             raise ProviderError("auth_invalid")
-        payload: dict[str, Any] = {
+        base_payload: dict[str, Any] = {
             "model": self.config.model_id,
             "messages": [message.model_dump() for message in request.messages],
             "max_tokens": request.max_output_tokens,
             "stream": False,
         }
+        # Lenient structured output: many OpenAI-compatible servers do not
+        # implement json_schema and answer 400. Degrade to json_object, then
+        # to a plain completion; the schema is still enforced by the caller,
+        # so a weaker wire mode never weakens validation.
+        variants: list[dict[str, Any]] = [base_payload]
         if request.json_schema is not None:
-            payload["response_format"] = {"type": "json_schema", "json_schema": request.json_schema}
-        try:
-            response = await asyncio.wait_for(self._transport(
-                url=f"{self.config.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                body=json.dumps(payload).encode(), timeout=request.timeout_seconds,
-                max_bytes=self._max_response_bytes), timeout=request.timeout_seconds)
-        except asyncio.TimeoutError:
-            raise ProviderError("timeout") from None
-        except ProviderError:
-            raise
-        except (TimeoutError,):
-            raise ProviderError("timeout") from None
-        except OSError:
-            raise ProviderError("network_transient") from None
+            variants = [
+                {**base_payload, "response_format": {"type": "json_schema", "json_schema": request.json_schema}},
+                {**base_payload, "response_format": {"type": "json_object"}},
+                base_payload,
+            ]
+        # Last resort for servers whose output cap is below max_tokens: let
+        # the server apply its own default limit.
+        variants.append({name: value for name, value in variants[-1].items() if name != "max_tokens"})
+        for index, payload in enumerate(variants):
+            response = await self._send(payload, key, request.timeout_seconds)
+            if response.status == 400 and index + 1 < len(variants):
+                continue
+            break
         if response.status in (401,):
             raise ProviderError("auth_invalid")
         if response.status == 403:
@@ -261,15 +319,21 @@ class OpenAICompatibleProvider:
             raise ProviderError("invalid_response")
         try:
             data = json.loads(response.body, parse_constant=_reject_json_constant)
-            if not isinstance(data, dict) or data.get("model") not in (None, self.config.model_id):
+            # Gateways routinely rewrite the reported model name (aliases,
+            # dated snapshots, provider prefixes); the request already pinned
+            # the configured model, so the echo is informational only.
+            if not isinstance(data, dict) or not isinstance(data.get("model"), (str, type(None))):
                 raise ValueError
             choices = data.get("choices")
             if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
                 raise ValueError
             choice = choices[0]
-            if choice.get("finish_reason") == "content_filter":
+            finish = choice.get("finish_reason")
+            if finish == "content_filter":
                 raise ProviderError("content_policy")
-            if choice.get("finish_reason") != "stop":
+            # A missing finish_reason or a vendor spelling of "stop" is a
+            # complete answer; "length" (truncated) and anything else is not.
+            if finish not in _COMPLETE_FINISH_REASONS:
                 raise ValueError
             message = choice.get("message")
             if not isinstance(message, dict):
@@ -278,11 +342,13 @@ class OpenAICompatibleProvider:
                 raise ProviderError("content_policy")
             if message.get("tool_calls") or message.get("function_call"):
                 raise ValueError
-            text = message.get("content")
-            if not isinstance(text, str) or key in text:
+            text = _message_text(message.get("content"))
+            if text is None or key in text:
                 raise ValueError
             if request.json_schema is not None:
-                json.loads(text, parse_constant=_reject_json_constant)
+                # Models without native structured output wrap JSON in code
+                # fences or a sentence; keep only the JSON document itself.
+                text = extract_json_text(text)
             usage_data = data.get("usage")
             usage = self._usage(usage_data)
         except ProviderError:
@@ -291,6 +357,22 @@ class OpenAICompatibleProvider:
             raise ProviderError("invalid_response") from None
         yield NormalizedEvent(type="usage", call_id=request.call_id, usage=usage)
         yield NormalizedEvent(type="completed", call_id=request.call_id, text=text, usage=usage)
+
+    async def _send(self, payload: dict[str, Any], key: str, timeout: float) -> TransportResponse:
+        try:
+            return await asyncio.wait_for(self._transport(
+                url=f"{self.config.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                body=json.dumps(payload).encode(), timeout=timeout,
+                max_bytes=self._max_response_bytes), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise ProviderError("timeout") from None
+        except ProviderError:
+            raise
+        except (TimeoutError,):
+            raise ProviderError("timeout") from None
+        except OSError:
+            raise ProviderError("network_transient") from None
 
     def _validate_request(self, request: CompletionRequest) -> None:
         if request.provider_config_id != self.config.id or request.model_id != self.config.model_id:

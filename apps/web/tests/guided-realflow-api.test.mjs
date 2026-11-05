@@ -54,6 +54,23 @@ test('provider session create posts the exact fields with actor and idempotency 
   assert.equal(body.api_key, 'sk-x');
 });
 
+test('provider session opts into loopback http only for local model servers', async () => {
+  const t = capture();
+  t.respond = async () => envelope({
+    provider_session_id: 'ps_2', endpoint_alias: 'local', model_id: 'm',
+    base_url: 'http://127.0.0.1:3425/v1', secret_configured: true, secret_last4: '••••abcd',
+  }, { request_id: 'r2' }, 201);
+  const api = createGuidedApi('demo-user', t.fetcher);
+  for (const base_url of ['http://127.0.0.1:3425/v1', 'http://localhost:8000/v1']) {
+    await api.createProviderSession({ base_url, model_id: 'm', api_key: 'sk-x', endpoint_alias: 'local' });
+  }
+  for (const base_url of ['http://example.com/v1', 'https://127.0.0.1/v1', 'http://127.example.com/v1']) {
+    await api.createProviderSession({ base_url, model_id: 'm', api_key: 'sk-x', endpoint_alias: 'remote' });
+  }
+  const flags = t.calls.map(call => JSON.parse(call.init.body).allow_local_http);
+  assert.deepEqual(flags, [true, true, undefined, undefined, undefined]);
+});
+
 test('provider session delete uses DELETE with an idempotency key', async () => {
   const t = capture();
   t.respond = async () => envelope({ provider_session_id: 'ps_1', secret_configured: false });

@@ -43,14 +43,24 @@
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "extraResources": [
-        { "from": ".runtime/darwin-${arch}/python", "to": "python", "filter": ["**/*"] }
+        { "from": ".runtime/darwin-${arch}/python", "to": "python", "filter": ["**/*"] },
+        { "from": ".runtime/darwin-${arch}/node", "to": "node", "filter": ["**/*"] },
+        { "from": ".runtime/darwin-${arch}/harness", "to": "harness", "filter": ["*.mjs", "package*.json"] },
+        { "from": ".runtime/darwin-${arch}/harness/node_modules", "to": "harness/node_modules", "filter": ["**/*"] },
+        { "from": ".runtime/darwin-${arch}/research-skills", "to": "research-skills", "filter": ["**/*"] },
+        { "from": ".runtime/darwin-${arch}/harness-runtime.json", "to": "harness-runtime.json" }
       ]
     },
     "win": {
       "target": ["nsis", "zip"],
       "icon": "resources/icon.ico",
       "extraResources": [
-        { "from": ".runtime/win32-${arch}/python", "to": "python", "filter": ["**/*"] }
+        { "from": ".runtime/win32-${arch}/python", "to": "python", "filter": ["**/*"] },
+        { "from": ".runtime/win32-${arch}/node", "to": "node", "filter": ["**/*"] },
+        { "from": ".runtime/win32-${arch}/harness", "to": "harness", "filter": ["*.mjs", "package*.json"] },
+        { "from": ".runtime/win32-${arch}/harness/node_modules", "to": "harness/node_modules", "filter": ["**/*"] },
+        { "from": ".runtime/win32-${arch}/research-skills", "to": "research-skills", "filter": ["**/*"] },
+        { "from": ".runtime/win32-${arch}/harness-runtime.json", "to": "harness-runtime.json" }
       ]
     },
     "nsis": {

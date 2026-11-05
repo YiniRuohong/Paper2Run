@@ -1,0 +1,1 @@
+{"id":"paper-analysis","version":"1.0.0","name":"论文证据分析","description":"提取可追溯论文证据与实验条件","entrypoint":"SKILL.md","capabilities":["evidence"],"compatibility":["paper2run.skills.v1"]}

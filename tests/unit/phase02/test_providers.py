@@ -134,7 +134,7 @@ def test_developer_role_is_allowed():
     assert Message(role="developer", content="Be precise")
 
 
-@pytest.mark.parametrize("finish_reason", ["length", None, "unknown"])
+@pytest.mark.parametrize("finish_reason", ["length", "unknown", "tool_calls"])
 def test_non_stop_finish_reason_is_not_completed(finish_reason):
     body = reply(choices=[{"message": {"content": "partial"}, "finish_reason": finish_reason}])
     with pytest.raises(ProviderError, match="invalid_response"):
@@ -169,7 +169,7 @@ def test_secret_with_control_character_is_auth_invalid(monkeypatch):
         collect(OpenAICompatibleProvider(config(), transport=FakeTransport()))
 
 
-@pytest.mark.parametrize("body", [b"not json", b"[]", b"{}", b'{}{}', reply(model="wrong"),
+@pytest.mark.parametrize("body", [b"not json", b"[]", b"{}", b'{}{}', reply(model=7),
     reply(choices=[]), reply(choices=[{"message": None}]), reply(usage=[]),
     reply(choices=[{"message": {"content": None}}]),
     reply(usage={"prompt_tokens": -1}), reply(usage={"total_tokens": True}),
@@ -192,7 +192,57 @@ def test_http_errors_no_retry_or_sensitive_body(status, code):
         collect(OpenAICompatibleProvider(config(), transport=transport))
     assert exc.value.code == code
     assert KEY not in str(exc.value) and "https" not in str(exc.value)
-    assert len(transport.calls) == 1
+    # Only a 400 is retried, once, without max_tokens (server output cap).
+    assert len(transport.calls) == (2 if status == 400 else 1)
+
+
+def structured_provider(transport):
+    return OpenAICompatibleProvider(config(capabilities=Capabilities(text="supported", structured_output="supported")), transport=transport)
+
+
+def test_structured_output_degrades_on_400_and_never_weakens_parsing():
+    class Ladder(FakeTransport):
+        async def __call__(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) < 4:
+                return TransportResponse(status=400, body=b"")
+            return TransportResponse(status=200, body=reply(choices=[
+                {"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}]))
+    transport = Ladder()
+    events = collect(structured_provider(transport), request(json_schema={"name": "x", "schema": {"type": "object"}}))
+    sent = [json.loads(call["body"]) for call in transport.calls]
+    assert [body.get("response_format", {}).get("type") for body in sent] == ["json_schema", "json_object", None, None]
+    assert ["max_tokens" in body for body in sent] == [True, True, True, False]
+    assert events[-1].text == '{"ok": true}'
+
+
+@pytest.mark.parametrize("content,expected", [
+    ('```json\n{"a": 1}\n```', '{"a": 1}'),
+    ('Here is the result:\n{"a": [1, 2]}\nHope it helps.', '{"a": [1, 2]}'),
+    ('  {"a": 1}  ', '{"a": 1}'),
+])
+def test_structured_output_extracts_json_from_fences_and_prose(content, expected):
+    transport = FakeTransport(reply(choices=[{"message": {"content": content}, "finish_reason": "stop"}]))
+    events = collect(structured_provider(transport), request(json_schema={"type": "object"}))
+    assert json.loads(events[-1].text) == json.loads(expected)
+
+
+def test_nested_fragment_of_rejected_document_is_not_promoted():
+    content = 'note: {"x": NaN, "inner": {"a": 1}}'
+    transport = FakeTransport(reply(choices=[{"message": {"content": content}, "finish_reason": "stop"}]))
+    with pytest.raises(ProviderError, match="invalid_response"):
+        collect(structured_provider(transport), request(json_schema={"type": "object"}))
+
+
+@pytest.mark.parametrize("changes", [
+    {"model": "vendor/model-a-2026-01-01"},
+    {"choices": [{"message": {"content": "Hello back"}}]},
+    {"choices": [{"message": {"content": "Hello back"}, "finish_reason": "end_turn"}]},
+    {"choices": [{"message": {"content": [{"type": "reasoning", "text": "hmm"}, {"type": "text", "text": "Hello back"}]}, "finish_reason": "stop"}]},
+])
+def test_gateway_variations_are_accepted(changes):
+    events = collect(OpenAICompatibleProvider(config(), transport=FakeTransport(reply(**changes))))
+    assert events[-1].text == "Hello back"
 
 
 @pytest.mark.parametrize("error,code", [(TimeoutError(KEY), "timeout"), (OSError(KEY), "network_transient")])

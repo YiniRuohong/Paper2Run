@@ -13,12 +13,14 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 from typing import Any
 
 from .providers import CompletionRequest, Message, NormalizedEvent, ProviderError
 
 CODEGEN_PHASE = "paper_codegen"
 RESPONSE_SCHEMA_VERSION = "codegen.v1"
+CODEGEN_MAX_OUTPUT_TOKENS = 32_000
 MAX_CODE_BYTES = 64 * 1024
 MAX_CONTEXT_BYTES = 128 * 1024
 
@@ -67,7 +69,9 @@ _SYSTEM_PROMPT = (
     "paths; synthesizes or derives its dataset locally (no external data "
     "files); MUST write the test-set predictions to \"predictions.json\" as "
     "a JSON array of {\"id\": str, \"prediction\": int} and the ground-truth "
-    "labels to \"labels.json\" as a JSON object mapping id to int; and MUST "
+    "labels to \"labels.json\" as a JSON object mapping id to int (the "
+    "sandbox only collects output files under 256 KB each, so keep the test "
+    "set to AT MOST 2000 items and write compact JSON); and MUST "
     "end by printing exactly one line starting with \"SUMMARY\" followed by "
     "one JSON object summarizing the outcome. The script's first lines must "
     "be comments stating the method implemented and the data source. Never "
@@ -272,12 +276,11 @@ class CodegenService:
             policy_version=policy_version,
             response_schema_version=RESPONSE_SCHEMA_VERSION,
             # Measured gateway latency for full-script generation regularly
-            # exceeds 120s; 240s stays inside the 300s request-schema cap.
-            timeout_seconds=240.0,
-            # The gateway's CDN cuts responses at ~126s; a compact script
-            # (prompt-capped at ~80 lines) finishes comfortably inside that
-            # window at 3000 output tokens.
-            max_output_tokens=3000,
+            # exceeds 120s, and reasoning models think before writing code:
+            # use the full 300s request cap. The prompt still caps the script
+            # at ~80 lines, so non-reasoning models stop far below the budget.
+            timeout_seconds=300.0,
+            max_output_tokens=CODEGEN_MAX_OUTPUT_TOKENS,
             json_schema=CODEGEN_JSON_SCHEMA,
         )
 
@@ -300,7 +303,14 @@ class CodegenService:
             raise ProviderError("invalid_response")
         code = payload.get("code")
         notes = payload.get("notes")
-        if not isinstance(code, str) or not isinstance(notes, str):
+        # Lenient: notes are optional commentary; only the code is required.
+        if notes is None:
+            notes = ""
+        if isinstance(code, str):
+            fenced = re.fullmatch(r"\s*```[A-Za-z0-9_+-]*\s*\n(.*?)\n?```\s*", code, re.DOTALL)
+            if fenced:
+                code = fenced.group(1) + "\n"
+        if not isinstance(code, str) or not code.strip() or not isinstance(notes, str):
             raise ProviderError("invalid_response")
 
         # The generated script is untrusted model output: it may only be

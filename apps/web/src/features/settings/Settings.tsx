@@ -37,6 +37,10 @@ export default function Settings({ health, host, api }: { health: Health; host: 
 
     <DocParseSettings api={api} />
 
+    <Group title="自主实验" help="模型配置仅保存凭据引用；API Key 在自主实验页的当前内存中输入，不写入浏览器存储。SSH 使用本机预配置别名，实际连接与 GPU 能力以任务事件为准。">
+      <Row label="模型、SSH 与科研 Skills" hint="配置预算、查看能力版本、导入或启用 Skills。"><a className="btn btn-secondary btn-sm" href="#/autonomous">打开自主实验</a></Row>
+    </Group>
+
     {desktop && <Group title="桌面应用">
       <Row label="版本"><span className="ui-mono">{desktop.appVersion}</span><span className="settings-muted">{PLATFORM[desktop.platform] ?? desktop.platform}</span></Row>
       <PathRow label="数据目录" path={desktop.dataDir} onOpen={() => desktop.openPath('data')} />

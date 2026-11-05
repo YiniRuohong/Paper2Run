@@ -1,0 +1,1 @@
+{"id":"result-audit","version":"1.0.0","name":"结果核验","description":"独立指标与可比性审计","entrypoint":"SKILL.md","capabilities":["audit"],"compatibility":["paper2run.skills.v1"]}

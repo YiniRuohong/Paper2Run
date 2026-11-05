@@ -1,0 +1,1 @@
+{"id":"research-report","version":"1.0.0","name":"报告整理","description":"汇总运行事实与证据限制","entrypoint":"SKILL.md","capabilities":["report"],"compatibility":["paper2run.skills.v1"]}
