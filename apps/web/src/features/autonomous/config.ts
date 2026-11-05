@@ -5,10 +5,14 @@ export const researchTaskTypes: { value: ResearchTaskType; label: string }[] = [
   { value: 'paper_analysis', label: '论文分析' }, { value: 'method_design', label: '方法设计' },
   { value: 'coding', label: '代码建议' }, { value: 'data_analysis', label: '数据分析' }, { value: 'review', label: '科研审查' },
 ];
+/** Prototype-safe lookup of a backend string in a plain-object table ("constructor" is not a key). */
+export function own<T>(table: Record<string, T>, key: unknown): T | undefined {
+  return typeof key === 'string' && Object.hasOwn(table, key) ? table[key] : undefined;
+}
 export const researchTaskTypeLabel = (value: string) => researchTaskTypes.find(type => type.value === value)?.label ?? value;
 const EVIDENCE_KIND_LABELS: Record<string, string> = { code: '代码', environment: '环境', data: '数据', result: '结果' };
-export const evidenceKindLabel = (kind: string) => EVIDENCE_KIND_LABELS[kind] ?? kind;
-const profileName =/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+export const evidenceKindLabel = (kind: string) => own(EVIDENCE_KIND_LABELS, kind) ?? kind;
+const profileName = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 export function modelReference(profile?: ModelProfile): ProjectConfig['model'] {
   return profile ? { provider_profile: profile.id, credential_ref: profile.credential_ref ?? `profile:${profile.id}` } : { provider_profile: '', credential_ref: '' };
 }
@@ -72,6 +76,8 @@ export function validateConfig(config: ProjectConfig): void {
     if (key === 'gpu_devices') continue;
     // 修复轮次允许 0（只复核一次，不修复）；其余预算必须为正。
     if (key === 'max_repair_rounds') {
+      // 输入框清空时页面存为 NaN（保存时会变成 null）：要求填写，不当作 0。
+      if (value === null || (typeof value === 'number' && Number.isNaN(value))) throw new Error(`请填写修复轮次上限（0–${MAX_REPAIR_ROUNDS}）。`);
       if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > MAX_REPAIR_ROUNDS) throw new Error(`修复轮次上限必须为 0–${MAX_REPAIR_ROUNDS} 的整数。`);
       continue;
     }
@@ -93,7 +99,8 @@ export function protocolApproval(value: unknown): import('../../api-client/auton
   return value as import('../../api-client/autonomous.ts').ProtocolApproval;
 }
 export const terminalState = (state: string) => ['completed', 'succeeded', 'failed', 'stopped', 'cancelled', 'incomplete'].includes(state);
-export const stateLabel = (state: string) => ({ created: '已创建', queued: '排队中', starting: '启动中', running: '运行中', paused: '已暂停', blocked: '已阻塞', awaiting_decision: '等待决策', stopping: '正在停止', completed: '已完成', succeeded: '已完成', incomplete: '未完成', failed: '失败', stopped: '已停止', cancelled: '已取消' }[state] ?? state);
+const STATE_LABELS: Record<string, string> = { created: '已创建', queued: '排队中', starting: '启动中', running: '运行中', paused: '已暂停', blocked: '已阻塞', awaiting_decision: '等待决策', stopping: '正在停止', completed: '已完成', succeeded: '已完成', incomplete: '未完成', failed: '失败', stopped: '已停止', cancelled: '已取消' };
+export const stateLabel = (state: string) => own(STATE_LABELS, state) ?? state;
 export const taskStateLabel = stateLabel;
 // 任务状态到 tone 的唯一映射：进行中 run；需要人（暂停/阻塞/待决策）warn；
 // 失败 bad；正常结束 ok；其余 idle。不新造颜色。
@@ -111,7 +118,7 @@ export const taskTone = (state: string): 'ok' | 'run' | 'bad' | 'warn' | 'idle' 
 export type Outcome = 'verified' | 'completed_with_issues' | 'review_unavailable' | 'blocked_by_safety';
 const OUTCOMES: Record<Outcome, { label: string; tone: Tone; caption: string | null }> = {
   verified: { label: '已复核', tone: 'ok', caption: '复核通过不等于复现成立；可比性见报告' },
-  completed_with_issues: { label: '完成·有未解决问题', tone: 'warn', caption: null },
+  completed_with_issues: { label: '完成，有未解决问题', tone: 'warn', caption: null },
   review_unavailable: { label: '复核不可用', tone: 'warn', caption: null },
   blocked_by_safety: { label: '安全终止', tone: 'bad', caption: null },
 };
@@ -122,9 +129,10 @@ export const outcomeTone = (outcome: unknown): Tone | null =>
   knownOutcome(outcome) ? OUTCOMES[outcome].tone : typeof outcome === 'string' && outcome ? 'idle' : null;
 
 /** 报告 outcome_reason 的说明；未登记的值原样返回（未知就写未知）。 */
+const OUTCOME_REASONS: Record<string, string> = { review_failed: '独立复核多次未能完成', budget_exhausted: '预算耗尽', safety_blocked: '容器隔离校验失败' };
 export const outcomeReasonLabel = (reason: string | null): string | null =>
   reason === null ? null
-    : ({ review_failed: '独立复核多次未能完成', budget_exhausted: '预算耗尽', safety_blocked: '容器隔离校验失败' } as Record<string, string>)[reason] ?? reason;
+    : own(OUTCOME_REASONS, reason) ?? reason;
 
 export interface TaskDisplay {
   /** 主状态词：有结局时是结局，否则是生命周期状态。 */
@@ -152,7 +160,7 @@ export function taskBucket(task: { state: string; outcome?: string | null }): 'a
   return taskDisplay(task).finished ? 'done' : 'active';
 }
 
-// 后端错误码的中文说明（错误提示仍附 code 与 request_id）。
+// 后端错误码的中文说明：附在后端消息之后（保留 missing: … 等细节），并附 code 与 request_id。
 const ERROR_EXPLANATIONS: Record<string, string> = {
   TASK_FINISHED: '任务已有结局，不能继续；可以导出 ZIP 保留证据',
   LEGACY_TASK: '该任务创建于新版 harness 之前，只能导出',
@@ -160,8 +168,9 @@ const ERROR_EXPLANATIONS: Record<string, string> = {
   DECISION_MISMATCH: '该决定已被处理或已过期，已刷新任务',
   CANDIDATE_UNDER_REVIEW: '候选结果正在独立复核，证据已冻结；复核结束后才能修改',
   CANDIDATE_INCOMPLETE: '候选结果不满足提交条件，详见事件日志',
+  TASK_BUSY: '上一个执行进程仍在暂停，请稍后重试',
 };
-export const errorExplanation = (code: string): string | null => ERROR_EXPLANATIONS[code] ?? null;
+export const errorExplanation = (code: string): string | null => own(ERROR_EXPLANATIONS, code) ?? null;
 /** 决定提交冲突：两次点击竞争或决定已被替换。刷新任务即可，不当作错误。 */
 export const decisionSuperseded = (code: string) => code === 'INVALID_STATE' || code === 'DECISION_MISMATCH';
 

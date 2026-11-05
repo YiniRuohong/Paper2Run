@@ -1,4 +1,4 @@
-import type { AutonomousEvent } from '../../api-client/autonomous';
+import type { AutonomousEvent, AutonomousTask } from '../../api-client/autonomous';
 import { Badge, Card, CardHeader, StatusWord, type Tone } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
@@ -31,10 +31,11 @@ const CALL_STATUS: Record<SpecialistCall['status'], { text: string; tone: Tone }
   running: { text: '进行中', tone: 'run' },
   done: { text: '已返回', tone: 'idle' },
   failed: { text: '调用失败', tone: 'bad' },
+  missing: { text: '未返回', tone: 'idle' },
 };
 
-export function SpecialistCalls({ events, configured }: { events: AutonomousEvent[]; configured: number }) {
-  const calls = specialistCalls(events);
+export function SpecialistCalls({ events, task, configured }: { events: AutonomousEvent[]; task: Pick<AutonomousTask, 'state' | 'outcome'>; configured: number }) {
+  const calls = specialistCalls(events, task);
   return <Disclosure variant="card" title="科研专家调用" count={calls.length} subtitle="建议，不是执行证据">
     {calls.length === 0
       ? <p className="ui-help auto-quiet">{configured > 0
@@ -50,8 +51,8 @@ export function SpecialistCalls({ events, configured }: { events: AutonomousEven
           </div>
           <p className="auto-call-meta">模型 <code className="ui-mono">{call.model ?? '未知'}</code></p>
           <p className="auto-call-meta">理由：{call.reason ?? '未提供'}</p>
-          {call.status !== 'running' && <Disclosure variant="sub" title="专家回复（模型叙述，不是执行证据）">
-            {call.text ? <pre className="ui-code">{call.text}</pre> : <p className="ui-help">没有返回内容。</p>}
+          {(call.status === 'done' || call.status === 'failed') && <Disclosure variant="sub" title="专家回复（模型叙述，不是执行证据）">
+            {call.text ? <pre className="ui-code is-wrap">{call.text}</pre> : <p className="ui-help">没有返回内容。</p>}
           </Disclosure>}
         </li>)}
       </ul>}

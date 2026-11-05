@@ -3,7 +3,7 @@ import { Badge, Card, CardHeader, KV, KVList, StatusWord, type Tone } from '../.
 import { CopyButton } from '../../ui/Controls';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { evidenceKindLabel, maxRepairRounds } from './config';
+import { evidenceKindLabel, maxRepairRounds, own } from './config';
 import { parseCandidate, parseReviews, type ReviewView } from './report';
 import { reviewFailures } from './stages';
 
@@ -38,7 +38,7 @@ export function CandidateCard({ task, events }: { task: AutonomousTask; events: 
   const exhausted = task.outcome === 'completed_with_issues' && round !== null && round >= max;
   const malformed = (task.candidate != null && candidate === null) || reviews === null;
   const status = candidate
-    ? REVIEW_STATUS[candidate.reviewStatus ?? ''] ?? { text: `未知（${candidate.reviewStatus ?? '无状态'}）`, tone: 'idle' as Tone }
+    ? own(REVIEW_STATUS, candidate.reviewStatus) ?? { text: `未知（${candidate.reviewStatus ?? '无状态'}）`, tone: 'idle' as Tone }
     : { text: '未提交候选', tone: 'idle' as Tone };
   const history = reviews ?? [];
   const empty = !candidate && history.length === 0 && failures.length === 0 && !malformed;
@@ -82,7 +82,7 @@ export function CandidateCard({ task, events }: { task: AutonomousTask; events: 
             </ul>}
         </Disclosure>
         {candidate.summary && <Disclosure variant="sub" title="Pi 提交说明（模型叙述，不是执行证据）">
-          <pre className="ui-code" aria-label="Pi 提交说明（只读）">{candidate.summary}</pre>
+          <pre className="ui-code is-wrap" aria-label="Pi 提交说明（只读）">{candidate.summary}</pre>
         </Disclosure>}
       </div>}
 
@@ -116,7 +116,7 @@ export function CandidateCard({ task, events }: { task: AutonomousTask; events: 
 }
 
 function ReviewEntry({ review }: { review: ReviewView }) {
-  const verdict = VERDICT[review.verdict] ?? { text: `未知（${review.verdict}）`, tone: 'idle' as Tone };
+  const verdict = own(VERDICT, review.verdict) ?? { text: `未知（${review.verdict}）`, tone: 'idle' as Tone };
   return <>
     <div className="auto-review-head">
       <StatusWord tone={verdict.tone}>{verdict.text}</StatusWord>

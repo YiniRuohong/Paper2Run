@@ -17,10 +17,10 @@ import './autonomous.css';
 
 const defaultApi = createAutonomousApi();
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
-// 已知错误码换成中文说明；code 与 request_id 始终保留。
+// 已知错误码在后端消息之后附中文说明（保留 missing: … 等细节）；code 与 request_id 始终保留。
 export const errorDetail = (error: unknown) =>
   error instanceof ApiError
-    ? `${errorExplanation(error.code) ?? error.message} (${error.code}${error.requestId ? ` · ${error.requestId}` : ''})`
+    ? `${error.message}${errorExplanation(error.code) ? `；${errorExplanation(error.code)}` : ''} (${error.code}${error.requestId ? ` · ${error.requestId}` : ''})`
     : error instanceof Error ? error.message : String(error);
 
 type Recovery = { needed: boolean; retainedJobs: string[] };
@@ -196,6 +196,8 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
     : needsRecovery ? '请先重新输入模型密钥'
     : '';
   const pauseHint = hasOutcome ? '任务已有结局' : task && !terminal && task.state !== 'running' ? '只有运行中的任务可以暂停' : undefined;
+  // 结局已定但生命周期仍在暂停：停止仍可用，用来终止保留的后台作业。
+  const stopHint = hasOutcome && !terminal ? '结局已定；停止会终止仍保留的后台作业' : '停止任务（不会停止远端实例计费）';
   const messageHint = hasOutcome ? '任务已有结局，不再接收指令' : terminal ? '任务已结束' : undefined;
 
   const taskSkills = task?.config_snapshot?.harness?.skills ?? [];
@@ -228,7 +230,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
         <label className="ui-field auto-taskbar-field"><span className="ui-field-label">项目任务</span>
           <select value={taskId} disabled={busy} onChange={e => { if (e.target.value) window.location.hash = `#/task/${encodeURIComponent(e.target.value)}`; }}>
             {!tasks.some(t => t.id === taskId) && <option value={taskId}>{taskId}</option>}
-            {tasks.map(t => <option key={t.id} value={t.id}>{t.objective} · {taskDisplay(t).text}</option>)}
+            {tasks.map(t => <option key={t.id} value={t.id}>{t.objective}（{taskDisplay(t).text}）</option>)}
           </select>
         </label>
         <a className="btn btn-secondary" href="#/new">新建实验</a>
@@ -297,7 +299,8 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
           <button type="button" className="btn btn-secondary" disabled={busy || terminal || hasOutcome || task.state !== 'running'} title={pauseHint} onClick={() => void act(async () => { await controlTask(task.id, 'pause'); })}>暂停</button>
           <button type="button" className="btn btn-secondary" disabled={busy || terminal || !canResume} title={resumeHint || undefined} onClick={() => void act(async () => { await controlTask(task.id, 'resume'); })}>继续</button>
           {resumeHint && <span className="ui-help">{resumeHint}</span>}
-          <button type="button" className="btn btn-secondary" disabled={busy || terminal} title="停止任务（不会停止远端实例计费）" onClick={() => void act(async () => { await controlTask(task.id, 'stop'); })}>停止</button>
+          <button type="button" className="btn btn-secondary" disabled={busy || terminal} title={stopHint} onClick={() => void act(async () => { await controlTask(task.id, 'stop'); })}>停止</button>
+          {hasOutcome && !terminal && <span className="ui-help">{stopHint}</span>}
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void act(() => api.exportTask(task.id))}><Icon name="download" size={14} />导出 ZIP</button>
         </div>
 
@@ -319,7 +322,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
 
         <UsageView usage={(task.usage ?? {}) as Record<string, unknown>} limits={task.config_snapshot?.limits as unknown as Record<string, unknown> | undefined} budgetExhausted={budgetReason} />
 
-        <SpecialistCalls events={events} configured={task.config_snapshot?.specialists?.length ?? 0} />
+        <SpecialistCalls events={events} task={task} configured={task.config_snapshot?.specialists?.length ?? 0} />
 
         {taskSkills.length > 0 && <Card>
           <CardHeader icon="spark" title="本任务固定的 Skills 快照" subtitle="运行期间固定使用以下版本，不随后续更新变化。" />

@@ -110,6 +110,7 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
             <span className="ui-row-main">
               <span className="ui-row-title" title={t.objective}>{t.objective || '（未命名实验）'}</span>
               <span className="ui-row-sub ui-mono">{t.id}</span>
+              {shown.caption && <span className="ui-row-sub">{shown.caption}</span>}
             </span>
             <span className="ui-row-end">
               <StatusWord tone={shown.tone}>{shown.text}</StatusWord>

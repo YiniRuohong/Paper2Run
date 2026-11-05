@@ -185,6 +185,8 @@ button.ui-row { width: 100%; border: 0; background: transparent; text-align: lef
   margin: 0; padding: 12px 14px; max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-m);
   background: var(--code-bg); color: var(--text); font: 12px/1.65 var(--mono); white-space: pre; tab-size: 4;
 }
+/* Prose from a model (specialist replies, candidate summaries): wrap instead of scrolling sideways. */
+.ui-code.is-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ---------- skeleton / empty ---------- */
 .ui-skel { display: block; height: 10px; border-radius: 5px; background: var(--raised); animation: ui-pulse 1.4s ease-in-out infinite; }

@@ -55,21 +55,95 @@ test('a rejected protocol change sits with the approval request in the plan phas
   assert.match(item.detail, /keep metric/);
 });
 
+// Real bridge shapes (apps/harness/bridge.mjs research_delegate): started, then
+// research_delegation_completed only on success, and always a delegated
+// message_end in `finally` whose message.stopReason is error/aborted on failure.
+const delegationBase = { specialist_id: 'advisor', task_type: 'method_design', model: 'm', reason: 'check design', evidence_status: 'unverified_advisory' };
+const dStart = seq => ev(seq, 'sdk_event', { type: 'research_delegation_started', ...delegationBase });
+const dTurn = seq => ev(seq, 'sdk_event', { type: 'turn_start', delegated: true, specialist_id: 'advisor', model: 'm' });
+const dDone = seq => ev(seq, 'sdk_event', { type: 'research_delegation_completed', ...delegationBase, text: 'use k-fold' });
+const dEnd = (seq, stopReason) => ev(seq, 'sdk_event', { type: 'message_end', delegated: true, specialist_id: 'advisor', message: { role: 'assistant', model: 'm', content: [{ type: 'text', text: '' }], usage: {}, stopReason } });
+
 test('specialist delegations are model-narrative sub-steps and never green', () => {
-  const start = (seq, extra = {}) => ev(seq, 'sdk_event', { type: 'research_delegation_started', specialist_id: 'advisor', task_type: 'method_design', model: 'm', reason: 'check design', evidence_status: 'unverified_advisory', ...extra });
-  const end = (seq, extra = {}) => ev(seq, 'sdk_event', { type: 'research_delegation_completed', specialist_id: 'advisor', task_type: 'method_design', model: 'm', reason: 'check design', evidence_status: 'unverified_advisory', text: 'use k-fold', ...extra });
-  const { stages } = buildStages({ id: 't', state: 'running' }, [tool(1, 'a', 'read', { path: 'p.md' }), start(2), end(3), start(4), end(5, { is_error: true, text: '' })]);
+  const events = [tool(1, 'a', 'read', { path: 'p.md' }), dStart(2), dTurn(3), dDone(4), dEnd(5, 'stop'), dStart(6), dTurn(7), dEnd(8, 'error'), dStart(9), dEnd(10, 'aborted'), dStart(11)];
+  const { stages } = buildStages({ id: 't', state: 'running' }, events);
   const items = byId(stages).plan.items.filter(i => i.label === '专家建议（模型叙述）');
-  assert.equal(items.length, 2, 'one sub-step per delegation, the completion updates it');
+  assert.equal(items.length, 4, 'one sub-step per delegation; completion and message_end update it');
   for (const item of items) assert.notEqual(item.tone, 'ok');
-  assert.match(items[0].detail, /advisor · 方法设计/);
-  assert.match(items[0].detail, /已返回/);
-  assert.equal(items[1].tone, 'bad');
-  const calls = specialistCalls([start(2), end(3), start(4)]);
-  assert.deepEqual(calls.map(c => c.status), ['done', 'running']);
+  assert.match(items[0].detail, /advisor · 方法设计，已返回/);
+  assert.equal(items[0].tone, 'idle');
+  for (const failed of [items[1], items[2]]) { assert.equal(failed.tone, 'bad'); assert.match(failed.detail, /调用失败/); }
+  assert.match(items[3].detail, /进行中/);
+  const calls = specialistCalls(events);
+  assert.deepEqual(calls.map(c => c.status), ['done', 'failed', 'failed', 'running']);
   assert.equal(calls[0].text, 'use k-fold');
+  assert.equal(calls[1].text, null, 'a failed call has no advisory text');
   assert.equal(calls[0].taskTypeLabel, '方法设计');
   assert.equal(calls[0].reason, 'check design');
+  assert.equal(calls[0].model, 'm');
+});
+
+test('a delegation still open when the task is finished or has an outcome shows 未返回', () => {
+  const events = [dStart(1), dTurn(2)];
+  for (const task of [{ id: 't', state: 'stopped' }, { id: 't', state: 'paused', outcome: 'completed_with_issues' }]) {
+    assert.deepEqual(specialistCalls(events, task).map(c => c.status), ['missing'], JSON.stringify(task));
+    const item = buildStages(task, events).stages.flatMap(s => s.items).find(i => i.label === '专家建议（模型叙述）');
+    assert.match(item.detail, /未返回/);
+    assert.equal(item.tone, 'idle');
+  }
+  assert.deepEqual(specialistCalls(events, { id: 't', state: 'running' }).map(c => c.status), ['running']);
+  assert.deepEqual(specialistCalls(events).map(c => c.status), ['running'], 'without a task the call is still running');
+});
+
+test('the activity view has no dead is_error branch and labels every call status', async () => {
+  const source = await readFile(new URL('../src/features/autonomous/stages.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /is_error \|\| !!p\.error|delegationFailed/);
+  const views = await readFile(new URL('../src/features/autonomous/ActivityViews.tsx', import.meta.url), 'utf8');
+  assert.match(views, /missing: \{ text: '未返回', tone: 'idle' \}/);
+  assert.match(views, /failed: \{ text: '调用失败', tone: 'bad' \}/);
+});
+
+// The review phase is a program result, so its mark follows the outcome and the
+// latest recorded verdict, never just "a later phase started".
+const reviewMark = (task, events) => byId(buildStages({ id: 't', ...task }, events).stages).review.mark;
+const submitted = [tool(1, 'b', 'submit_candidate'), done(2, 'b', 'submit_candidate'), ev(3, 'candidate_frozen', { snapshot_sha256: sha('a'), round: 0 })];
+const verdict = (seq, v) => ev(seq, 'review_recorded', { snapshot_sha256: sha('a'), verdict: v, findings: [], attempt: 1 });
+const finishedWith = (seq, outcome) => [ev(seq, 'report_created', { outcome }), ev(seq + 1, 'task_finished', { state: 'completed', outcome })];
+
+test('review phase is done only for verified or a passing latest verdict', () => {
+  assert.equal(reviewMark({ state: 'completed', outcome: 'verified' }, [...submitted, verdict(4, 'pass'), ...finishedWith(5, 'verified')]), 'done');
+  assert.equal(reviewMark({ state: 'stopped', outcome: null }, [...submitted, verdict(4, 'issues'), verdict(5, 'pass'), ev(6, 'task_finished', { state: 'stopped' })]), 'done');
+});
+
+test('review phase needs attention for issues, exhausted rounds and unavailable review', () => {
+  assert.equal(reviewMark({ state: 'completed', outcome: 'completed_with_issues' }, [...submitted, verdict(4, 'issues'), ...finishedWith(5, 'completed_with_issues')]), 'attention');
+  assert.equal(reviewMark({ state: 'stopped', outcome: null }, [...submitted, verdict(4, 'pass'), verdict(5, 'issues'), ev(6, 'task_finished', { state: 'stopped' })]), 'attention', 'the latest verdict decides');
+  assert.equal(reviewMark({ state: 'completed', outcome: 'review_unavailable' }, [...submitted, ev(4, 'review_failed', { attempt: 2, reason: 'x' }), ...finishedWith(5, 'review_unavailable')]), 'attention');
+  assert.equal(reviewMark({ state: 'stopped', outcome: null }, [...submitted, ev(4, 'review_failed', { attempt: 1, reason: 'x' }), ev(5, 'task_finished', { state: 'stopped' })]), 'attention', 'failed attempts and no recorded review');
+  // A repair round: execution is active again and the last review found issues.
+  assert.equal(reviewMark({ state: 'running', repair_round: 1 }, [...submitted, verdict(4, 'issues'), tool(5, 'c', 'write', { path: 'train.py' })]), 'attention');
+});
+
+test('review phase fails on a safety block; it keeps running while a review is live', () => {
+  assert.equal(reviewMark({ state: 'stopped', outcome: 'blocked_by_safety' }, [...submitted, ev(4, 'safety_blocked', { code: 'X' }), ev(5, 'task_finished', { state: 'stopped', outcome: 'blocked_by_safety' })]), 'failed');
+  assert.equal(reviewMark({ state: 'running' }, submitted), 'running');
+});
+
+test('a phase after the active one that was started in an earlier round shows open, not done', () => {
+  const events = [tool(1, 'a', 'register_artifact', { name: 'x' }), done(2, 'a', 'register_artifact'), ev(3, 'continuation_sent', { reason: 'review_issues', repair_round: 1 }), tool(4, 'c', 'write', { path: 'x.py' })];
+  const s = byId(buildStages({ id: 't', state: 'running', repair_round: 1 }, events).stages);
+  assert.equal(s.execute.mark, 'running');
+  assert.equal(s.evidence.mark, 'open');
+  assert.equal(s.report.mark, 'locked');
+});
+
+test('backend strings never hit prototype keys in the lookup tables', () => {
+  const events = [tool(1, 'a', 'constructor'), done(2, 'a', 'constructor'), ev(3, 'toString'), ev(4, 'artifact_frozen', { name: 'm', kind: '__proto__', protocol_sha256: null })];
+  const { stages, active } = buildStages({ id: 't', state: 'running' }, events);
+  assert.equal(typeof active, 'string');
+  assert.ok(stages.every(s => typeof s.id === 'string'));
+  const files = toWbFiles([{ path: 'artifacts/unversioned/m', source: 'artifact', bytes: 1, media_type: 'text/plain', sha256: 'h', kind: 'constructor', protocol_sha256: null, modified_at: null }]);
+  assert.equal(files[0].tags[0].text, 'constructor');
 });
 
 test('safety_blocked is a bad sub-step that ends in the report phase', () => {
@@ -110,6 +184,7 @@ test('a repair round moves the active phase back to execution; a worker exit doe
   const { stages, active } = buildStages({ id: 't', state: 'running', repair_round: 1 }, events);
   assert.equal(active, 'execute');
   assert.equal(byId(stages).execute.mark, 'running');
+  assert.equal(byId(stages).review.mark, 'attention', 'the last review found issues');
   assert.match(byId(stages).review.items.at(-1).label, /进入第 1 轮修复/);
   const paused = buildStages({ id: 't', state: 'paused' }, [tool(1, 'c', 'execute', { command: 'x' }), ev(2, 'task_paused'), ev(3, 'worker_exited', { state: 'paused' })]);
   assert.equal(paused.active, 'execute');

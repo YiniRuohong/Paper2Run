@@ -177,7 +177,7 @@ test('a task with an outcome is finished: resume is disabled with the reason and
   for (const state of ['paused', 'stopped']) {
     const h = await harness({ taskOver: { state, outcome: 'completed_with_issues', repair_round: 3 } });
     const workbench = h.nodes().find(n => n.type === 'Workbench');
-    assert.equal(workbench.props.status.text, '完成·有未解决问题', state);
+    assert.equal(workbench.props.status.text, '完成，有未解决问题', state);
     assert.equal(workbench.props.status.tone, 'warn', state);
     const resume = h.button('继续');
     assert.equal(resume.props.disabled, true, state);
@@ -238,4 +238,14 @@ test('a decision that was already handled or expired refreshes the task instead 
   const other = await harness({ taskOver: { pending_decision: pendingDecision }, decideError: new ApiError('boom', 500, 'INTERNAL', 'req-x') });
   other.nodes().find(n => n.type === 'ApprovalCard').props.onApprove(); await other.settle();
   assert.match(JSON.stringify(other.nodes().find(n => n.type === 'div' && n.props.role === 'alert').children), /INTERNAL/);
+});
+
+test('stop stays available on a paused task with an outcome and says what it does', async () => {
+  const h = await harness({ taskOver: { state: 'paused', outcome: 'completed_with_issues' } });
+  const stop = h.button('停止');
+  assert.equal(stop.props.disabled, false);
+  assert.equal(stop.props.title, '结局已定；停止会终止仍保留的后台作业');
+  assert.ok(h.nodes().some(n => n.type === 'span' && n.props.className === 'ui-help' && (n.children ?? []).flat(Infinity).includes('结局已定；停止会终止仍保留的后台作业')));
+  const running = await harness({ taskOver: { state: 'running' } });
+  assert.equal(running.button('停止').props.title, '停止任务（不会停止远端实例计费）');
 });

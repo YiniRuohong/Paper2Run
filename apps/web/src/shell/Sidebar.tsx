@@ -47,7 +47,7 @@ export function Sidebar({ view, taskId, recent, recentFailed, health, host, onHi
               const label = shown.lifecycle ? `${shown.text}，${shown.lifecycle}` : shown.text;
               const current = view === 'task' && taskId === t.id;
               return <li key={t.id}>
-                <a href={taskHref(t.id)} className={`side-item side-sub-item${current ? ' on' : ''}`} aria-current={current ? 'page' : undefined} title={`${t.objective} · ${label}`}>
+                <a href={taskHref(t.id)} className={`side-item side-sub-item${current ? ' on' : ''}`} aria-current={current ? 'page' : undefined} title={`${t.objective} · ${label}${shown.caption ? `；${shown.caption}` : ''}`}>
                   <Dot tone={tone} /><span className="side-sub-title">{t.objective}</span>
                   <span className="sr-only">（{label}）</span>
                 </a>

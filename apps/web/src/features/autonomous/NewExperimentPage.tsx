@@ -379,7 +379,7 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
             <input type="number" min="1" step="1" value={limits[name]} onChange={e => update('limits', { ...limits, [name]: Number(e.target.value) })} /></label>
         ))}
         <label className="ui-field"><span className="ui-field-label">修复轮次上限<small>独立复核发现问题后 Pi 最多修复的轮数，0–{MAX_REPAIR_ROUNDS}；0 表示只复核一次</small></span>
-          <input type="number" min="0" max={MAX_REPAIR_ROUNDS} step="1" value={limits.max_repair_rounds ?? DEFAULT_REPAIR_ROUNDS} onChange={e => update('limits', { ...limits, max_repair_rounds: Number(e.target.value) })} /></label>
+          <input type="number" min="0" max={MAX_REPAIR_ROUNDS} step="1" value={limits.max_repair_rounds === undefined ? DEFAULT_REPAIR_ROUNDS : Number.isNaN(limits.max_repair_rounds) ? '' : limits.max_repair_rounds} onChange={e => update('limits', { ...limits, max_repair_rounds: e.target.value === '' ? NaN : Number(e.target.value) })} /></label>
         <label className="ui-field"><span className="ui-field-label">GPU 设备（逗号分隔，可留空）</span>
           <input value={limits.gpu_devices.join(',')} onChange={e => update('limits', { ...limits, gpu_devices: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} /></label>
       </div>

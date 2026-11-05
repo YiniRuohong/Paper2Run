@@ -11,7 +11,7 @@ import { parseReport, parseCandidate, parseReviews } from '../src/features/auton
 
 test('each outcome maps to its own word and tone; verified carries the reproduction caveat', () => {
   assert.deepEqual([outcomeLabel('verified'), outcomeTone('verified')], ['已复核', 'ok']);
-  assert.deepEqual([outcomeLabel('completed_with_issues'), outcomeTone('completed_with_issues')], ['完成·有未解决问题', 'warn']);
+  assert.deepEqual([outcomeLabel('completed_with_issues'), outcomeTone('completed_with_issues')], ['完成，有未解决问题', 'warn']);
   assert.deepEqual([outcomeLabel('review_unavailable'), outcomeTone('review_unavailable')], ['复核不可用', 'warn']);
   assert.deepEqual([outcomeLabel('blocked_by_safety'), outcomeTone('blocked_by_safety')], ['安全终止', 'bad']);
   assert.equal(outcomeLabel(null), null);
@@ -22,7 +22,7 @@ test('each outcome maps to its own word and tone; verified carries the reproduct
 test('a task with an outcome is finished even when paused or stopped, with no paused notice', () => {
   for (const state of ['paused', 'stopped', 'stopping', 'completed']) {
     const shown = taskDisplay({ state, outcome: 'completed_with_issues', pending_decision: null });
-    assert.equal(shown.text, '完成·有未解决问题', state);
+    assert.equal(shown.text, '完成，有未解决问题', state);
     assert.equal(shown.tone, 'warn', state);
     assert.equal(shown.finished, true, state);
     assert.equal(shown.pausedNotice, false, state);
@@ -140,4 +140,50 @@ test('the report view shows the outcome block before the verdict block and never
   const conclusionAt = view.indexOf('<ConclusionCard');
   assert.ok(outcomeAt > 0 && outcomeAt < conclusionAt, 'outcome block comes first');
   assert.match(view, /not_comparable' \? 'warn'/);
+});
+
+test('lookups on backend strings are prototype-safe', async () => {
+  const { stateLabel: label, errorExplanation: explain, outcomeReasonLabel, evidenceKindLabel, outcomeLabel: outcome } = await import('../src/features/autonomous/config.ts');
+  for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    assert.equal(label(key), key, key);
+    assert.equal(explain(key), null, key);
+    assert.equal(outcomeReasonLabel(key), key, key);
+    assert.equal(evidenceKindLabel(key), key, key);
+    assert.equal(outcome(key), `未知结局（${key}）`, key);
+  }
+  for (const file of ['CandidateCard.tsx', 'config.ts', 'stages.ts']) {
+    const source = await readFile(new URL(`../src/features/autonomous/${file}`, import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /(REVIEW_STATUS|VERDICT|ERROR_EXPLANATIONS|TOOL_PHASE|EVENT_PHASE|EVIDENCE_KIND_LABELS)\[/, `${file}: use own() instead of a bare index`);
+  }
+});
+
+test('error detail keeps the backend message and appends the explanation', async () => {
+  const { errorDetail } = await import('./helpers/error-detail.mjs');
+  const { ApiError } = await import('../src/api-client/client.ts');
+  const text = errorDetail(new ApiError('missing: data artifact', 409, 'CANDIDATE_INCOMPLETE', 'req-1'));
+  assert.match(text, /missing: data artifact/);
+  assert.match(text, /候选结果不满足提交条件/);
+  assert.match(text, /\(CANDIDATE_INCOMPLETE · req-1\)$/);
+  assert.equal(errorExplanation('TASK_BUSY'), '上一个执行进程仍在暂停，请稍后重试');
+  assert.equal(errorDetail(new ApiError('boom', 500, 'OTHER')), 'boom (OTHER)');
+});
+
+test('an emptied repair-round field is invalid, not zero', async () => {
+  const config = defaultConfig('p'); config.model = { provider_profile: 'm', credential_ref: 'profile:m' }; config.experiment.objective = 'test';
+  for (const value of [NaN, null]) assert.throws(() => validateConfig({ ...config, limits: { ...config.limits, max_repair_rounds: value } }), /请填写修复轮次上限（0–10）/, String(value));
+  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /e\.target\.value === '' \? NaN/, 'an empty input is stored as NaN, which validateConfig rejects');
+});
+
+test('the verified caveat appears in the overview row and the sidebar title, with at most one · per line', async () => {
+  assert.equal(outcomeLabel('completed_with_issues').includes('·'), false);
+  const overview = await readFile(new URL('../src/features/overview/OverviewPage.tsx', import.meta.url), 'utf8');
+  assert.match(overview, /shown\.caption &&/);
+  const sidebar = await readFile(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8');
+  assert.match(sidebar, /shown\.caption/);
+  assert.match(taskDisplay({ state: 'completed', outcome: 'verified' }).caption, /^复核通过不等于复现成立/);
+  const page = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
+  for (const source of [sidebar, page]) {
+    for (const line of source.split('\n').filter(l => /title=\{`|<option /.test(l))) assert.ok((line.match(/ · /g) ?? []).length <= 1, line.trim());
+  }
 });
