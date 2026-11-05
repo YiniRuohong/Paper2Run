@@ -54,15 +54,22 @@ def round_artifacts(row):
             if a["protocol_sha256"] == current and a.get("round", 0) == round_]
 
 
+def ensure_not_under_review(row):
+    candidate = (row.harness_json or {}).get("candidate")
+    if candidate and candidate.get("review_status") == "pending":
+        fail("CANDIDATE_UNDER_REVIEW", "a candidate is under review; evidence is frozen until it completes", 409)
+
+
 def register(service, target, task_id, args):
     name = safe_name(args["name"])
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)
+        ensure_not_under_review(row)
         root = artifact_root(service, row)
         version = row.protocol_json["sha256"] if row.protocol_json else None
         round_ = None if row.harness_json is None else current_round(row)
         scope = [a for a in row.artifacts_json
-                 if a["protocol_sha256"] == version and a.get("round") == round_]
+                 if a["protocol_sha256"] == version and a.get("round", 0) == (0 if round_ is None else round_)]
         if any(a["name"] == name for a in scope):
             fail("ARTIFACT_IMMUTABLE", "evidence is immutable within a protocol version and repair round", 409)
         if len(scope) >= 256:
@@ -87,6 +94,7 @@ def register(service, target, task_id, args):
         info["round"] = round_
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)
+        ensure_not_under_review(row)
         row.report_json = None
         service.event(db, row, "artifact_frozen", info)
         info["sequence"] = row.event_sequence
@@ -129,25 +137,13 @@ def evaluation(service, row):
     return result
 
 
-def report(service, db, row, narrative=""):
-    try:
-        calculated = evaluation(service, row)
-    except (ValueError, OSError) as exc:
-        calculated = {"verdict": "not_comparable", "comparison_eligible": False,
-                      "metrics": {}, "reasons": [str(exc)]}
+def entrypoint_executions(db, row):
+    """Observed execute/status facts, each flagged by whether it ran the protocol entrypoint directly."""
     current = row.protocol_json["sha256"] if row.protocol_json else None
-    artifacts = round_artifacts(row)
-    expected = row.protocol_json["protocol"]["expected_artifacts"] if row.protocol_json else []
-    names = {a["name"] for a in artifacts}
-    missing = sorted(set(expected) - names)
-    kinds = {a["kind"] for a in artifacts}
-    missing_kinds = sorted({"code", "environment", "data", "result"} - kinds)
     facts = db.scalars(select(Event).where(Event.task_id == row.id, Event.type == "tool_completed").order_by(Event.sequence)).all()
     import shlex
     jobs = {j.get("job_id"): j for j in row.jobs_json.values()}
     entrypoint = row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None
-    frozen_code = next((a for a in artifacts if a["kind"] == "code" and
-                        entrypoint in (a["name"], a["source_path"])), None)
     executions = []
     for fact in facts:
         if fact.payload.get("name") not in ("execute", "status"):
@@ -175,6 +171,25 @@ def report(service, db, row, narrative=""):
                        and not any(t and all(char in "();<>|&" for char in t) for t in tokens))
         executions.append({"sequence": fact.sequence, "tool": fact.payload.get("name"), "command": command,
             "result": observation, "matches_protocol_entrypoint": matches})
+    return executions
+
+
+def report(service, db, row, narrative=""):
+    try:
+        calculated = evaluation(service, row)
+    except (ValueError, OSError) as exc:
+        calculated = {"verdict": "not_comparable", "comparison_eligible": False,
+                      "metrics": {}, "reasons": [str(exc)]}
+    artifacts = round_artifacts(row)
+    expected = row.protocol_json["protocol"]["expected_artifacts"] if row.protocol_json else []
+    names = {a["name"] for a in artifacts}
+    missing = sorted(set(expected) - names)
+    kinds = {a["kind"] for a in artifacts}
+    missing_kinds = sorted({"code", "environment", "data", "result"} - kinds)
+    executions = entrypoint_executions(db, row)
+    entrypoint = row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None
+    frozen_code = next((a for a in artifacts if a["kind"] == "code" and
+                        entrypoint in (a["name"], a["source_path"])), None)
     observed_success = bool(frozen_code) and any(f["matches_protocol_entrypoint"] and f["result"].get("exit_code") == 0 for f in executions)
     verification = None
     if row.reference_values_json is not None and row.protocol_json:

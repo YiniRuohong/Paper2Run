@@ -8,6 +8,7 @@ import time
 
 from p2r_persistence.models import utcnow
 from . import evidence
+from .candidate import freeze
 from .security import fail
 from p2r_orchestration.service import ServiceError
 
@@ -70,15 +71,10 @@ def dispatch(service, target, task_id, name, args, request_id):
             result = service.propose(db, row, args["protocol"], args["reason"])
             db.commit()
             return result
-        if name == "evaluate":
-            result = evidence.evaluation(service, row)
-            service.event(db, row, "evaluation", result)
+        if name == "note_progress":
+            service.event(db, row, "progress_noted", args)
             db.commit()
-            return result
-        if name == "report":
-            result = evidence.report(service, db, row, args["narrative"])
-            db.commit()
-            return result
+            return {"recorded": True}
         db.commit()
     if name in ("background", "execute"):
         result = target.start(args["command"], launch_id, timeout)
@@ -109,6 +105,11 @@ def dispatch(service, target, task_id, name, args, request_id):
         return result
     if name == "register_artifact":
         return evidence.register(service, target, task_id, args)
+    if name == "submit_candidate":
+        candidate = freeze(service, target, task_id, args["summary"])
+        return {"status": "candidate_submitted", "snapshot_sha256": candidate["snapshot_sha256"],
+                "round": candidate["round"],
+                "next": "End this turn. Evaluation and an independent review run after the turn; findings, if any, arrive in the next message."}
     return getattr(target, name)(**args)
 
 

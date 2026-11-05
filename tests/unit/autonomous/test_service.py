@@ -184,7 +184,8 @@ def test_artifacts_are_frozen_exported_and_hash_checked(service):
     for name, content in [("predictions.json", '[{"id":"1","prediction":3}]'), ("labels.json", '[{"id":"1","label":2}]')]:
         target.write(name, content)
         dispatch(service, target, task_id, "register_artifact", {"path": name, "name": name, "kind": "result"}, name)
-    result = dispatch(service, target, task_id, "evaluate", {}, "eval")
+    with service.sessions() as db:
+        result = evidence.evaluation(service, service.row(db, task_id))
     assert result["metrics"]["mae"] == 1 and result["verdict"] == "not_comparable"
     archive = evidence.export_zip(service, task_id)
     verified = evidence.verify_export_zip(archive)
