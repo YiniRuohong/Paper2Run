@@ -139,6 +139,21 @@ def test_register_refused_while_candidate_under_review(service):
         assert service.row(db, task_id).harness_json["candidate"] == before
 
 
+def test_propose_protocol_refused_while_candidate_under_review(service):
+    task_id, target = running(service)
+    complete(service, target, task_id)
+    submit(service, target, task_id)
+    with service.sessions() as db:
+        before = service.row(db, task_id).protocol_json
+    proposal = {**protocol(), "method": "changed while frozen"}
+    with pytest.raises(ServiceError) as caught:
+        dispatch(service, target, task_id, "propose_protocol", {"protocol": proposal, "reason": "x"}, "p")
+    assert caught.value.code == "CANDIDATE_UNDER_REVIEW"
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        assert row.protocol_json == before and row.pending_decision_json is None and row.state == "running"
+
+
 def test_evaluate_and_report_not_exposed(service):
     names = {t["name"] for t in TOOLS}
     assert not names & {"evaluate", "report"} and {"note_progress", "submit_candidate"} <= names

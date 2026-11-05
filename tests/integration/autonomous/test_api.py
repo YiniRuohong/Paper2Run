@@ -290,11 +290,15 @@ print("actual execution complete")
     steps = [
         [("background", {"command": "sleep 120", "launch_id": "integration-background", "timeout_seconds": 120})],
         [("write", {"path": "main.py", "content": code})],
+        # Code is registered before the formal run so the run is attributable to it.
+        [("register_artifact", {"path": "main.py", "name": "main.py", "kind": "code"})],
         [("execute", {"command": "python3 main.py", "timeout_seconds": 20})],
         [("register_artifact", {"path": name, "name": name, "kind": kind}) for name, kind in
-            [("main.py", "code"), ("environment.json", "environment"), ("data.json", "data"), ("predictions.json", "result"), ("labels.json", "result")]],
-        [("evaluate", {})],
-        [("report", {"narrative": "Actual controlled regression execution; no independent research evidence."})],
+            [("environment.json", "environment"), ("data.json", "data"), ("predictions.json", "result"), ("labels.json", "result")]],
+        [("submit_candidate", {"summary": "Actual controlled regression execution; no independent research evidence."})],
+        [],
+        # Independent review session (same scripted provider, fresh SDK session).
+        [("submit_review", {"verdict": "pass", "findings": []})],
         [],
     ]
     captured = []
@@ -342,9 +346,11 @@ print("actual execution complete")
                 break
             time.sleep(.2)
         assert task["state"] == "completed", json.dumps({"task": task, "events": client.get(BASE + f"/tasks/{task_id}/events").json()["data"]}, ensure_ascii=False)
+        assert task["outcome"] == "verified" and task["report"]["outcome"] == "verified"
+        assert task["candidate"]["review_status"] == "pass" and task["reviews"][0]["verdict"] == "pass"
         assert task["report"]["evaluation"]["metrics"]["mae"] == .5
         assert task["report"]["verdict"] == "not_comparable"
-        assert task["usage"]["calls"] == 7
+        assert task["usage"]["calls"] == 9
         assert "测试正文" in json.dumps(captured[0], ensure_ascii=False)
         journal = client.get(BASE + f"/tasks/{task_id}/events").json()["data"]
         assert any(e["type"] == "artifact_frozen" for e in journal["events"])

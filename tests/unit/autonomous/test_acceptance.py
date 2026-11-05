@@ -111,7 +111,7 @@ def test_specialists_objective_requests_choice_not_fixed_assignment():
     assert protocol["objective"] == objective
     assert "research_delegate" in objective and "at least one" in objective
     assert "Explain" in objective and "unverified advisory" in objective
-    assert "background" in objective and "evaluate" in objective
+    assert "background" in objective and "submit_candidate" in objective
 
 
 def delegation_fixture(models=("model-a",)):
@@ -569,7 +569,7 @@ def unit_evidence(diabetes_reference):
              "result": {"job_id": job, "state": "exited" if name == "execute" else "running", "exit_code": 0 if name == "execute" else None}}}])
     events.append({"type": "tool_completed", "payload": {"name": "status", "is_error": False,
         "result": {"job_id": "training", "state": "exited", "exit_code": 0}}})
-    for name in ("evaluate", "report", "register_artifact"):
+    for name in ("submit_candidate", "register_artifact"):
         events.append({"type": "tool_completed", "payload": {"name": name, "is_error": False, "result": {}}})
     files = {prefix + n: raw for n, raw in artifacts.items()}
     files.update({n: a.canonical(v) for n, v in {"protocol.json": frozen, "task.json": {"state": "completed"},
@@ -852,7 +852,7 @@ def test_false_success_is_rejected(unit_evidence, mutation, match):
     elif mutation in ("tools", "command"):
         events = a.strict_json(files["logs/events.json"])
         if mutation == "tools":
-            events = [e for e in events if e["payload"].get("name") != "report"]
+            events = [e for e in events if e["payload"].get("name") != "submit_candidate"]
         else:
             for e in events:
                 if e["type"] == "tool_completed" and e["payload"].get("name") == "status":

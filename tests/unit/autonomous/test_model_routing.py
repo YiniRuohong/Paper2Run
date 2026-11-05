@@ -87,6 +87,9 @@ def test_worker_receives_ephemeral_specialists_and_aggregates_usage(service):
         def run(self, config, prompt, callback):
             configs.append(copy.deepcopy(config))
             assert "expert-unit-secret" not in prompt
+            if len(configs) > 1:  # program continuations without new model activity
+                callback({"type": "result", "text": "", "usage": {}})
+                return
             for delegated in [False, True]:
                 callback({"type": "event", "event": {"type": "turn_start", "delegated": delegated}})
                 callback({"type": "event", "event": {"type": "message_end", "delegated": delegated, "message": {
@@ -99,6 +102,8 @@ def test_worker_receives_ephemeral_specialists_and_aggregates_usage(service):
     row = wait(service, task_id)
     assert configs[0]["specialists"][0]["model"]["api_key"] == "expert-unit-secret"
     assert configs[0]["specialists"][0]["id"] == "methods"
+    assert all(c["specialists"] == configs[0]["specialists"] for c in configs)
+    assert row.state == "incomplete" and row.outcome is None
     assert row.usage_json["calls"] == 2 and row.usage_json["total_tokens"] == 20
     assert row.report_json["model_narrative"] == "Main narrative"
     assert row.report_json["verdict"] == "not_comparable"
@@ -164,8 +169,13 @@ def test_failed_expert_reservation_survives_successful_main_response(service):
     configure(service)
     service.profiles.put("owner", {"id": "test", "base_url": "http://localhost:1234", "model": "test",
         "api": "openai-completions", "api_key": "unit-secret-123456", "context_window": 100, "max_tokens": 50})
+    runs = []
     class FailedExpertBridge(Bridge):
         def run(self, config, prompt, callback):
+            runs.append(prompt)
+            if len(runs) > 1:  # program continuations without new model activity
+                callback({"type": "result", "text": "", "usage": {}})
+                return
             callback({"type": "event", "event": {"type": "turn_start", "delegated": True}})
             callback({"type": "event", "event": {"type": "message_end", "delegated": True,
                 "message": {"role": "assistant", "content": [], "stopReason": "error", "usage": {}}}})

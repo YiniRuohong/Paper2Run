@@ -180,13 +180,28 @@ def entrypoint_executions(db, row):
     return executions
 
 
-def report(service, db, row, narrative=""):
+def candidate_root(service, row, candidate):
+    """Frozen candidate artifacts, hash-checked against the snapshot manifest."""
+    root = service.task_root(row.id) / "candidates" / candidate["snapshot_sha256"] / "artifacts"
+    for item in candidate["artifacts"]:
+        path = root / safe_name(item["name"])
+        if (path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or not path.is_file()
+                or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]):
+            fail("EVIDENCE_INTEGRITY", "frozen candidate artifact is missing or altered", 409)
+    return root
+
+
+def report(service, db, row, narrative="", outcome=None, reason=None):
+    harness = row.harness_json or {}
+    candidate = harness.get("candidate")
+    # A candidate report describes the frozen snapshot, never the live round.
+    root = candidate_root(service, row, candidate) if candidate else None
     try:
-        calculated = evaluation(service, row)
+        calculated = evaluation_at(service, row, root) if candidate else evaluation(service, row)
     except (ValueError, OSError) as exc:
         calculated = {"verdict": "not_comparable", "comparison_eligible": False,
                       "metrics": {}, "reasons": [str(exc)]}
-    artifacts = round_artifacts(row)
+    artifacts = [dict(a) for a in candidate["artifacts"]] if candidate else round_artifacts(row)
     expected = row.protocol_json["protocol"]["expected_artifacts"] if row.protocol_json else []
     names = {a["name"] for a in artifacts}
     missing = sorted(set(expected) - names)
@@ -201,7 +216,7 @@ def report(service, db, row, narrative=""):
     if row.reference_values_json is not None and row.protocol_json:
         try:
             verification = verify_reference_values(
-                row.protocol_json, artifact_root(service, row), row.reference_values_json,
+                row.protocol_json, root or artifact_root(service, row), row.reference_values_json,
                 scope=row.reference_scope or "", user_confirmed_sources=row.reference_sources_confirmed,
                 comparison_custody_verified=False,
             )
@@ -213,7 +228,9 @@ def report(service, db, row, narrative=""):
               "execution_observations": executions[-100:], "successful_execution_observed": observed_success,
               "completion_gate": {"entrypoint": entrypoint, "frozen_code_sha256": frozen_code["sha256"] if frozen_code else None,
                   "rule": "Approved entrypoint appears in an observed command with exit_code=0; entrypoint code and code/environment/data/result artifacts are frozen. This does not prove scientific validity or that artifact contents came from that command."},
-              "verdict": "not_comparable", "model_narrative": service.profiles.clean(narrative),
+              "verdict": "not_comparable", "outcome": outcome, "outcome_reason": reason,
+              "candidate": candidate, "reviews": harness.get("reviews", []),
+              "model_narrative": service.profiles.clean(narrative),
               "evaluation": calculated, "artifacts": artifacts, "missing_artifacts": missing,
               "missing_evidence_kinds": missing_kinds, "protocol": row.protocol_json,
               "reference_values": row.reference_values_json,

@@ -226,7 +226,7 @@ def protocol_and_objective(args, source):
         "and scikit-learn versions, environment.txt with actual Python and pip freeze output, and run.log with "
         "real training output. Register EVERY expected artifact using register_artifact: .py as code, "
         "requirements/environment as environment, dataset/split/provenance/labels as data, predictions as result, "
-        "run.log as log. Then invoke evaluate and report. Do not merely describe work. Do not change the frozen "
+        "run.log as log. Then invoke submit_candidate and end the turn. Do not merely describe work. Do not change the frozen "
         "protocol; repair code/dependencies as needed within it. Explicitly report exploratory/not_comparable; "
         "there is no paper reference metric and this is not a reproduction of paper results."
     )
@@ -566,7 +566,7 @@ def verify_evidence(files, protocol, source, reference_data, reference_labels):
     require(any(e.get("type") == "target_prepare" and e.get("payload", {}).get("ready") is True
                 and e["payload"].get("container") for e in events), "no ready isolated Docker target observation")
     completed = [e["payload"] for e in events if e.get("type") == "tool_completed" and not e.get("payload", {}).get("is_error")]
-    require({"register_artifact", "evaluate", "report", "background"} <= {e.get("name") for e in completed}, "required actual tools not observed")
+    require({"register_artifact", "submit_candidate", "background"} <= {e.get("name") for e in completed}, "required actual tools not observed")
     starts = {e["payload"]["id"]: e["payload"] for e in events if e.get("type") == "tool_started"}
     jobs = {}
     for event in completed:
