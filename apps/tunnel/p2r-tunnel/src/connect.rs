@@ -14,6 +14,9 @@ const BACKOFF_MAX: Duration = Duration::from_secs(10);
 const WAIT_FOR_TUNNEL: Duration = Duration::from_secs(10);
 
 pub async fn run(ep: Endpoint, peer: EndpointAddr, listen: SocketAddr) -> anyhow::Result<()> {
+    // The desktop backend has no authentication; exposing it beyond this
+    // device's loopback would hand it to everyone on the tablet's network.
+    anyhow::ensure!(listen.ip().is_loopback(), "refusing to listen on non-loopback address {listen}");
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!("listening on {listen}, peer={}", peer.id);
     let (tx, rx) = watch::channel::<Option<Connection>>(None);

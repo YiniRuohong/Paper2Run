@@ -89,3 +89,29 @@ async fn relay_only_reports_relay() {
     let conn = b.connect(peer_addr(&net.cfg, a_id), ALPN).await.unwrap();
     assert_eq!(paths::selected(&conn).0, PathKind::Relay);
 }
+
+#[tokio::test]
+async fn refuses_non_loopback_listen() {
+    let net = common::test_net(true).await;
+    let client = common::endpoint(&net).await;
+    let peer = peer_addr(&net.cfg, iroh::SecretKey::generate().public());
+    let res = tokio::time::timeout(Duration::from_secs(3), p2r_tunnel::connect::run(client, peer, "0.0.0.0:0".parse().unwrap())).await;
+    assert!(matches!(res, Ok(Err(_))), "connect must refuse to listen on a non-loopback address");
+}
+
+#[tokio::test]
+async fn shutdown_signal_closes_endpoint_so_tablet_recovers_fast() {
+    let (s, server) = stack().await;
+    get_eventually(&url(&s, "/healthz"), Duration::from_secs(15)).await;
+    // Simulate Ctrl-C/SIGTERM on the desktop: run_until closes the endpoint.
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn(p2r_tunnel::shutdown::run_until(server, async { let _ = rx.await; }, std::future::pending::<anyhow::Result<()>>()));
+    tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    let start = Instant::now();
+    let server2 = common::endpoint_with(&s.net, s.server_key.clone()).await;
+    tokio::spawn(p2r_tunnel::serve::run(server2, s.backend_port, s.allow.clone()));
+    let r = get_eventually(&url(&s, "/healthz"), Duration::from_secs(10)).await;
+    assert_eq!(r.status(), 200);
+    assert!(start.elapsed() < Duration::from_secs(5), "recovery took {:?}", start.elapsed());
+}

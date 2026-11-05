@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use p2r_tunnel::{connect, endpoint, keys, serve};
+use p2r_tunnel::{connect, endpoint, keys, serve, shutdown};
 
 #[derive(Parser)]
 #[command(name = "p2r-tunnel", about = "Paper2Run tablet tunnel over iroh")]
@@ -84,13 +84,14 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Serve { net, backend_port, allow } => {
             let ep = net.bind().await?;
             tracing::info!("serving id={} backend=127.0.0.1:{backend_port}", ep.id());
-            serve::run(ep, backend_port, allow).await?;
+            shutdown::run_until(ep.clone(), shutdown::signal(), serve::run(ep, backend_port, allow)).await?;
         }
         Cmd::Connect { net, peer, listen } => {
             let cfg = net.config()?;
             let ep = net.bind().await?;
             tracing::info!("connecting id={} -> peer={peer}", ep.id());
-            connect::run(ep, endpoint::peer_addr(&cfg, peer), listen).await?;
+            let work = connect::run(ep.clone(), endpoint::peer_addr(&cfg, peer), listen);
+            shutdown::run_until(ep, shutdown::signal(), work).await?;
         }
     }
     Ok(())

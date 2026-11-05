@@ -18,7 +18,7 @@ type Upstream = Client<HttpConnector, Incoming>;
 
 pub async fn run(ep: Endpoint, backend_port: u16, allow_path: PathBuf) -> anyhow::Result<()> {
     let client: Upstream = Client::builder(TokioExecutor::new()).build_http();
-    let ctx = Arc::new(Ctx { client, backend_port });
+    let ctx = Arc::new(Ctx { client, backend_port, allow_path: allow_path.clone() });
     while let Some(incoming) = ep.accept().await {
         let ctx = ctx.clone();
         let allow_path = allow_path.clone();
@@ -49,10 +49,22 @@ pub async fn run(ep: Endpoint, backend_port: u16, allow_path: PathBuf) -> anyhow
 struct Ctx {
     client: Upstream,
     backend_port: u16,
+    allow_path: PathBuf,
+}
+
+fn still_allowed(ctx: &Ctx, peer: iroh::EndpointId) -> bool {
+    matches!(crate::allow::load(&ctx.allow_path), Ok(set) if set.contains(&peer))
 }
 
 async fn serve_conn(conn: Connection, ctx: Arc<Ctx>) {
+    let peer = conn.remote_id();
     while let Ok((send, recv)) = conn.accept_bi().await {
+        // Re-check on every stream so removing a peer cuts a live connection.
+        if !still_allowed(&ctx, peer) {
+            tracing::warn!("peer={peer} revoked; closing connection");
+            conn.close(1u32.into(), b"revoked");
+            return;
+        }
         let ctx = ctx.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(tokio::io::join(recv, send));
@@ -64,7 +76,33 @@ async fn serve_conn(conn: Connection, ctx: Arc<Ctx>) {
     }
 }
 
+/// The tablet's browser must be talking to its own loopback proxy, same-origin.
+/// Anything else (a rebound hostname, a foreign Origin, a cross-site fetch) is a
+/// web page on the tablet trying to drive the desktop, so refuse it before the
+/// rewrite below would launder it into trusted loopback values.
+fn browser_context_ok(headers: &http::HeaderMap) -> bool {
+    let is_loopback = |host: &str| {
+        let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
+        name.eq_ignore_ascii_case("127.0.0.1") || name.eq_ignore_ascii_case("localhost")
+    };
+    let host_ok = headers.get(header::HOST).and_then(|v| v.to_str().ok()).is_some_and(is_loopback);
+    let origin_ok = match headers.get(header::ORIGIN).map(|v| v.to_str()) {
+        None => true,
+        Some(Ok(o)) => o.strip_prefix("http://").is_some_and(|rest| !rest.contains('/') && is_loopback(rest)),
+        Some(Err(_)) => false,
+    };
+    let site_ok = !matches!(
+        headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()),
+        Some(s) if s.eq_ignore_ascii_case("cross-site") || s.eq_ignore_ascii_case("same-site")
+    );
+    host_ok && origin_ok && site_ok
+}
+
 async fn proxy(mut req: Request<Incoming>, ctx: Arc<Ctx>) -> Result<Response<Body>, Infallible> {
+    if !browser_context_ok(req.headers()) {
+        tracing::warn!("refused request with non-loopback Host/Origin or cross-site fetch");
+        return Ok(status(StatusCode::MISDIRECTED_REQUEST));
+    }
     let authority = format!("127.0.0.1:{}", ctx.backend_port);
     let path = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
     *req.uri_mut() = match format!("http://{authority}{path}").parse::<Uri>() {
@@ -76,7 +114,6 @@ async fn proxy(mut req: Request<Incoming>, ctx: Arc<Ctx>) -> Result<Response<Bod
     if headers.contains_key(header::ORIGIN) {
         headers.insert(header::ORIGIN, HeaderValue::from_str(&format!("http://{authority}")).expect("ascii"));
     }
-    headers.remove("sec-fetch-site");
     match ctx.client.request(req).await {
         Ok(resp) => Ok(resp.map(|b| b.boxed())),
         Err(e) => {

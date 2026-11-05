@@ -4,3 +4,4 @@ pub mod allow;
 pub mod paths;
 pub mod serve;
 pub mod connect;
+pub mod shutdown;
