@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from p2r_persistence.models import ProjectRecord, MembershipRecord, UserRecord, AuditLogRecord, utcnow, IdempotencyKey
 from p2r_persistence.repositories import IdempotencyRepository
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from ..auth import require_project_access, ForbiddenError, csrf_token, validate_csrf, validate_origin
 from ..dependencies import actor_id
 

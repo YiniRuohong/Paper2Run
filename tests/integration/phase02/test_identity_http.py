@@ -26,8 +26,8 @@ def setup(tmp_path):
 def test_default_headers_rejected(setup):
     app, _, _, _ = setup
     with TestClient(app, base_url="https://testserver") as client:
-        assert client.get('/api/v1/sessions', headers={'X-Actor-ID': 'dev-user'}).status_code == 401
-        assert client.get('/api/v1/sessions').status_code == 401
+        assert client.get('/api/v1/projects', headers={'X-Actor-ID': 'dev-user'}).status_code == 401
+        assert client.get('/api/v1/projects').status_code == 401
 
 
 def test_me_and_logout_with_seeded_session(setup):
@@ -59,7 +59,7 @@ def test_logout_requires_configured_origin(setup):
 
 
 def test_project_validation_and_cas(setup):
-    from p2r_orchestration.service import ServiceError
+    from p2r_orchestration.errors import ServiceError
     _, factory, uid, _ = setup
     assert ProjectCreate(name='ok', description='').description == ''
     assert ProjectPatch(description='').description == ''

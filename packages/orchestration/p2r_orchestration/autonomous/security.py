@@ -8,7 +8,7 @@ import re
 import threading
 from urllib.parse import urlsplit
 
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 
 
 def fail(code: str, message: str, status: int = 422):

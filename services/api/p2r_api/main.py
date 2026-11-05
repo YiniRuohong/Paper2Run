@@ -7,35 +7,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from p2r_contracts.common import ApiError, ErrorEnvelope
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 
-from .dependencies import build_runtime
+from .dependencies import LOCAL_ACTOR_ID, build_runtime, data_dir
 from .routes import router
-
-
-def _install_demo_worker_lifespan(app: FastAPI) -> None:
-    from contextlib import asynccontextmanager
-
-    from .demo import start_demo_worker, stop_demo_worker
-
-    previous_lifespan = app.router.lifespan_context
-
-    @asynccontextmanager
-    async def demo_lifespan(fastapi_app):
-        async with previous_lifespan(fastapi_app):
-            stop, thread = start_demo_worker(
-                fastapi_app.state.runtime['session_factory'],
-                fastapi_app.state.runtime['artifact_store'],
-            )
-            fastapi_app.state.runtime['demo_worker_stop'] = stop
-            fastapi_app.state.runtime['demo_worker_thread'] = thread
-            try:
-                yield
-            finally:
-                # One bounded join owns this single background consumer.
-                stop_demo_worker(stop, thread)
-
-    app.router.lifespan_context = demo_lifespan
 
 
 def _install_docparse_worker_lifespan(app: FastAPI) -> None:
@@ -95,12 +70,13 @@ def _install_autonomous_lifespan(app: FastAPI) -> None:
     app.router.lifespan_context = autonomous_lifespan
 
 
-def create_app(*, db_url: str | None = None, session_factory=None, supervisor=None, artifact_store=None, allowed_origin: str | None = None, secure_cookies: bool = True, development_auth: bool = False, docparse_service=None) -> FastAPI:
+def create_app(*, db_url: str | None = None, session_factory=None, artifact_store=None, allowed_origin: str | None = None, secure_cookies: bool = True, development_auth: bool = False, docparse_service=None, local_actor: str | None = None) -> FastAPI:
+    """API app with the kept routers (auth, projects, papers, docparse, autonomous).
+
+    Authenticated by default; ``create_local_app`` is the single-user local runtime.
+    """
     app = FastAPI(title="p2r-api")
-    # Preserve the explicit demo/supervisor test harness while keeping the
-    # production default (create_app() with no arguments) authenticated.
-    compatibility_auth = development_auth or (supervisor is not None and allowed_origin is None)
-    app.state.runtime = build_runtime(db_url=db_url, session_factory=session_factory, supervisor=supervisor, artifact_store=artifact_store, allowed_origin=allowed_origin, secure_cookies=secure_cookies, development_auth=compatibility_auth, docparse_service=docparse_service)
+    app.state.runtime = build_runtime(db_url=db_url, session_factory=session_factory, artifact_store=artifact_store, allowed_origin=allowed_origin, secure_cookies=secure_cookies, development_auth=development_auth, docparse_service=docparse_service, local_actor=local_actor)
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
@@ -116,9 +92,8 @@ def create_app(*, db_url: str | None = None, session_factory=None, supervisor=No
 
     @app.exception_handler(ServiceError)
     async def service_error(request: Request, exc: ServiceError):
-        code = "IDEMPOTENCY_CONFLICT" if exc.__class__.__name__ == "IdempotencyConflictError" else exc.code
         details = dict(getattr(exc, "details", {}) or {})
-        body = ErrorEnvelope(error=ApiError(code=code, message=exc.message, retryable=exc.status >= 500, details=details), request_id=request.state.request_id).model_dump(mode="json")
+        body = ErrorEnvelope(error=ApiError(code=exc.code, message=exc.message, retryable=exc.status >= 500, details=details), request_id=request.state.request_id).model_dump(mode="json")
         return JSONResponse(body, status_code=exc.status)
 
     @app.exception_handler(RequestValidationError)
@@ -141,42 +116,43 @@ def create_app(*, db_url: str | None = None, session_factory=None, supervisor=No
     return app
 
 
-def create_demo_app(*, db_url=None, session_factory=None, artifact_store=None, supervisor=None, docparse_service=None) -> FastAPI:
-    """Opt-in, loopback-only development runtime; not a hostile-code sandbox.
+def create_local_app(*, db_url=None, session_factory=None, artifact_store=None, docparse_service=None) -> FastAPI:
+    """Loopback-only single-user runtime used by the launcher and the desktop app.
 
-    Start with uvicorn p2r_api.main:create_demo_app --factory --host 127.0.0.1.
-    All local Demo state lives under P2R_DEMO_DIR (default .p2r-demo).
-    Uses the fixed demo-user actor, not production authentication. Inject both
-    a database/session factory and an artifact store for isolated tests.
+    Start with ``uvicorn p2r_api.main:create_local_app --factory --host 127.0.0.1``.
+    Without an injected database, state lives under ``P2R_DEMO_DIR`` (default
+    ``.p2r-demo``; the name is historical and kept so existing data stays put):
+    ``demo.sqlite3`` plus ``artifacts/``. There is no login: every request acts as
+    the fixed local user, which is created on first start. Not production auth.
     """
-    import os
-    from pathlib import Path
-
     from sqlalchemy.engine import URL
 
     from p2r_artifacts.store import LocalArtifactStore
-    from p2r_kernel.supervisor import KernelSupervisor
 
     if db_url is None and session_factory is None:
-        root = Path(os.environ.get('P2R_DEMO_DIR', '.p2r-demo')).resolve()
-        workspace = root / 'workspace'
-        workspace.mkdir(parents=True, exist_ok=True)
+        root = data_dir()
+        root.mkdir(parents=True, exist_ok=True)
         db_url = URL.create('sqlite', database=str(root / 'demo.sqlite3')).render_as_string(hide_password=False)
-        supervisor = supervisor or KernelSupervisor(workspace)
         artifact_store = artifact_store or LocalArtifactStore(root / 'artifacts')
     app = create_app(
-        db_url=db_url, session_factory=session_factory, supervisor=supervisor,
-        artifact_store=artifact_store,
+        db_url=db_url, session_factory=session_factory, artifact_store=artifact_store,
         development_auth=True, allowed_origin='http://127.0.0.1:8000', secure_cookies=False,
-        docparse_service=docparse_service,
+        docparse_service=docparse_service, local_actor=LOCAL_ACTOR_ID,
     )
-    from .routes.demo import router as demo_router
-    app.state.runtime['demo_enabled'] = True
-    app.include_router(demo_router, prefix='/api/v1')
-    _install_demo_worker_lifespan(app)
+    _ensure_local_user(app.state.runtime['session_factory'])
     _install_docparse_worker_lifespan(app)
     _mount_web_dist(app)
     return app
+
+
+def _ensure_local_user(session_factory) -> None:
+    """Create the fixed local user if missing; an existing row is never modified."""
+    from p2r_persistence.models import UserRecord
+
+    with session_factory() as db:
+        if db.get(UserRecord, LOCAL_ACTOR_ID) is None:
+            db.add(UserRecord(id=LOCAL_ACTOR_ID, display_name='Local user', can_create_project=True))
+            db.commit()
 
 
 def _mount_web_dist(app: FastAPI) -> None:
@@ -213,6 +189,3 @@ def _mount_web_dist(app: FastAPI) -> None:
         if candidate.is_file() and candidate.is_relative_to(dist.resolve()):
             return FileResponse(candidate)
         return FileResponse(index)
-
-
-app = create_app()

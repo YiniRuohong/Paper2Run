@@ -44,14 +44,7 @@ MAX_RESULT = 16 * 1024
 MAX_PAGE = 200
 
 
-class ServiceError(Exception):
-    status = 400
-    code = "SERVICE_ERROR"
-
-    def __init__(self, message: str | None = None, *, details: dict[str, Any] | None = None):
-        self.message = message or self.code
-        self.details = details or {}
-        super().__init__(self.message)
+from .errors import ServiceError  # noqa: E402  (shared with the kept surface)
 
 
 class NotFoundError(ServiceError):

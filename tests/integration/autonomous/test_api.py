@@ -288,7 +288,7 @@ def test_injected_database_roots_are_isolated_but_same_database_is_locked(tmp_pa
     duplicate = create_app(db_url=f"sqlite:///{tmp_path / 'one.sqlite'}")
     a, b = first.state.runtime["autonomous_service"], second.state.runtime["autonomous_service"]
     assert a.root != b.root
-    from p2r_orchestration.service import ServiceError
+    from p2r_orchestration.errors import ServiceError
     with TestClient(first) as one, TestClient(second) as two:
         assert one.get("/healthz").status_code == two.get("/healthz").status_code == 200
         with pytest.raises(ServiceError, match="another autonomous runtime"):

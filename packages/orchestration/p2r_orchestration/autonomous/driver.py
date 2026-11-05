@@ -6,7 +6,7 @@ import json
 from sqlalchemy import select
 
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from . import evidence
 from .candidate import gate
 from .review import run_review

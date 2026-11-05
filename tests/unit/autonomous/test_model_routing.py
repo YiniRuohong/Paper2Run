@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from p2r_contracts.autonomous import ProjectConfig, safe_config_snapshot
 from p2r_orchestration.autonomous.security import ProfileStore
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from .test_service import service, configuration, create, wait, Bridge
 
 

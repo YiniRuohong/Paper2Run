@@ -13,7 +13,7 @@ from sqlalchemy import select
 from p2r_orchestration.autonomous import AutonomousService
 from p2r_orchestration.autonomous import evidence
 from p2r_orchestration.autonomous.worker import dispatch
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from p2r_persistence.db import create_engine, create_session_factory, init_db
 from p2r_persistence.models import UserRecord, ProjectRecord
 from p2r_persistence.autonomous import AutonomousTaskRecord as Task

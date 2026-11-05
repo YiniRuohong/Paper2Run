@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from p2r_orchestration.autonomous import driver
 from p2r_orchestration.autonomous.security import fail
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
 
 from .test_service import Bridge, Target, create, protocol, service, wait  # noqa: F401

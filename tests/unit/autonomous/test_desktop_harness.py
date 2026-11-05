@@ -215,14 +215,14 @@ def test_launch_installs_once_and_docker_missing_is_nonfatal(monkeypatch, tmp_pa
     assert len(installs) == 2
 
 
-def test_launch_missing_node_keeps_old_mode(monkeypatch, tmp_path, capsys):
+def test_launch_missing_node_still_starts_server(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(launch, "ROOT", tmp_path)
     monkeypatch.delenv("P2R_NODE_BINARY", raising=False)
     monkeypatch.setattr(launch.shutil, "which", lambda *_: None)
     monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
     env = launch.ensure_harness()
     assert env["P2R_NODE_BINARY"]
-    assert "旧模式继续启动" in capsys.readouterr().out
+    assert "服务仍会启动" in capsys.readouterr().out
 
 
 def test_desktop_build_validates_actual_bundle(monkeypatch, tmp_path):

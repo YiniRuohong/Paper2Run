@@ -12,7 +12,7 @@ from .candidate import freeze
 from .driver import BUDGET_ERRORS, SAFETY_CODES
 from .evidence import ensure_not_under_review
 from .security import fail
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from .tools import TOOLS, SYSTEM_PROMPT
 
 

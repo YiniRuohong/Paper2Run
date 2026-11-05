@@ -241,8 +241,8 @@ function startBackend() {
       // with this process even after SIGKILL or a crash.
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      // POSIX: own process group, so stopping it also reaches kernel workers
-      // and sandbox guests spawned by the backend.
+      // POSIX: own process group, so stopping it also reaches the harness,
+      // Docker CLI and parser processes spawned by the backend.
       detached: !IS_WIN,
     });
   } catch (error) {
@@ -349,7 +349,7 @@ function stopBackend(target = backend) {
   const { child, exited } = target;
   if (child.exitCode !== null || child.signalCode !== null || !child.pid) return exited;
   if (IS_WIN) {
-    // /T also takes down kernel workers and sandbox guests. Full path: never
+    // /T also takes down the backend's child processes. Full path: never
     // resolve taskkill through PATH or the working directory.
     const taskkill = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
     execFile(taskkill, ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, (error) => {

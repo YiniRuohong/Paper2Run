@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from p2r_api.main import create_app, create_demo_app
+from p2r_api.main import create_app, create_local_app
 from p2r_artifacts.store import LocalArtifactStore
 from p2r_docparse.install import OfflineInstaller
 from p2r_docparse.testing import minimal_pdf
@@ -28,7 +28,7 @@ def _service(tmp_path, platform="darwin-x64"):
 @pytest.fixture
 def app(tmp_path):
     return create_app(
-        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(), secure_cookies=False,
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", secure_cookies=False,
         artifact_store=LocalArtifactStore(tmp_path / "store"), development_auth=True,
         docparse_service=_service(tmp_path),
     )
@@ -283,8 +283,8 @@ def test_corrupt_state_file_does_not_fail_startup(tmp_path):
     svc.root.mkdir(parents=True, exist_ok=True)
     (svc.root / "install-state.json").write_text(
         '{"state": "ready", "progress": "oops"}', encoding="utf-8")
-    app = create_demo_app(
-        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(),
+    app = create_local_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}",
         artifact_store=LocalArtifactStore(tmp_path / "store"), docparse_service=svc,
     )
     with TestClient(app) as client:
@@ -296,8 +296,8 @@ def test_shutdown_cancels_installer(tmp_path):
     svc = _service(tmp_path, platform="darwin-arm64")
     called = []
     svc.installer.cancel = lambda: called.append(True)
-    app = create_demo_app(
-        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(),
+    app = create_local_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}",
         artifact_store=LocalArtifactStore(tmp_path / "store"), docparse_service=svc,
     )
     with TestClient(app):
@@ -323,7 +323,7 @@ def test_upload_enqueues_offline_when_component_ready(tmp_path):
         '{"state": "ready", "tier": "basic", "version": "4.1.3"}', encoding="utf-8")
     svc.settings.set_mode("offline")
     app = create_app(
-        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(), secure_cookies=False,
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", secure_cookies=False,
         artifact_store=LocalArtifactStore(tmp_path / "store"), development_auth=True, docparse_service=svc,
     )
     with app.state.runtime["session_factory"].begin() as db:

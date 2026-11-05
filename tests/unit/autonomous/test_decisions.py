@@ -3,7 +3,7 @@ import pytest
 from sqlalchemy import select
 
 from p2r_orchestration.autonomous.worker import dispatch
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
 
 from .test_driver import Main

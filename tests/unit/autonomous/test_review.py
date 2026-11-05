@@ -7,7 +7,7 @@ import pytest
 from p2r_orchestration.autonomous import evidence
 from p2r_orchestration.autonomous.review import (REVIEW_PROMPT, REVIEW_TOOLS, FrozenTarget, ReviewFailed,
                                                   run_review)
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 
 from .test_candidate import complete, running, submit
 from .test_service import service  # noqa: F401

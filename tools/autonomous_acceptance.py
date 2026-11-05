@@ -142,7 +142,7 @@ def build_profile_payload(profile_id, base_url, model, api, secret, *, anonymous
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--base-url", help="Existing loopback demo API origin; otherwise spawn real factory")
+    parser.add_argument("--base-url", help="Existing loopback local API origin; otherwise spawn real factory")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--output", type=Path, default=ROOT / ".p2r-e2e-autonomous/fullflow")
     parser.add_argument("--pdf", action="store_true", help="Use product online MinerU PDF path (no text fallback)")
@@ -695,10 +695,10 @@ class Runner:
 
     def start(self):
         if not self.args.spawn:
-            self.stage("connecting to existing demo API")
+            self.stage("connecting to existing local API")
             self.raw("GET", "/healthz")
             return
-        self.stage("starting real create_demo_app uvicorn process")
+        self.stage("starting real create_local_app uvicorn process")
         parsed = urlsplit(self.args.base_url)
         with socket.socket() as sock:
             try:
@@ -715,8 +715,8 @@ class Runner:
         # No subprocess command-line secret, request body logging, or raw log file.
         env["PYTHONPATH"] = os.pathsep.join(str(ROOT / p) for p in
             ["services/api", *["packages/" + p for p in ("contracts", "artifacts", "persistence", "sandbox",
-             "docparse", "evaluation", "codegen", "runner", "kernel", "orchestration")]])
-        self.process = subprocess.Popen([sys.executable, "-m", "uvicorn", "p2r_api.main:create_demo_app",
+             "docparse", "evaluation", "orchestration")]])
+        self.process = subprocess.Popen([sys.executable, "-m", "uvicorn", "p2r_api.main:create_local_app",
             "--factory", "--host", "127.0.0.1", "--port", str(parsed.port or 80), "--no-access-log"],
             cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         def drain():
@@ -742,13 +742,13 @@ class Runner:
         self.log_thread.start()
         deadline = time.monotonic() + self.args.startup_timeout
         while time.monotonic() < deadline:
-            require(self.process.poll() is None, "demo API exited during startup; see bounded server log")
+            require(self.process.poll() is None, "local API exited during startup; see bounded server log")
             try:
                 self.raw("GET", "/healthz")
                 return
             except Exception:
                 time.sleep(min(.5, max(0, deadline - time.monotonic())))
-        raise AcceptanceError("demo API startup deadline exceeded")
+        raise AcceptanceError("local API startup deadline exceeded")
 
     def collect_events(self):
         # Drain bounded pages; continuation is retained for the next poll.
@@ -774,9 +774,7 @@ class Runner:
     def run(self):
         reference_dependencies()  # Fail before API/network activity if the oracle cannot run.
         self.start()
-        self.stage("creating demo identity and a separate real-paper project")
-        bootstrap = self.api("POST", "/demo/bootstrap", json={"fixture_id": "offline-smoke-v1", "source_processing_consent": True})
-        self.summary["identity_bootstrap_project_id"] = bootstrap["project_id"]
+        self.stage("creating a real-paper project as the fixed local user")
         project = self.api("POST", "/projects", json={"name": "Autonomous real diabetes LARS acceptance",
             "description": "Real public paper/data; exploratory regression, not comparable to paper results."})
         project_id = project["id"]

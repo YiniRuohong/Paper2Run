@@ -11,7 +11,7 @@ from sqlalchemy import select
 from p2r_evaluation.autonomous import evaluate_artifacts
 from p2r_evaluation.reference_verification import verify_reference_values
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from .security import fail, digest
 
 def verify_export_zip(raw):

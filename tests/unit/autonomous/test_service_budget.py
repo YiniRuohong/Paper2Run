@@ -7,7 +7,7 @@ import pytest
 from .test_service import service, create, wait, Target, Bridge, WaitingBridge, Registry
 from p2r_orchestration.autonomous import AutonomousService
 from p2r_orchestration.autonomous import worker
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 
 
 def seed_job(service, task_id):

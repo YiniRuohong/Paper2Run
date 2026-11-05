@@ -17,7 +17,6 @@ from p2r_api.auth import (
 )
 from p2r_api.routes.auth import session_info, set_session_cookie
 from p2r_api.routes.projects import ProjectCreate, ProjectPatch, ProjectService
-from p2r_api.admin import member_set
 
 
 @pytest.fixture
@@ -118,7 +117,7 @@ def test_roles_and_cross_project(db, role):
     outsider = user(db)
     projects = ProjectService(db)
     project = projects.create_project(owner.id, ProjectCreate(name="Study"))
-    member_set(db, project_id=project.id, user_id=member.id, role=role, actor_user_id=owner.id)
+    db.add(MembershipRecord(project_id=project.id, user_id=member.id, role=role)); db.commit()
     assert projects.require_project(member.id, project.id)[1].role == role
     for action in ["write", "execute", "export_create"]:
         if role == "viewer":

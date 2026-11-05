@@ -8,12 +8,13 @@ API and the built web UI from a single local port:
    ``paper2run`` package is installed into it;
 2. ensure ``apps/web/dist`` exists (build with npm when available);
 3. pick a free loopback port starting at 8010;
-4. start uvicorn (``create_demo_app``) with a persistent demo dir;
+4. start uvicorn (``create_local_app``) with a persistent data dir (``.p2r-app``);
 5. open the default browser once the health check passes.
 
 Prerequisites: Python 3.11+. Node.js/npm is needed when the prebuilt
 frontend bundle is missing; autonomous mode additionally needs Node >=22.19
-and the Harness dependencies. Missing Docker does not block old workflows.
+and the Harness dependencies. Docker is needed to run experiments; without it
+the app still starts but experiments cannot run.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VENV_DIR = ROOT / ".venv"
 DIST_INDEX = ROOT / "apps" / "web" / "dist" / "index.html"
-DEMO_DIR = ROOT / ".p2r-app"
+DATA_DIR = ROOT / ".p2r-app"
 BASE_PORT = 8010
 # Python source roots (keep in sync with pyproject.toml [tool.pytest.ini_options]).
 # Putting them on PYTHONPATH means a stale editable install can never shadow them.
@@ -162,14 +163,14 @@ def ensure_harness() -> dict[str, str]:
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         # Do not print exception output: npm/Node can echo user credentials.
         message(f"[!] 自主模式未就绪：{failure_hint}。")
-        message("    可运行 python scripts/desktop/build_harness.py 修复桌面运行时；旧模式继续启动。")
+        message("    可运行 python scripts/desktop/build_harness.py 修复桌面运行时；服务仍会启动，但无法开始实验。")
     try:
         probe = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, timeout=10)
         docker_ready = probe.returncode == 0
     except (OSError, subprocess.SubprocessError):
         docker_ready = False
     if not docker_ready:
-        message("[!] Docker 未就绪：本地自主实验暂不可用；启动 Docker 后可重试，旧模式不受影响。")
+        message("[!] Docker 未就绪：本地自主实验暂不可用；启动 Docker 后可重试。")
     return env
 
 
@@ -201,7 +202,7 @@ def main() -> None:
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("ELECTRON_") and k.upper() not in ("NODE_OPTIONS", "NODE_PATH")}
     env.update(harness_env)
     env.update({
-        "P2R_DEMO_DIR": str(DEMO_DIR),
+        "P2R_DEMO_DIR": str(DATA_DIR),  # historical variable name; it is the data dir
         "P2R_WEB_DIST": str(DIST_INDEX.parent),
         "PYTHONIOENCODING": "utf-8",
         "PYTHONPATH": source_pythonpath(),
@@ -209,7 +210,7 @@ def main() -> None:
     message(f"[3/3] 启动服务 / starting server at {url} （数据目录 .p2r-app）")
     message("    停止 / stop: 关闭本窗口或按 Ctrl+C")
     server = subprocess.Popen(
-        [str(python), "-m", "uvicorn", "p2r_api.main:create_demo_app", "--factory",
+        [str(python), "-m", "uvicorn", "p2r_api.main:create_local_app", "--factory",
          "--host", "127.0.0.1", "--port", str(port)],
         cwd=ROOT, env=env,
     )

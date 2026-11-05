@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from p2r_persistence.models import (
     AuditLogRecord, AuthSessionRecord, MembershipRecord,
     ProjectRecord, UserRecord, utcnow,

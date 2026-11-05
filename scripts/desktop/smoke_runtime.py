@@ -8,7 +8,7 @@ Starts ``serve.py`` with the given interpreter exactly like ``main.cjs`` does
    the on-demand MinerU installer needs for ``pip --python <venv python>``;
 1. the ``{"event": "listening", "port": N}`` handshake line arrives;
 2. ``GET /healthz`` answers ``{"status": "ok"}``;
-3. ``GET /api/v1/demo`` (the first call the UI makes) answers 200 JSON;
+3. ``GET /api/v1/projects`` (the first call the UI makes) answers 200 JSON;
 4. ``GET /`` serves the web UI when ``--web-dist`` is given;
 5. closing stdin (= the desktop app dying) makes the backend exit on its
    own within the watchdog grace period.
@@ -149,10 +149,10 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("[smoke] FAIL /healthz never became ok")
         print(f"[smoke] GET /healthz -> {health}", flush=True)
 
-        status, ctype, body = get(f"{base}/api/v1/demo")
-        print(f"[smoke] GET /api/v1/demo -> {status} {ctype} {body[:160]!r}", flush=True)
+        status, ctype, body = get(f"{base}/api/v1/projects")
+        print(f"[smoke] GET /api/v1/projects -> {status} {ctype} {body[:160]!r}", flush=True)
         if status != 200 or "json" not in ctype:
-            failures.append("/api/v1/demo did not return 200 JSON")
+            failures.append("/api/v1/projects did not return 200 JSON")
 
         if args.web_dist:
             status, ctype, body = get(f"{base}/")

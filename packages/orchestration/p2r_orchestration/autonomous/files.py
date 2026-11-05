@@ -15,7 +15,7 @@ import stat
 from urllib.parse import quote
 
 from .evidence import MAX_FILE, safe_name
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from .security import fail
 
 MAX_LIST_FILES = 2000

@@ -15,8 +15,7 @@ from p2r_orchestration.autonomous.evidence import export_zip
 from p2r_orchestration.autonomous import files as task_file_access
 from ..auth import require_project_access, validate_origin, validate_csrf, csrf_token
 from ..dependencies import actor_id
-from .papers import _envelope, _error
-from .provider_sessions import _claim, _save
+from .papers import _claim, _envelope, _error, _save
 
 router = APIRouter(prefix="/autonomous")
 
