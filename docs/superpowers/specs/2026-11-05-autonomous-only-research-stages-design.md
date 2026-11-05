@@ -166,6 +166,8 @@
 
 ### 5.10 删除传统模式
 
+> 已实施（2026-11-05，`feat/v3-integration` 分支）：后端、脚本与文档中的旧模式已删除，前端部分此前已合并（PR #1）。
+
 **前端**：删除 `features/guided`、`features/lab`、`features/papers`、`features/runs`、`features/reports`、`MockWorkspace.tsx`、`api-client/guided*`、`api-client/phase01*`、`api-client/mock`，以及 `app.tsx` 和 `routing.ts` 中的旧路由；删除对应的旧测试。`Dashboard`/`TaskDetail`/`Sidebar` 改为读取自主任务 API。新建任务流程放进自主界面：建项目 → 上传论文 → 解析（复用 docparse 组件）→ 配置与授权 → 启动。工作台展示自报进度、候选轮次、复核 findings 和结局。
 
 **后端**：
