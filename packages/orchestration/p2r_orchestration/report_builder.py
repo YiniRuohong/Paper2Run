@@ -82,6 +82,21 @@ def project_metrics(value):
     return metrics
 
 
+EVALUATION_EVENT_TYPE = "run.evaluation.completed"
+
+
+def project_confidence_intervals(value):
+    """Public evaluator CI contract; never forward arbitrary nested payloads."""
+    intervals = _project(value, ("accuracy_95",))
+    bounds = _project(intervals["accuracy_95"], ("lower", "upper"))
+    lower, upper = bounds["lower"], bounds["upper"]
+    if (type(lower) not in (int, float) or type(upper) not in (int, float)
+            or not math.isfinite(lower) or not math.isfinite(upper)
+            or not 0 <= lower <= upper <= 1):
+        raise ValueError("REPORT_INPUT_INVALID")
+    return {"accuracy_95": bounds}
+
+
 def build_report(snapshot: dict) -> dict:
     """Pure controlled-fixture DTO. Arbitrary nested payloads never pass through.
 
@@ -139,6 +154,8 @@ def build_report(snapshot: dict) -> dict:
         "revision_id": revision_id,
         "recipe": recipe,
         "metrics": metrics,
+        **({"confidence_intervals": project_confidence_intervals(snapshot["confidence_intervals"])}
+           if "confidence_intervals" in snapshot else {}),
         "metrics_source": metrics_source,
         "evidence_class": evidence_class,
         "evaluator_version": evaluator_version,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import random
 from typing import Any, Iterable, Mapping
 
 EVALUATOR_VERSION = "offline-fixture-evaluator-v1"
@@ -10,6 +11,14 @@ FIXTURE_LABELS: dict[str, int] = {"sample-001": 0, "sample-002": 1, "sample-003"
 
 class PredictionValidationError(ValueError):
     pass
+
+def _accuracy_ci(correctness: list[float], *, replicates: int = 2000, seed: int = 20261104) -> dict[str, float]:
+    rng = random.Random(seed)
+    size = len(correctness)
+    means = sorted(sum(correctness[rng.randrange(size)] for _ in range(size)) / size
+                   for _ in range(replicates))
+    return {"lower": means[int(0.025 * (replicates - 1))],
+            "upper": means[int(0.975 * (replicates - 1))]}
 
 def labels_fixture() -> dict[str, int]:
     return dict(FIXTURE_LABELS)
@@ -39,5 +48,8 @@ def evaluate_predictions(predictions: Iterable[Mapping[str, Any]], labels: Mappi
     if missing:
         raise PredictionValidationError(f"missing prediction ids: {','.join(missing)}")
     correct = sum(normalized[key] == expected[key] for key in expected)
+    correctness = [float(normalized[key] == expected[key]) for key in sorted(expected)]
     metrics = {"accuracy": correct / len(expected), "correct": correct, "total": len(expected)}
-    return {"metrics": metrics, "metrics_hash": hashlib.sha256(_canonical(metrics)).hexdigest(), "verdict": "matched"}
+    confidence_intervals = {"accuracy_95": _accuracy_ci(correctness)}
+    return {"metrics": metrics, "confidence_intervals": confidence_intervals,
+            "metrics_hash": hashlib.sha256(_canonical(metrics)).hexdigest(), "verdict": "matched"}

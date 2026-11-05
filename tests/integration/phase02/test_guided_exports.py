@@ -51,6 +51,70 @@ def _export(app, client, run_id, formats, key):
     return response.json()["data"], exports[0]
 
 
+def test_trusted_evaluator_ci_survives_worker_freeze_report_and_zip(seeded, monkeypatch):
+    import json
+    import p2r_orchestration.run_worker as worker
+    from p2r_evaluation import evaluate_predictions
+    from p2r_orchestration.report_builder import report_hash
+    from p2r_persistence.models import EvaluationRecord, ReportBuildRecord, RunEventRecord
+
+    app, ids = seeded
+    factory = app.state.runtime["session_factory"]
+    runner = worker.run_fixture
+    results = []
+
+    def untrusted_runner(**kwargs):
+        result = runner(**kwargs)
+        results.append(result)
+        return result | {"confidence_intervals": {"secret": "runner-canary"}}
+
+    monkeypatch.setattr(worker, "run_fixture", untrusted_runner)
+    with TestClient(app, base_url="https://testserver") as client:
+        run_id = _prepare_run(app, client, ids)
+        with factory.begin() as db:
+            job = JobRepository(db).claim(worker_id="ci-test", kinds=("run_fixture",))
+            job_id, token = job.id, job.fencing_token
+        assert worker.process_claimed_run_fixture(
+            factory, job_id=job_id, payload_ref=run_id, worker_id="ci-test", token=token,
+            artifact_store=app.state.runtime["artifact_store"],
+        )
+        expected = evaluate_predictions(results[0]["predictions"])
+        with factory() as db:
+            evaluation = db.scalar(select(EvaluationRecord).where(EvaluationRecord.run_id == run_id))
+            assert evaluation.metrics_json == expected["metrics"]
+            assert evaluation.metrics_hash == expected["metrics_hash"] == report_hash(expected["metrics"])
+            events = db.scalars(select(RunEventRecord).where(
+                RunEventRecord.run_id == run_id, RunEventRecord.type == "run.evaluation.completed",
+            )).all()
+            assert len(events) == 1
+            assert events[0].payload_json == {
+                "metrics_hash": expected["metrics_hash"],
+                "confidence_intervals": expected["confidence_intervals"],
+            }
+        response = client.post(f"/api/v1/runs/{run_id}/report-builds", headers=_headers("ci-report"), json={})
+        assert response.status_code == 202, response.text
+        with factory.begin() as db:
+            frozen = db.get(ReportBuildRecord, response.json()["data"]["build_id"])
+            assert frozen.input_json["confidence_intervals"] == expected["confidence_intervals"]
+            event = db.scalar(select(RunEventRecord).where(
+                RunEventRecord.run_id == run_id, RunEventRecord.type == "run.evaluation.completed",
+            ))
+            event.payload_json = {"secret": "changed-after-freeze"}
+        assert process_next_report_job(factory)
+        report = client.get(f"/api/v1/runs/{run_id}/report", headers=_headers("read")).json()["data"]
+        assert report["confidence_intervals"] == expected["confidence_intervals"]
+        assert report["metrics"] == expected["metrics"]
+        assert "runner-canary" not in json.dumps(report)
+        _, export = _export(app, client, run_id, ["bundle_zip"], "ci-zip")
+        assert export["status"] == "succeeded"
+        download = client.get(f"/api/v1/artifacts/{export['items'][0]['artifact_id']}/download", headers=_headers("read"))
+        with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
+            assert json.loads(archive.read("report.json"))["confidence_intervals"] == expected["confidence_intervals"]
+            assert json.loads(archive.read("metrics.json")) == expected["metrics"]
+            checksums = json.loads(archive.read("checksums.json"))
+            assert checksums["report.json"] == hashlib.sha256(archive.read("report.json")).hexdigest()
+
+
 def test_export_formats_and_checkpoint_validation(seeded):
     app, ids = seeded
     with TestClient(app, base_url="https://testserver") as client:

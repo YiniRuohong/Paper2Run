@@ -6,6 +6,33 @@ def snapshot():
     return {"run_id":"run_00000000-0000-0000-0000-000000000001", "revision_id":"spr_00000000-0000-0000-0000-000000000001", "recipe":{"id":"offline_fixture","version":"1"}, "metrics":{"accuracy":1.0,"correct":4,"total":4}, "evaluator_version":"offline-fixture-evaluator-v1", "manifest":{"status":"provisional","manifest_hash":"a"*64}, "evidence":[]}
 
 
+def test_build_report_preserves_separate_confidence_intervals():
+    value = snapshot()
+    value["confidence_intervals"] = {"accuracy_95": {"lower": 0.5, "upper": 1.0}}
+    report = build_report(value)
+    assert report["confidence_intervals"] == value["confidence_intervals"]
+    assert report["metrics"] == snapshot()["metrics"]
+    report["confidence_intervals"]["accuracy_95"]["lower"] = 0
+    assert value["confidence_intervals"]["accuracy_95"]["lower"] == 0.5
+
+
+@pytest.mark.parametrize("ci", [
+    None, [], {}, {"accuracy_95": {"lower": 0, "upper": 1, "secret": "canary"}},
+    {"accuracy_95": {"lower": 0, "upper": 1}, "payload": "canary"},
+    {"accuracy_95": {"lower": True, "upper": 1}},
+    {"accuracy_95": {"lower": "0", "upper": 1}},
+    {"accuracy_95": {"lower": float("nan"), "upper": 1}},
+    {"accuracy_95": {"lower": 0, "upper": float("inf")}},
+    {"accuracy_95": {"lower": -0.1, "upper": 1}},
+    {"accuracy_95": {"lower": 0.8, "upper": 0.2}},
+    {"accuracy_95": {"lower": 0, "upper": 1.1}},
+    {"accuracy_95": {"lower": {"secret": "canary"}, "upper": 1}},
+])
+def test_build_report_rejects_malformed_confidence_intervals(ci):
+    with pytest.raises(ValueError, match="REPORT_INPUT_INVALID"):
+        build_report(snapshot() | {"confidence_intervals": ci})
+
+
 def test_build_report_is_narrow_and_deterministic():
     value = snapshot(); value["secret"] = "canary"
     report = build_report(value)

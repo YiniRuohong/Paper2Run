@@ -39,6 +39,36 @@ def seeded(tmp_path):
 def h(key): return {'X-Actor-ID':'owner','Idempotency-Key':key}
 def create(client, run, key='b1', body=None): return client.post(f'/api/v1/runs/{run}/report-builds',headers=h(key),json=body or {})
 
+@pytest.mark.parametrize('corrupt', ['hash', 'extra', 'bounds', 'duplicate'])
+def test_snapshot_rejects_invalid_evaluator_ci_atomically(seeded, corrupt):
+    from p2r_persistence.models import RunEventRecord
+    app, ids = seeded
+    factory = app.state.runtime['session_factory']
+    with factory.begin() as db:
+        payload = {
+            'metrics_hash': db.get(RunRecord, ids['run']).metrics_hash,
+            'confidence_intervals': {'accuracy_95': {'lower': 0.5, 'upper': 1.0}},
+        }
+        if corrupt == 'hash':
+            payload['metrics_hash'] = '0' * 64
+        elif corrupt == 'extra':
+            payload['secret'] = 'secret-canary'
+        elif corrupt == 'bounds':
+            payload['confidence_intervals']['accuracy_95']['upper'] = {'secret': 'secret-canary'}
+        db.add(RunEventRecord(run_id=ids['run'], seq=0, type='run.evaluation.completed', payload_json=payload))
+        if corrupt == 'duplicate':
+            db.add(RunEventRecord(run_id=ids['run'], seq=1, type='run.evaluation.completed', payload_json=payload))
+    with TestClient(app) as client:
+        response = create(client, ids['run'])
+        assert response.status_code == 409
+        assert response.json()['error']['code'] == 'REPORT_INPUT_INVALID'
+        assert 'secret-canary' not in response.text
+    with factory() as db:
+        assert db.scalar(select(ReportBuildRecord)) is None
+        assert db.scalar(select(OperationRecord)) is None
+        assert db.scalar(select(Job)) is None
+
+
 def test_report_lifecycle_and_reuse(seeded):
     app,ids=seeded
     with TestClient(app) as c:

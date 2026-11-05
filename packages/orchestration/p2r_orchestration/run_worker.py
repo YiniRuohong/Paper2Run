@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from p2r_orchestration.export_jobs import process_export_job
 from sqlalchemy import select
@@ -9,6 +10,7 @@ from p2r_persistence.job_repository import JobRepository
 from p2r_persistence.models import AttemptRecord, EvaluationRecord, ExecutionRecord, ExportRecord, RepairProposalRecord, ReportRecord, RunEventRecord, RunRecord, SpecRevisionRecord, ExperimentRecord
 from p2r_orchestration.execution_repository import ExecutionRepository
 from p2r_orchestration.evidence_registry import EVIDENCE_EVENT_TYPE, register_run_output
+from p2r_orchestration.report_builder import EVALUATION_EVENT_TYPE, project_confidence_intervals
 
 CODE_BOUND_EVENT_TYPE = "run.code_bound"
 from p2r_orchestration.repair_repository import create_attempt
@@ -94,7 +96,13 @@ def _guard_fixture(db, job_id, worker_id, token):
         raise _LostFence()
 
 
+_log = logging.getLogger(__name__)
+
+
 def _fail_fixture_after_external_error(session_factory, *, job_id, run_id, worker_id, token):
+    # Operator diagnostics only: the cause goes to the process log, never to
+    # any persisted or public surface (those keep the fixed PIPELINE_FAILED).
+    _log.warning("run %s failed in the controlled pipeline", run_id, exc_info=True)
     with session_factory.begin() as db:
         _guard_fixture(db, job_id, worker_id, token)
         run = db.get(RunRecord, run_id)
@@ -286,6 +294,7 @@ def _run_claimed_job(session_factory, *, job_id, payload_ref, kind, worker_id, t
             labels = result.get("labels")
             evaluated = (evaluate_predictions(result["predictions"], labels=labels)
                          if labels is not None else evaluate_predictions(result["predictions"]))
+            confidence_intervals = project_confidence_intervals(evaluated["confidence_intervals"])
         except Exception:
             return _fail_fixture_after_external_error(session_factory, job_id=job_id, run_id=payload_ref, worker_id=worker_id, token=token)
 
@@ -315,6 +324,12 @@ def _run_claimed_job(session_factory, *, job_id, payload_ref, kind, worker_id, t
             if run.status != "evaluating" or execution.runner_id != worker_id or execution.fencing_token != token:
                 return False
             db.add(EvaluationRecord(run_id=run.id, metrics_json=evaluated["metrics"], verdict=evaluated["verdict"], metrics_hash=evaluated["metrics_hash"], evaluator_version=result.get("evaluator_version") or EVALUATOR_VERSION))
+            # CI comes only from our evaluator, separately from metrics and its
+            # stable hash, in the same fenced terminal transaction.
+            _event(db, run.id, EVALUATION_EVENT_TYPE, {
+                "metrics_hash": evaluated["metrics_hash"],
+                "confidence_intervals": confidence_intervals,
+            })
             run.metrics_hash = evaluated["metrics_hash"]
             run.verdict = evaluated["verdict"]
             run.status = "completed"

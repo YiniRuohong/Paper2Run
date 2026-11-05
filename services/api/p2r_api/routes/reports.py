@@ -9,12 +9,12 @@ from sqlalchemy import select, update
 
 from p2r_artifacts.store import ArtifactStoreError
 from p2r_orchestration.evidence_registry import read_registered_entries
-from p2r_orchestration.report_builder import LIMITATIONS, REAL_LIMITATIONS, SANDBOX_LIMITATIONS, build_report, project_metrics, report_hash
+from p2r_orchestration.report_builder import EVALUATION_EVENT_TYPE, LIMITATIONS, REAL_LIMITATIONS, SANDBOX_LIMITATIONS, build_report, project_confidence_intervals, project_metrics, report_hash
 from p2r_orchestration.service import ServiceError
 from p2r_persistence.job_repository import JobRepository
 from p2r_persistence.models import (
     EnvironmentCheckRecord, EvaluationRecord, ExperimentRecord, ExtractionRecord,
-    OperationRecord, PaperRecord, ReportBuildRecord, ReportRecord, RunRecord,
+    OperationRecord, PaperRecord, ReportBuildRecord, ReportRecord, RunEventRecord, RunRecord,
     SpecRevisionRecord,
 )
 from p2r_persistence.repositories import IdempotencyRepository
@@ -176,6 +176,20 @@ def _snapshot(db, request, run):
         ),
         "controlled_smoke": bool(controlled),
     }
+    # Legacy runs have no evaluator event. Do not infer CI from runner evidence
+    # or fabricate it; a present registration must match this evaluation.
+    events = db.scalars(select(RunEventRecord).where(
+        RunEventRecord.run_id == run.id, RunEventRecord.type == EVALUATION_EVENT_TYPE,
+    )).all()
+    if events:
+        if len(events) != 1:
+            raise ValueError("REPORT_INPUT_INVALID")
+        payload = events[0].payload_json
+        if (not isinstance(payload, dict)
+                or set(payload) != {"metrics_hash", "confidence_intervals"}
+                or payload["metrics_hash"] != evaluation.metrics_hash):
+            raise ValueError("REPORT_INPUT_INVALID")
+        snapshot["confidence_intervals"] = project_confidence_intervals(payload["confidence_intervals"])
     build_report(snapshot)
     return snapshot
 

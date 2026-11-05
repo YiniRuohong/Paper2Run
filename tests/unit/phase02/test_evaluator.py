@@ -40,4 +40,8 @@ def test_evaluator_uses_predictions_not_stdout(capsys):
     actual = evaluate_predictions(rows)
     assert capsys.readouterr().out
     assert actual == expected
-    assert actual["metrics"] == {"accuracy": 0.75, "correct": 3, "total": 4}
+    assert actual["metrics"]["accuracy"] == 0.75
+    assert actual["metrics"]["correct"] == 3
+    assert actual["metrics"]["total"] == 4
+    assert actual["confidence_intervals"]["accuracy_95"]["lower"] <= 0.75
+    assert actual["confidence_intervals"]["accuracy_95"]["upper"] >= 0.75

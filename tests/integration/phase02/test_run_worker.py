@@ -245,9 +245,11 @@ def test_fixture_job_completes_run_evaluation_report_and_events_once(tmp_path):
         assert len(session.scalars(select(ReportRecord).where(ReportRecord.run_id == run_id)).all()) == 0
         assert stored.report_hash is None
         events = session.scalars(select(RunEventRecord).where(RunEventRecord.run_id == run_id).order_by(RunEventRecord.seq)).all()
-        assert [event.seq for event in events] == [0, 1, 2, 3]
-        assert [event.type for event in events] == ['run.created', 'stage.changed', 'stage.changed', 'run.terminal']
-        assert [event.payload_json['status'] for event in events] == ['queued', 'running', 'evaluating', 'completed']
+        assert [event.seq for event in events] == [0, 1, 2, 3, 4]
+        assert [event.type for event in events] == ['run.created', 'stage.changed', 'stage.changed', 'run.evaluation.completed', 'run.terminal']
+        assert [event.payload_json['status'] for event in events if 'status' in event.payload_json] == ['queued', 'running', 'evaluating', 'completed']
+        assert events[3].payload_json['metrics_hash'] == stored.metrics_hash
+        assert set(events[3].payload_json) == {'metrics_hash', 'confidence_intervals'}
 
 
 def test_run_worker_rolls_back_run_business_state_when_fenced_completion_fails(tmp_path, monkeypatch):
