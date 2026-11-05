@@ -15,7 +15,7 @@ from p2r_evaluation.autonomous import freeze_protocol
 from p2r_evaluation.reference_verification import validate_reference_values
 from p2r_orchestration.research_capabilities import CapabilityRegistry
 from p2r_persistence.autonomous import AutonomousConfigRecord as Config, AutonomousTaskRecord as Task, AutonomousEventRecord as Event
-from p2r_persistence.models import ExtractionRecord, PaperRecord, PaperVersionRecord, PaperTextRecord, utcnow
+from p2r_persistence.models import PaperRecord,PaperVersionRecord, PaperTextRecord, utcnow
 from .bridge import HarnessBridge
 from .control import ControlMixin
 from .security import ProfileStore, digest, fail
@@ -127,15 +127,8 @@ class AutonomousService(ControlMixin):
                                 "source_characters": len(decoded), "text_limit_characters": 120000})
             except (OSError, ValueError):
                 context["limitations"].append("Parsed paper text could not be verified.")
-        extraction = db.scalar(select(ExtractionRecord).where(ExtractionRecord.paper_id == paper.id,
-            ExtractionRecord.status == "ready").order_by(ExtractionRecord.created_at.desc()))
-        if extraction:
-            payload = extraction.payload_json
-            refs = payload.get("source_refs") or []
-            if refs and all(ref.get("pdf_sha256") == sha for ref in refs if isinstance(ref, dict)):
-                context["extraction"] = payload
-        if not context.get("text") and not context.get("extraction"):
-            context["limitations"].append("No verified parsed or extracted paper content is available; no fixture substituted.")
+        if not context.get("text"):
+            context["limitations"].append("No verified parsed paper content is available; no fixture substituted.")
         return self.profiles.clean(context, bounded=False)
 
     def create_task(self, db, project_id, actor, payload):
