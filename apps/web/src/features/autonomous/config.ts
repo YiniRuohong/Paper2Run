@@ -122,7 +122,7 @@ const OUTCOMES: Record<Outcome, { label: string; tone: Tone; caption: string | n
   review_unavailable: { label: '复核不可用', tone: 'warn', caption: null },
   blocked_by_safety: { label: '安全终止', tone: 'bad', caption: null },
 };
-const knownOutcome = (outcome: unknown): outcome is Outcome => typeof outcome === 'string' && Object.hasOwn(OUTCOMES, outcome);
+export const knownOutcome = (outcome: unknown): outcome is Outcome => typeof outcome === 'string' && Object.hasOwn(OUTCOMES, outcome);
 export const outcomeLabel = (outcome: unknown): string | null =>
   knownOutcome(outcome) ? OUTCOMES[outcome].label : typeof outcome === 'string' && outcome ? `未知结局（${outcome}）` : null;
 export const outcomeTone = (outcome: unknown): Tone | null =>

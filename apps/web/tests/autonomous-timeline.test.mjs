@@ -156,6 +156,7 @@ test('safety_blocked is a bad sub-step that ends in the report phase', () => {
   assert.equal(s.report.items[0].tone, 'bad');
   assert.equal(s.report.items[0].detail, 'ISOLATION_PROBE_FAILED');
   assert.equal(s.report.mark, 'failed');
+  assert.equal(s.review.mark, 'open', 'the review never started, so it is neither green nor failed');
 });
 
 test('Pi progress notes become the active stage detail without duplicating the tool step', () => {
@@ -256,4 +257,71 @@ test('the timeline badge explains it is derived, not a program judgement', async
   assert.match(views, /Pi 自报进度（模型叙述，不是程序判定）/);
   assert.match(views, /科研专家调用/);
   assert.match(views, /建议，不是执行证据/);
+});
+
+// Re-review probe cases: a phase that never started is never green.
+test('probe: a safety block during execute leaves the unstarted review and evidence phases open', () => {
+  const s = byId(buildStages({ id: 't', state: 'stopped', outcome: 'blocked_by_safety' }, [
+    ev(1, 'task_created'), tool(2, 'a', 'execute', { command: 'python x.py' }), ev(3, 'safety_blocked', { code: 'X' }),
+    ev(4, 'task_finished', { state: 'stopped', outcome: 'blocked_by_safety' }),
+  ]).stages);
+  assert.equal(s.review.mark, 'open');
+  assert.equal(s.evidence.mark, 'open');
+  assert.equal(s.execute.mark, 'done', 'a phase that really ran before the active one stays done');
+  assert.equal(s.report.mark, 'failed');
+});
+
+test('probe: a failed task with an error in execute never greens the later phases', () => {
+  const s = byId(buildStages({ id: 't', state: 'failed' }, [
+    ev(1, 'task_created'), tool(2, 'a', 'execute', { command: 'python x.py' }), ev(3, 'task_error', { message: 'boom' }),
+    ev(4, 'task_finished', { state: 'failed' }),
+  ]).stages);
+  assert.equal(s.review.mark, 'open');
+  assert.equal(s.evidence.mark, 'open');
+  assert.equal(s.plan.mark, 'open', 'the task never read or planned');
+  assert.equal(s.execute.mark, 'failed');
+});
+
+test('probe: a task stopped during execute without an outcome never greens the later phases', () => {
+  const s = byId(buildStages({ id: 't', state: 'stopped', outcome: null }, [
+    ev(1, 'task_created'), tool(2, 'a', 'read', { path: 'p.md' }), done(3, 'a', 'read'), tool(4, 'b', 'execute', { command: 'x' }),
+    ev(5, 'stop_requested'), ev(6, 'task_finished', { state: 'stopped' }),
+  ]).stages);
+  assert.equal(s.review.mark, 'open');
+  assert.equal(s.evidence.mark, 'open');
+  assert.equal(s.plan.mark, 'done');
+  assert.equal(s.execute.mark, 'done');
+});
+
+test('冻结证据 is not done when it has no records', () => {
+  const s = byId(buildStages({ id: 't', state: 'completed', outcome: null }, [
+    ev(1, 'task_created'), tool(2, 'b', 'execute', { command: 'x' }), done(3, 'b', 'execute'), ev(4, 'task_finished', { state: 'completed' }),
+  ]).stages);
+  assert.equal(s.evidence.items.length, 0);
+  assert.notEqual(s.evidence.mark, 'done');
+  assert.equal(s.evidence.mark, 'open');
+});
+
+test('an unknown outcome needs attention on the review phase even after a passing verdict', () => {
+  const events = [...submitted, verdict(4, 'pass'), ev(5, 'task_finished', { state: 'completed', outcome: 'something_new' })];
+  assert.equal(reviewMark({ state: 'completed', outcome: 'something_new' }, events), 'attention');
+  // verified and a passing verdict keep their green, as the re-review confirmed.
+  assert.equal(reviewMark({ state: 'completed', outcome: 'verified' }, [...submitted, verdict(4, 'pass'), ...finishedWith(5, 'verified')]), 'done');
+});
+
+test('a safety block before the review phase started does not mark it failed', () => {
+  assert.equal(reviewMark({ state: 'stopped', outcome: 'blocked_by_safety' }, [...submitted, ev(4, 'safety_blocked', { code: 'X' })]), 'failed', 'started: failed');
+  const s = byId(buildStages({ id: 't', state: 'stopped', outcome: 'blocked_by_safety' }, [tool(1, 'a', 'write', { path: 'x' }), ev(2, 'safety_blocked', { code: 'X' })]).stages);
+  assert.equal(s.review.mark, 'open', 'never started: open');
+});
+
+// Re-review probe: delegations are serialised, so an ending belongs to the most recent open call.
+test('probe: an ending and a completion pair with the most recent open call, not the oldest', () => {
+  const events = [dStart(1), dStart(5), dEnd(6, 'error')];
+  assert.deepEqual(specialistCalls(events, { state: 'running' }).map(c => [c.sequence, c.status]), [[1, 'running'], [5, 'failed']]);
+  assert.deepEqual(specialistCalls(events, { state: 'stopped' }).map(c => [c.sequence, c.status]), [[1, 'missing'], [5, 'failed']]);
+  const items = buildStages({ id: 't', state: 'stopped' }, events).stages.flatMap(st => st.items).filter(i => i.label === '专家建议（模型叙述）');
+  assert.deepEqual(items.map(i => /未返回/.test(i.detail)), [true, false], '未返回 shows on call 1 once the task is finished');
+  const replied = specialistCalls([dStart(1), dStart(5), dDone(6), dEnd(7, 'stop')], { state: 'running' });
+  assert.deepEqual(replied.map(c => [c.sequence, c.status, c.text]), [[1, 'running', null], [5, 'done', 'use k-fold']], 'an orphaned earlier call never takes the later reply');
 });

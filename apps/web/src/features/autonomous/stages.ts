@@ -1,7 +1,7 @@
 import type { AutonomousEvent, AutonomousFile, AutonomousTask } from '../../api-client/autonomous.ts';
 import type { StageMark, WbStage, WbStageItem } from '../../ui/workbench/Workbench.tsx';
 import type { WbFile, WbTag } from '../../ui/workbench/tree.ts';
-import { evidenceKindLabel, outcomeLabel, outcomeTone, own, researchTaskTypeLabel, stateLabel, taskTone, terminalState } from './config.ts';
+import { evidenceKindLabel, knownOutcome, outcomeLabel, outcomeTone, own, researchTaskTypeLabel, stateLabel, taskTone, terminalState } from './config.ts';
 
 // Presentation-only: groups the autonomous task's real event journal into the
 // research phases shown on the workbench timeline. There is no backend stage
@@ -131,7 +131,7 @@ const isDelegation = (e: AutonomousEvent) => {
   return e.type === 'sdk_event' && (p.type === 'research_delegation_started' || p.type === 'research_delegation_completed'
     || (p.type === 'message_end' && p.delegated === true));
 };
-// 与 tools/autonomous_acceptance.py 相同：完成事件按 (专家, 任务类型, 模型) 先进先出配对。
+// 完成事件按 (专家, 任务类型, 模型) 配对到最近一条尚未返回的调用：专家调用严格串行。
 const delegationKey = (p: Record<string, unknown>) => JSON.stringify([p.specialist_id, p.task_type, p.model]);
 const FAILED_STOP_REASONS = new Set(['error', 'aborted']);
 const CALL_STATUS_TEXT: Record<SpecialistCall['status'], string> = { running: '进行中', done: '已返回', failed: '调用失败', missing: '未返回' };
@@ -204,14 +204,19 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
   const active = current;
   const activeIdx = order.indexOf(active);
   const running = !hasOutcome && (task?.state === 'running' || task?.state === 'starting' || task?.state === 'queued');
-  // 候选与复核是程序结论：只有 verified 或最近一次复核通过才算完成（绿勾）。
-  const reviewMark = (): StageMark => {
+  // 没开始过的阶段：在当前阶段之前是「被跳过或任务提前结束」（open），之后是未解锁（locked）。
+  // 绝不因为「后面的阶段开始了」就给一个没有任何记录的阶段打绿勾。
+  const unstarted = (idx: number): StageMark => (idx > activeIdx ? 'locked' : 'open');
+  // 候选与复核是程序结论：只有 verified 或最近一次复核通过才算完成（绿勾），不论该阶段是否有记录。
+  const reviewMark = (isStarted: boolean, idx: number): StageMark => {
     const outcome = task?.outcome ?? null;
-    if (outcome === 'blocked_by_safety') return 'failed';
     if (outcome === 'verified') return 'done';
+    if (outcome === 'blocked_by_safety') return isStarted ? 'failed' : unstarted(idx);
+    if (outcome !== null && !knownOutcome(outcome)) return 'attention'; // 未知结局不配绿
     if (outcome === 'completed_with_issues' || outcome === 'review_unavailable') return 'attention';
     if (lastVerdict === 'pass') return 'done';
     if (lastVerdict !== null || reviewFailedCount > 0) return 'attention';
+    if (!isStarted) return unstarted(idx);
     return failed.has('review') && task?.state === 'failed' ? 'failed' : 'open';
   };
   const stages = PHASES.map(phase => {
@@ -220,10 +225,11 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
     const isStarted = started.has(phase.id);
     const liveActive = idx === activeIdx && !finished;
     let mark: StageMark;
-    if (phase.id === 'review' && isStarted && !liveActive) mark = reviewMark();
+    if (phase.id === 'review' && !liveActive) mark = reviewMark(isStarted, idx);
+    else if (!isStarted && !liveActive) mark = unstarted(idx);
     else if (idx < activeIdx) mark = failed.has(phase.id) && task?.state === 'failed' ? 'failed' : 'done';
     // 修复轮次回到前面的阶段时，后面只在上一轮开始过的阶段显示「可进入」，不显示完成。
-    else if (idx > activeIdx) mark = isStarted ? 'open' : 'locked';
+    else if (idx > activeIdx) mark = 'open';
     else if (!finished) mark = task?.pending_decision != null || task?.state === 'paused' || task?.state === 'blocked' ? 'attention' : running ? 'running' : 'current';
     else if (failed.has(phase.id) || task?.state === 'failed' || task?.outcome === 'blocked_by_safety') mark = 'failed';
     else mark = hasOutcome || task?.state === 'completed' || task?.state === 'succeeded' ? 'done' : 'attention';
@@ -263,8 +269,8 @@ export interface SpecialistCall {
 }
 /**
  * 科研专家调用：建议，不是执行证据。按开始顺序排列。
- * started 与 completed 按 (专家, 任务类型, 模型) 先进先出配对；每次调用最后的 delegated
- * message_end 按 (专家, 模型) 配对到最早一条尚未结束的调用，stopReason 为 error / aborted 即失败。
+ * 专家调用严格串行（bridge.mjs），所以 completed 按 (专家, 任务类型, 模型)、delegated message_end
+ * 按 (专家, 模型) 都配对到最近一条尚未结束的调用；message_end 的 stopReason 为 error / aborted 即失败。
  */
 export function specialistCalls(events: AutonomousEvent[], task?: Pick<AutonomousTask, 'state' | 'outcome'> | null): SpecialistCall[] {
   const calls: SpecialistCall[] = [];
@@ -275,7 +281,11 @@ export function specialistCalls(events: AutonomousEvent[], task?: Pick<Autonomou
     const p = rec(e.payload);
     if (p.type === 'message_end') {
       const message = rec(p.message);
-      const index = awaitingEnd.findIndex(c => c.specialistId === str(p.specialist_id) && c.model === str(message.model));
+      // 专家调用严格串行（bridge.mjs）：结束事件属于最近一条尚未结束的同名调用。
+      let index = -1;
+      for (let i = awaitingEnd.length - 1; i >= 0; i--) {
+        if (awaitingEnd[i].specialistId === str(p.specialist_id) && awaitingEnd[i].model === str(message.model)) { index = i; break; }
+      }
       if (index < 0) continue;
       const [call] = awaitingEnd.splice(index, 1);
       if (call.status === 'running' && FAILED_STOP_REASONS.has(String(message.stopReason))) {
@@ -286,7 +296,8 @@ export function specialistCalls(events: AutonomousEvent[], task?: Pick<Autonomou
     }
     const key = delegationKey(p);
     const queue = awaitingCompletion.get(key) ?? [];
-    let call = p.type === 'research_delegation_completed' ? queue.shift() : undefined;
+    // 回复配给最近一条尚未返回的同类调用，较早的孤立调用不会拿走后来的回复。
+    let call = p.type === 'research_delegation_completed' ? queue.pop() : undefined;
     if (!call) {
       const taskType = str(p.task_type);
       call = { sequence: e.sequence, specialistId: str(p.specialist_id), taskType, taskTypeLabel: taskType ? researchTaskTypeLabel(taskType) : '未知类型',
