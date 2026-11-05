@@ -111,8 +111,10 @@ pub fn free_port() -> u16 {
 }
 
 pub fn write_allow(path: &std::path::Path, ids: &[iroh::EndpointId]) {
-    let body: String = ids.iter().map(|i| format!("{i}\n")).collect();
-    std::fs::write(path, format!("# allowed\n\n{body}")).unwrap();
+    let devices: Vec<_> = ids.iter().enumerate()
+        .map(|(n, id)| serde_json::json!({"id": id.to_string(), "name": format!("dev{n}"), "paired_at": 0}))
+        .collect();
+    std::fs::write(path, serde_json::to_vec(&devices).unwrap()).unwrap();
 }
 
 /// Open one HTTP/1.1 connection over a fresh QUIC bi-stream.

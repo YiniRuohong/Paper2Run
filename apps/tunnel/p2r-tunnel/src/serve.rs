@@ -17,16 +17,26 @@ type Body = BoxBody<Bytes, hyper::Error>;
 type Upstream = Client<HttpConnector, Incoming>;
 
 pub async fn run(ep: Endpoint, backend_port: u16, allow_path: PathBuf) -> anyhow::Result<()> {
+    run_with(ep, backend_port, allow_path, None).await
+}
+
+/// Like [`run`], also handing ALPN_PAIR connections to `pairing` when given.
+pub async fn run_with(ep: Endpoint, backend_port: u16, allow_path: PathBuf, pairing: Option<crate::pair::Pairing>) -> anyhow::Result<()> {
     let client: Upstream = Client::builder(TokioExecutor::new()).build_http();
     let ctx = Arc::new(Ctx { client, backend_port, allow_path: allow_path.clone() });
     while let Some(incoming) = ep.accept().await {
         let ctx = ctx.clone();
         let allow_path = allow_path.clone();
+        let pairing = pairing.clone();
         tokio::spawn(async move {
             let conn = match incoming.await {
                 Ok(c) => c,
                 Err(e) => return tracing::debug!("handshake failed: {e}"),
             };
+            if conn.alpn() == crate::endpoint::ALPN_PAIR {
+                if let Some(p) = pairing { p.handle(conn).await } else { conn.close(1u32.into(), b"pairing closed") }
+                return;
+            }
             if conn.alpn() != crate::endpoint::ALPN {
                 return conn.close(1u32.into(), b"unsupported protocol");
             }

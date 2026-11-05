@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use p2r_tunnel::{connect, endpoint, keys, rendezvous, serve, shutdown};
+use p2r_tunnel::{connect, endpoint, keys, pair, rendezvous, serve, shutdown};
 
 #[derive(Parser)]
 #[command(name = "p2r-tunnel", about = "Paper2Run tablet tunnel over iroh")]
@@ -67,6 +67,24 @@ enum Cmd {
         #[command(flatten)]
         net: Net,
     },
+    /// Tablet side: pair with a desktop using its code. Exit 0 ok, 3 wrong
+    /// code (now void), 4 unknown or expired code, 1 anything else.
+    Pair {
+        #[command(flatten)]
+        net: Net,
+        /// Rendezvous endpoint id (from remote.json).
+        #[arg(long)]
+        rendezvous: iroh::EndpointId,
+        /// Pairing code shown on the desktop, e.g. 123-45678.
+        #[arg(long)]
+        code: pair::Code,
+        /// Name shown in the desktop's device list.
+        #[arg(long)]
+        name: String,
+        /// File to write the desktop's id to.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Tablet side: expose the remote backend on a local port.
     Connect {
         #[command(flatten)]
@@ -90,6 +108,26 @@ async fn main() -> anyhow::Result<()> {
             let ep = net.bind().await?;
             tracing::info!("serving id={} backend=127.0.0.1:{backend_port}", ep.id());
             shutdown::run_until(ep.clone(), shutdown::signal(), serve::run(ep, backend_port, allow)).await?;
+        }
+        Cmd::Pair { net, rendezvous, code, name, out } => {
+            let cfg = net.config()?;
+            let ep = net.bind().await?;
+            let result = pair::join(&ep, &cfg, rendezvous, &code, &name).await;
+            ep.close().await;
+            match result {
+                Ok(desktop) => {
+                    std::fs::write(&out, desktop.to_string())?;
+                    println!("{desktop}");
+                }
+                Err(e) => {
+                    eprintln!("pairing failed: {e:#}");
+                    std::process::exit(match e.downcast_ref::<pair::JoinError>() {
+                        Some(pair::JoinError::WrongCode) => 3,
+                        Some(pair::JoinError::NoSuchCode) => 4,
+                        None => 1,
+                    });
+                }
+            }
         }
         Cmd::Rendezvous { net } => {
             let ep = net.bind().await?;

@@ -138,15 +138,15 @@ async fn allowlist_reloaded_per_connection() {
 }
 
 #[test]
-fn allow_file_parsing() {
+fn allow_load_reads_devices_json() {
     let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("a");
+    let p = dir.path().join("devices.json");
     let id = iroh::SecretKey::generate().public();
-    std::fs::write(&p, format!("# c\n\n  {id}  \n")).unwrap();
+    common::write_allow(&p, &[id]);
     let set = p2r_tunnel::allow::load(&p).unwrap();
     assert!(set.contains(&id) && set.len() == 1);
     assert!(p2r_tunnel::allow::load(&dir.path().join("missing")).unwrap().is_empty());
-    std::fs::write(&p, "not-a-key\n").unwrap();
+    std::fs::write(&p, "not json").unwrap();
     assert!(p2r_tunnel::allow::load(&p).is_err());
 }
 

@@ -23,7 +23,7 @@ pub fn load_or_create(path: &Path) -> anyhow::Result<iroh::SecretKey> {
     Ok(key)
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     use std::io::Write;
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
