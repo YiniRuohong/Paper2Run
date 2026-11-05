@@ -24,7 +24,7 @@ def test_migration_upgrade_downgrade_and_init_db_discovery(tmp_path):
     tables = set(inspect(engine).get_table_names())
     assert {"autonomous_configs", "autonomous_tasks", "autonomous_events"} <= tables
     with engine.connect() as conn:
-        assert conn.execute(text("select version_num from alembic_version")).scalar() == "0021"
+        assert conn.execute(text("select version_num from alembic_version")).scalar() == "0022"
         triggers = conn.execute(text("select name from sqlite_master where type='trigger' and name like 'p2r_autonomous_events_%'")).scalars().all()
         assert len(triggers) == 2
     command.downgrade(cfg, "0019")

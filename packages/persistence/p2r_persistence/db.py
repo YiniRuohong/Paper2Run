@@ -65,17 +65,19 @@ def create_session_factory(engine):
     return sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
 
 
-def _ensure_reference_columns(engine: Engine) -> None:
-    """Bridge pre-0021 create_all databases without adopting migration history.
+def _ensure_autonomous_columns(engine: Engine) -> None:
+    """Bridge pre-0022 create_all databases without adopting migration history.
 
-    Keep this limited to additive reference metadata: create_all installations
-    cannot safely replay the full Alembic chain. Revision 0021 also checks for
-    these columns so either initialization order is safe.
+    Keep this limited to additive autonomous metadata (reference values, harness state): create_all installations
+    cannot safely replay the full Alembic chain. Revisions 0021 and 0022 also check
+    for these columns so either initialization order is safe.
     """
     columns = (
         Column("reference_values_json", JSON(), nullable=True),
         Column("reference_scope", String(8192), nullable=True),
         Column("reference_sources_confirmed", Boolean(), nullable=False, server_default=false()),
+        Column("outcome", String(32), nullable=True),
+        Column("harness_json", JSON(), nullable=True),
     )
     with engine.begin() as connection:
         existing = {column["name"] for column in inspect(connection).get_columns("autonomous_tasks")}
@@ -88,7 +90,7 @@ def _ensure_reference_columns(engine: Engine) -> None:
 def init_db(engine) -> None:
     from . import models, autonomous  # noqa: F401
     Base.metadata.create_all(engine)
-    _ensure_reference_columns(engine)
+    _ensure_autonomous_columns(engine)
     install_append_only_guards(engine)
 
 

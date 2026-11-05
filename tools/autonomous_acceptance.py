@@ -206,7 +206,8 @@ def split_ids(count=442):
 
 def protocol_and_objective(args, source):
     limits = {"wall_time_seconds": max(1, math.ceil(args.timeout)), "max_model_calls": args.max_model_calls,
-              "max_model_tokens": args.max_model_tokens, "storage_bytes": 512 * 1024 * 1024, "gpu_devices": []}
+              "max_model_tokens": args.max_model_tokens, "storage_bytes": 512 * 1024 * 1024, "gpu_devices": [],
+              "max_repair_rounds": 3}
     objective = (
         "Run a real exploratory diabetes regression experiment informed by Least Angle Regression. "
         "Read the supplied full paper context. Inside the isolated Docker target, install numpy and scikit-learn "

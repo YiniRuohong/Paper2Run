@@ -399,3 +399,24 @@ def test_resume_cannot_reset_exhausted_budget(service):
         row = service.row(db, task_id); row.state = "paused"; row.usage_json = {"calls": 10}
         db.commit()
         with pytest.raises(ServiceError, match="budget"): service.control(db, task_id, "resume")
+
+
+def test_new_task_has_harness_state(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        assert row.harness_json == {"version": 2, "repair_round": 0, "no_progress": 0,
+                                    "fingerprint": None, "candidate": None, "reviews": []}
+        assert row.outcome is None
+        public = service.public(row)
+        assert public["outcome"] is None and public["repair_round"] == 0
+        assert public["candidate"] is None and public["reviews"] == []
+
+
+def test_public_exposes_legacy_task_without_harness_state(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.harness_json = None
+        public = service.public(row)
+        assert public["repair_round"] == 0 and public["candidate"] is None and public["reviews"] == []

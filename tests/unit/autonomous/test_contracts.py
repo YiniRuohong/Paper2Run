@@ -3,7 +3,7 @@ import copy
 import pytest
 from pydantic import ValidationError
 
-from p2r_contracts.autonomous import ProjectConfig, canonical_hash, resolve_project_config, safe_config_snapshot
+from p2r_contracts.autonomous import OUTCOMES, ProjectConfig, canonical_hash, resolve_project_config, safe_config_snapshot
 
 
 def config():
@@ -106,3 +106,20 @@ def test_remote_path_not_local_resolved(tmp_path):
         bad["target"]["remote_workspace"] = path
         with pytest.raises(ValidationError):
             ProjectConfig.model_validate(bad)
+
+
+def test_limits_default_repair_rounds():
+    assert ProjectConfig.model_validate(config()).limits.max_repair_rounds == 3
+    for bad in (11, -1):
+        value = config()
+        value["limits"]["max_repair_rounds"] = bad
+        with pytest.raises(ValidationError):
+            ProjectConfig.model_validate(value)
+    for ok in (0, 10):
+        value = config()
+        value["limits"]["max_repair_rounds"] = ok
+        assert ProjectConfig.model_validate(value).limits.max_repair_rounds == ok
+
+
+def test_outcomes_are_fixed():
+    assert OUTCOMES == ("verified", "completed_with_issues", "review_unavailable", "blocked_by_safety")

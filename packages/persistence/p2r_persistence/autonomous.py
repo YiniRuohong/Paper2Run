@@ -34,6 +34,9 @@ class AutonomousTaskRecord(TimestampMixin, Base):
     reference_values_json: Mapped[dict | None] = mapped_column(JSON)
     reference_scope: Mapped[str | None] = mapped_column(String(8192))
     reference_sources_confirmed: Mapped[bool] = mapped_column(default=False)
+    # Control-plane harness state; NULL harness_json marks a pre-harness task.
+    outcome: Mapped[str | None] = mapped_column(String(32))
+    harness_json: Mapped[dict | None] = mapped_column(JSON)
     skills_json: Mapped[list] = mapped_column(JSON, default=list)
     protocol_json: Mapped[dict | None] = mapped_column(JSON)
     usage_json: Mapped[dict] = mapped_column(JSON, default=dict)

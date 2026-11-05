@@ -75,12 +75,17 @@ class Target(StrictModel):
         return self
 
 
+# Task outcomes are assigned by the control plane only, never by the model.
+OUTCOMES = ("verified", "completed_with_issues", "review_unavailable", "blocked_by_safety")
+
+
 class Limits(StrictModel):
     wall_time_seconds: int = Field(gt=0, le=31_536_000)
     max_model_calls: int = Field(gt=0, le=1_000_000)
     max_model_tokens: int = Field(gt=0, le=10_000_000_000)
     storage_bytes: int = Field(gt=0, le=1_125_899_906_842_624)
     gpu_devices: list[Name] = Field(default_factory=list, max_length=256)
+    max_repair_rounds: int = Field(default=3, ge=0, le=10)
 
 
 class Network(StrictModel):

@@ -51,12 +51,15 @@ class AutonomousService(ControlMixin):
 
     def public(self, row):
         snapshot = dict(row.config_snapshot)
+        harness = row.harness_json or {}
         # SDK profile endpoint is public metadata; reference values contain no credentials.
         return self.profiles.clean({"id": row.id, "project_id": row.project_id,
             "state": row.state, "objective": row.objective, "config_snapshot": snapshot,
             "usage": row.usage_json, "created_at": row.created_at.isoformat(),
             "updated_at": row.updated_at.isoformat(), "report": row.report_json,
-            "error": row.error_json, "pending_decision": row.pending_decision_json}, bounded=False)
+            "error": row.error_json, "pending_decision": row.pending_decision_json,
+            "outcome": row.outcome, "repair_round": harness.get("repair_round", 0),
+            "candidate": harness.get("candidate"), "reviews": harness.get("reviews", [])}, bounded=False)
 
     def event(self, db, row, kind, payload):
         row.event_sequence += 1
@@ -167,6 +170,8 @@ class AutonomousService(ControlMixin):
             config_snapshot=snapshot, context_json=self.paper_context(db, project_id, payload.get("paper_version_id")),
             reference_values_json=reference_values, reference_scope=reference_scope,
             reference_sources_confirmed=references_confirmed,
+            harness_json={"version": 2, "repair_round": 0, "no_progress": 0, "fingerprint": None,
+                          "candidate": None, "reviews": []},
             skills_json=skills, protocol_json=protocol, usage_json={"calls": 0, "input_tokens": 0, "output_tokens": 0,
             "total_tokens": 0, "wall_time_seconds": 0}, jobs_json={}, artifacts_json=[], event_sequence=0)
         db.add(row)
