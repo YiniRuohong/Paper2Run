@@ -7,7 +7,7 @@ import { Badge, Card, CardHeader } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
 import { buildStages, safetyBlock, toWbFiles } from './stages';
-import { errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
+import { decisionSuperseded, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { ApprovalCard } from './ApprovalCard';
 import { CandidateCard } from './CandidateCard';
 import { ReportView } from './ReportView';
@@ -53,10 +53,28 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   async function controlTask(id: string, action: 'pause' | 'resume' | 'stop' | 'message', text?: string) {
     const scope = taskScope.current;
     const result = await api.control(id, action, text);
-    if (taskScope.current !== scope || taskScope.current.id !== id || result.id !== id) return;
+    if (applyTask(scope, id, result) && action === 'message') setMessage('');
+  }
+
+  function applyTask(scope: typeof taskScope.current, id: string, result: AutonomousTask) {
+    if (taskScope.current !== scope || taskScope.current.id !== id || result.id !== id) return false;
     setTask(result);
     setTasks(old => old.map(item => (item.id === result.id ? result : item)));
-    if (action === 'message') setMessage('');
+    return true;
+  }
+
+  // 显式决定：批准或拒绝。两次点击竞争、或决定已被替换时后端返回
+  // INVALID_STATE / DECISION_MISMATCH：这不是故障，刷新任务并说明即可。
+  async function decideTask(id: string, decisionId: string, action: 'approve' | 'reject', note?: string) {
+    const scope = taskScope.current;
+    try {
+      const result = await api.decide(id, decisionId, action, note);
+      if (applyTask(scope, id, result)) setNotice(action === 'approve' ? '已批准方案变更，任务已排队继续。' : '已拒绝方案变更，当前方案保持不变，任务已排队继续。');
+    } catch (e) {
+      if (!(e instanceof ApiError) || !decisionSuperseded(e.code)) throw e;
+      applyTask(scope, id, await api.task(id));
+      setNotice(errorExplanation('DECISION_MISMATCH')!);
+    }
   }
 
   // 任务 + 事件流轮询；断线重连从事件游标继续。
@@ -264,8 +282,10 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
           </div>
         </Card>}
 
-        {approval && <ApprovalCard approval={approval} busy={busy || task.state !== 'paused'}
-          onApprove={() => void act(async () => { await controlTask(task.id, 'resume', `approve:${approval.id}`); })}
+        {approval && <ApprovalCard approval={approval} busy={busy}
+          blockedReason={task.state !== 'paused' ? '任务暂停后才能处理决定' : undefined}
+          onApprove={() => void act(() => decideTask(task.id, approval.id, 'approve'))}
+          onReject={note => void act(() => decideTask(task.id, approval.id, 'reject', note))}
           onPause={() => void act(async () => { await controlTask(task.id, 'pause'); })} />}
 
         {task.error != null && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" />

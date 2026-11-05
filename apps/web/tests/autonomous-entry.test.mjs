@@ -47,7 +47,12 @@ test('new-experiment page owns upload, parse progress, layered config and author
 test('task page keeps approval, three-state notices, recovery and report sections as first-class surfaces', async () => {
   const page = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
   assert.match(page, /ApprovalCard/);
-  assert.match(page, /`approve:\$\{approval\.id\}`/, 'approval is an explicit control action, not free text');
+  assert.match(page, /decideTask\(task\.id, approval\.id, 'approve'\)/, 'approval is an explicit decision, not free text');
+  assert.match(page, /decideTask\(task\.id, approval\.id, 'reject', note\)/, 'rejection is an explicit decision with an optional note');
+  assert.doesNotMatch(page, /approve:\$\{/, 'no approve:<id> resume message');
+  const card = await readFile(new URL('../src/features/autonomous/ApprovalCard.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(card, /尚未提供显式拒绝接口/, 'reject is enabled');
+  assert.match(card, /maxLength=\{REJECT_NOTE_LIMIT\}/, 'the note respects the backend 4000 character limit');
   assert.match(page, /recovery_required/);
   assert.match(page, /需要恢复/);
   assert.match(page, /ReportView/);

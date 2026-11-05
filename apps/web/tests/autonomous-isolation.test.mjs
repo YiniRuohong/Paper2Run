@@ -127,7 +127,8 @@ test('a pending protocol decision shows the approval card and gates resume behin
   assert.equal(resume.props.disabled, true);
   assert.equal(resume.props.title, '请先处理上方决策');
   card.props.onApprove(); await h.settle();
-  assert.deepEqual(h.calls.control[0], { id: 'ta', action: 'resume', text: 'approve:dec-1' });
+  assert.deepEqual(h.calls.decide[0], { id: 'ta', decisionId: 'dec-1', action: 'approve', note: undefined });
+  assert.equal(h.calls.control.length, 0, 'approval uses the decision endpoint, not resume');
 });
 
 test('recovery_required gates resume behind key re-injection, then unlocks it', async () => {
@@ -208,4 +209,33 @@ test('LEGACY_TASK and TASK_FINISHED errors get a specific explanation and keep c
   assert.match(text, /该任务创建于新版 harness 之前，只能导出/);
   assert.match(text, /LEGACY_TASK/);
   assert.match(text, /req-9/);
+});
+
+const pendingDecision = { id: 'dec-1', kind: 'protocol_approval', proposed: { protocol: { metrics: ['f1'] }, sha256: 'cd'.repeat(32) }, changed: ['metrics'], reason: 'switch metric' };
+
+test('approve and reject go through the explicit decision endpoint, never through resume', async () => {
+  const h = await harness({ taskOver: { pending_decision: pendingDecision } });
+  const card = h.nodes().find(n => n.type === 'ApprovalCard');
+  card.props.onReject('keep accuracy'); await h.settle();
+  assert.deepEqual(h.calls.decide[0], { id: 'ta', decisionId: 'dec-1', action: 'reject', note: 'keep accuracy' });
+  assert.ok(!h.nodes().some(n => n.type === 'ApprovalCard'), 'the returned task has no pending decision, so the card goes away');
+  assert.match(h.text(), /已拒绝方案变更/);
+  const approve = await harness({ taskOver: { pending_decision: pendingDecision } });
+  approve.nodes().find(n => n.type === 'ApprovalCard').props.onApprove(); await approve.settle();
+  assert.deepEqual(approve.calls.decide[0], { id: 'ta', decisionId: 'dec-1', action: 'approve', note: undefined });
+  assert.equal(h.calls.control.length + approve.calls.control.length, 0, 'no approve:<id> resume message is sent');
+});
+
+test('a decision that was already handled or expired refreshes the task instead of showing an error', async () => {
+  for (const code of ['INVALID_STATE', 'DECISION_MISMATCH']) {
+    const h = await harness({ taskOver: { pending_decision: pendingDecision }, decideError: new ApiError('stale', 409, code, 'req-r') });
+    const before = h.calls.task;
+    h.nodes().find(n => n.type === 'ApprovalCard').props.onApprove(); await h.settle();
+    assert.ok(h.calls.task > before, `${code}: the task is re-read`);
+    assert.ok(!h.nodes().some(n => n.type === 'div' && n.props.role === 'alert'), `${code}: no error callout`);
+    assert.match(h.text(), /该决定已被处理或已过期，已刷新任务/, code);
+  }
+  const other = await harness({ taskOver: { pending_decision: pendingDecision }, decideError: new ApiError('boom', 500, 'INTERNAL', 'req-x') });
+  other.nodes().find(n => n.type === 'ApprovalCard').props.onApprove(); await other.settle();
+  assert.match(JSON.stringify(other.nodes().find(n => n.type === 'div' && n.props.role === 'alert').children), /INTERNAL/);
 });

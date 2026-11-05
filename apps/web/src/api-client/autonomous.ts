@@ -102,6 +102,10 @@ export function createAutonomousApi(actorId = 'demo-user', fetcher: Fetcher = fe
     task: (id: string, signal?: AbortSignal) => request<AutonomousTask>(`/tasks/${enc(id)}`, 'GET', undefined, undefined, signal),
     events: (id: string, after: number, signal?: AbortSignal) => request<{ events: AutonomousEvent[]; next_cursor: number }>(`/tasks/${enc(id)}/events?after=${after}`, 'GET', undefined, undefined, signal),
     control: (id: string, action: 'pause' | 'resume' | 'stop' | 'message', message?: string) => request<AutonomousTask>(`/tasks/${enc(id)}/control`, 'POST', { action, ...(message ? { message } : {}) }),
+    // 显式决定（契约 C2）：批准或拒绝待处理的方案变更；成功后任务排队继续。
+    // 竞争时第二次点击得到 409 INVALID_STATE；ID 不符得到 409 DECISION_MISMATCH。
+    decide: (id: string, decisionId: string, action: 'approve' | 'reject', note?: string) =>
+      request<AutonomousTask>(`/tasks/${enc(id)}/decisions/${enc(decisionId)}`, 'POST', { action, ...(note?.trim() ? { note: note.trim() } : {}) }),
     files: (id: string, signal?: AbortSignal) => request<AutonomousFiles>(`/tasks/${enc(id)}/files`, 'GET', undefined, undefined, signal),
     async fileBlob(id: string, file: Pick<AutonomousFile, 'source' | 'path'>, signal?: AbortSignal) {
       const res = await send(`/tasks/${enc(id)}/files/raw?source=${enc(file.source)}&path=${enc(file.path)}`, 'GET', undefined, undefined, signal);

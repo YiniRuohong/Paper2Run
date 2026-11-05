@@ -89,3 +89,19 @@ test('finite budgets, SSH requirements, protocol object and state helpers', () =
   assert.equal(stateLabel('blocked'), '已阻塞'); assert.equal(terminalState('running'), false); assert.equal(terminalState('completed'), true);
   assert.deepEqual(mergeEvents([{ sequence: 2, type: 'old' }], [{ sequence: 1 }, { sequence: 2, type: 'new' }]).map(x => x.sequence), [1, 2]);
 });
+test('decisions post an explicit approve or reject to the decision endpoint with csrf and idempotency', async () => {
+  const { api, calls } = capture({ id: 't/1', state: 'queued', pending_decision: null });
+  const task = await api.decide('t/1', 'd/1', 'reject', 'metric is wrong');
+  assert.equal(task.state, 'queued');
+  assert.equal(calls[0].path, '/api/v1/autonomous/tasks/t%2F1/decisions/d%2F1');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { action: 'reject', note: 'metric is wrong' });
+  assert.equal(calls[0].headers.get('X-CSRF-Token'), 'csrf-token');
+  assert.ok(calls[0].headers.get('Idempotency-Key'));
+  await api.decide('t', 'd', 'approve');
+  await api.decide('t', 'd', 'reject', '   ');
+  assert.deepEqual(JSON.parse(calls[1].init.body), { action: 'approve' });
+  assert.deepEqual(JSON.parse(calls[2].init.body), { action: 'reject' }, 'a blank note is not sent');
+  const { api: conflict } = capture(() => new Response(JSON.stringify({ error: { code: 'DECISION_MISMATCH', message: 'stale' }, meta: { request_id: 'req-d' } }), { status: 409 }));
+  await assert.rejects(conflict.decide('t', 'd', 'approve'), e => e.status === 409 && e.code === 'DECISION_MISMATCH' && e.requestId === 'req-d');
+});
