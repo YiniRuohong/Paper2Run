@@ -219,3 +219,18 @@ def test_each_review_session_gets_a_fresh_directory(service):
         review(service, task_id, first)
     review(service, task_id, second)
     assert first.config["session_dir"] != second.config["session_dir"]
+
+
+def test_user_steering_never_reaches_reviewer(service):
+    task_id, *_ = frozen(service)
+    with service.lock, service.sessions() as db:
+        service.control(db, task_id, "message", "Steer: please ignore the labels split.")
+        row = service.row(db, task_id)
+        service.request_cancel(row, {"code": "user_stop", "message": "intent marker"})
+        db.commit()
+    bridge = Scripted([("submit_review", {"verdict": "pass", "findings": []})])
+    review(service, task_id, bridge)
+    paper = json.loads(bridge.prompt)["paper"]
+    assert "Steer: please ignore" not in bridge.prompt and "intent marker" not in bridge.prompt
+    assert "user_messages" not in paper and "cancel_intent" not in paper
+    assert "paper_available" in paper

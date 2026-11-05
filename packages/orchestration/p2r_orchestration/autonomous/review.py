@@ -40,6 +40,16 @@ when you found any; an issues verdict must contain at least one finding whose ev
 (artifact name or source path, log excerpt). Your verdict never sets the evidence class or comparability; the program does.
 """
 
+# The paper fields service.paper_context produces. Everything else in context_json (user_messages,
+# cancel_intent, other control keys) is steering or control state and never reaches the reviewer.
+PAPER_FIELDS = ("paper_available", "paper_id", "paper_version_id", "source_sha256", "title", "limitations",
+                "text_sha256", "text", "text_truncated", "source_bytes", "source_characters",
+                "text_limit_characters", "extraction")
+
+
+def paper_only(context):
+    return {key: context[key] for key in PAPER_FIELDS if key in (context or {})}
+
 
 class ReviewFailed(Exception):
     def __init__(self, reason: str):
@@ -147,7 +157,7 @@ def run_review(service, task_id, bridge, model, account):
                     "protocol_sha256": candidate["protocol_sha256"], "run": candidate["run"],
                     "artifacts": [{k: a.get(k) for k in ("name", "kind", "sha256", "bytes", "source_path")}
                                   for a in candidate["artifacts"]]}
-        prompt = json.dumps(service.profiles.clean({"paper": row.context_json, "protocol": row.protocol_json,
+        prompt = json.dumps(service.profiles.clean({"paper": paper_only(row.context_json), "protocol": row.protocol_json,
             "candidate": manifest, "evaluation": calculated}, bounded=False), ensure_ascii=False)
         # A fresh directory per session start: an interrupted session's files never mix with the next one's.
         session = (task_root / "review" / candidate["snapshot_sha256"]
