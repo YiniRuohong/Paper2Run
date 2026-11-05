@@ -4,6 +4,7 @@
 
 const { app, BrowserWindow, Menu, ipcMain, nativeTheme, screen, session, shell } = require('electron');
 const { execFile, spawn } = require('node:child_process');
+const remote = require('./remote.cjs');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -274,6 +275,7 @@ function startBackend() {
         backendUrl = `http://127.0.0.1:${port}`;
         writeLog(`[desktop] backend ready at ${backendUrl}\n`);
         onBackendReady();
+        remote.startRemote(remote.remotePaths({ isPackaged: app.isPackaged, repo: path.resolve(__dirname, '..', '..'), home: app.getPath('home'), isWin: IS_WIN }), port, writeLog);
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, HEALTH_POLL_MS));
@@ -344,6 +346,7 @@ function signalTree(child, signal) {
 }
 
 function stopBackend(target = backend) {
+  remote.stopRemote();
   if (!target) return stopping;
   if (target === backend) backend = null;
   const { child, exited } = target;

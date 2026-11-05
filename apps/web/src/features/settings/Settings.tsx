@@ -8,6 +8,7 @@ import { Icon } from '../../ui/Icon';
 import { useTheme } from '../../ui/useTheme';
 import { THEME_PREF_LABELS, type ThemePref } from '../../theme';
 import DocParseSettings from '../docparse/DocParseSettings';
+import RemoteSettings from './RemoteSettings';
 import { Group, Row } from './SettingsParts';
 import './settings.css';
 
@@ -36,6 +37,8 @@ export default function Settings({ health, host, api }: { health: Health; host: 
     </Group>
 
     <DocParseSettings api={api} />
+
+    <RemoteSettings />
 
     <Group title="自主实验" help="模型配置仅保存凭据引用；API Key 在自主实验页的当前内存中输入，不写入浏览器存储。SSH 使用本机预配置别名，实际连接与 GPU 能力以任务事件为准。">
       <Row label="模型、SSH 与科研 Skills" hint="配置预算、查看能力版本、导入或启用 Skills。"><a className="btn btn-secondary btn-sm" href="#/autonomous">打开自主实验</a></Row>

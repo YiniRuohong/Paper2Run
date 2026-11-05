@@ -8,6 +8,7 @@
   "main": "main.cjs",
   "scripts": {
     "dev": "electron .",
+    "test": "node --test tests/*.test.cjs",
     "dist:mac": "python3 ../../scripts/desktop/build_desktop.py --target darwin-arm64",
     "dist:win": "python3 ../../scripts/desktop/build_desktop.py --target win32-x64"
   },
@@ -25,6 +26,7 @@
     },
     "files": [
       "main.cjs",
+      "remote.cjs",
       "preload.cjs",
       "splash-preload.cjs",
       "splash.html",

@@ -16,3 +16,4 @@
   .settings-row { flex-wrap: wrap; }
   .settings-value { justify-content: flex-start; width: 100%; }
 }
+.remote-code { font-size: 22px; font-weight: 600; letter-spacing: 0.08em; }
