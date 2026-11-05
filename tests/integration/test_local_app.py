@@ -123,6 +123,60 @@ def test_route_surface_is_exactly_the_kept_surface(app):
     assert sorted(KEPT_ROUTES - mounted) == [], "kept routes missing"
 
 
+PROFILE = {"id": "guard", "base_url": "http://127.0.0.1:1", "model": "m", "api": "openai-completions",
+           "api_key": "guard-test-key"}
+
+
+def _post_profile(client, key, origin=None):
+    headers = {**LOCAL, "Idempotency-Key": key}
+    if origin is not None:
+        headers["Origin"] = origin
+    return client.post("/api/v1/autonomous/profiles", json=PROFILE, headers=headers)
+
+
+def test_autonomous_writes_accept_only_the_configured_loopback_origins(tmp_path, monkeypatch):
+    monkeypatch.setenv("P2R_ALLOWED_ORIGINS", "http://127.0.0.1:8010")
+    with TestClient(_local_app(tmp_path)) as client:
+        assert _post_profile(client, "ok", "http://127.0.0.1:8010").status_code != 403
+        for key, origin in (("vite", "http://127.0.0.1:5173"), ("evil", "http://evil.example"),
+                            ("default", "http://127.0.0.1:8000"), ("missing", None)):
+            response = _post_profile(client, key, origin)
+            assert response.status_code == 403, (origin, response.text)
+            assert response.json()["error"]["code"] == "CSRF_FAILED"
+
+
+def test_explicit_origins_win_over_env_and_cover_both_hosts(tmp_path, monkeypatch):
+    monkeypatch.setenv("P2R_ALLOWED_ORIGINS", "http://127.0.0.1:9999")
+    app = _local_app(tmp_path, allowed_origins=("http://127.0.0.1:8011", "http://localhost:8011"))
+    with TestClient(app) as client:
+        assert _post_profile(client, "a", "http://127.0.0.1:8011").status_code != 403
+        assert _post_profile(client, "b", "http://localhost:8011").status_code != 403
+        assert _post_profile(client, "c", "http://127.0.0.1:9999").status_code == 403
+
+
+def test_default_origin_is_unchanged_without_configuration(app):
+    with TestClient(app) as client:
+        assert _post_profile(client, "a", "http://127.0.0.1:8000").status_code != 403
+        assert _post_profile(client, "b", "http://127.0.0.1:8010").status_code == 403
+
+
+@pytest.mark.parametrize("bad", ["https://evil.example", "http://127.0.0.1", "http://0.0.0.0:8010"])
+def test_invalid_origin_configuration_fails_at_startup(tmp_path, monkeypatch, bad):
+    monkeypatch.setenv("P2R_ALLOWED_ORIGINS", bad)
+    with pytest.raises(ValueError, match="P2R_ALLOWED_ORIGINS"):
+        _local_app(tmp_path)
+    with pytest.raises(ValueError, match="P2R_ALLOWED_ORIGINS"):
+        _local_app(tmp_path, allowed_origins=[bad])
+
+
+def test_logout_origin_check_accepts_any_configured_origin(tmp_path, monkeypatch):
+    monkeypatch.setenv("P2R_ALLOWED_ORIGINS", "http://127.0.0.1:8010,http://localhost:8010")
+    with TestClient(_local_app(tmp_path)) as client:
+        # Passing the origin check leads to the session check (401); failing it is 403.
+        assert client.delete("/api/v1/auth/session", headers={"Origin": "http://localhost:8010"}).status_code == 401
+        assert client.delete("/api/v1/auth/session", headers={"Origin": "http://127.0.0.1:5173"}).status_code == 403
+
+
 def test_default_data_dir_stays_p2r_demo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("P2R_DEMO_DIR", raising=False)

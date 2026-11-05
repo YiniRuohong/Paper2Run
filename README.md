@@ -70,11 +70,11 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 首次安装：`uv pip install --python .venv/bin/python -e .`（一键启动脚本会自动完成，并把全部源码根放进 `PYTHONPATH`）。在仓库根目录分别启动两个终端（仅 loopback，不部署）：
 
 ```bash
-P2R_DEMO_DIR=.p2r-demo-dev .venv/bin/python -m uvicorn p2r_api.main:create_local_app --factory --host 127.0.0.1 --port 8010
+P2R_DEMO_DIR=.p2r-demo-dev P2R_ALLOWED_ORIGINS=http://127.0.0.1:5173 .venv/bin/python -m uvicorn p2r_api.main:create_local_app --factory --host 127.0.0.1 --port 8010
 P2R_API_TARGET=http://127.0.0.1:8010 pnpm --dir apps/web dev --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-启动前确认端口未被占用，不要终止其他服务。`create_local_app` 是单用户本地运行时：无登录，所有请求以固定本地用户执行（首次启动时自动创建），数据放在 `P2R_DEMO_DIR`（变量名沿用旧名；默认 `.p2r-demo`，一键启动使用 `.p2r-app`）下的 `demo.sqlite3` 与 `artifacts/`。`create_app()` 挂载相同的路由，但默认要求登录会话，用于测试和非本地部署。页面入口：`#/` 总览、`#/new` 新建实验、`#/task/<id>` 任务工作台、`#/settings` 设置。
+启动前确认端口未被占用，不要终止其他服务。`create_local_app` 是单用户本地运行时：无登录，所有请求以固定本地用户执行（首次启动时自动创建），数据放在 `P2R_DEMO_DIR`（变量名沿用旧名；默认 `.p2r-demo`，一键启动使用 `.p2r-app`）下的 `demo.sqlite3` 与 `artifacts/`。`create_app()` 挂载相同的路由，但默认要求登录会话，用于测试和非本地部署。自主模式的写请求必须带有与 `P2R_ALLOWED_ORIGINS` 中某一项完全相同的 Origin（逗号分隔，只接受 `http://127.0.0.1|localhost|[::1]:<端口>`，配置错误时启动即失败；未设置时为 `http://127.0.0.1:8000`）。开发模式下页面来自 Vite 的 5173 端口，所以上面的 API 命令设为 `http://127.0.0.1:5173`；一键启动和桌面应用会自动设为自己实际使用的端口。页面入口：`#/` 总览、`#/new` 新建实验、`#/task/<id>` 任务工作台、`#/settings` 设置。
 
 测试：
 

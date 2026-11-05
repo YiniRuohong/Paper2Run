@@ -70,10 +70,11 @@ def _install_autonomous_lifespan(app: FastAPI) -> None:
     app.router.lifespan_context = autonomous_lifespan
 
 
-def create_app(*, db_url: str | None = None, session_factory=None, artifact_store=None, allowed_origin: str | None = None, secure_cookies: bool = True, development_auth: bool = False, docparse_service=None, local_actor: str | None = None) -> FastAPI:
+def create_app(*, db_url: str | None = None, session_factory=None, artifact_store=None, allowed_origin: str | tuple[str, ...] | None = None, secure_cookies: bool = True, development_auth: bool = False, docparse_service=None, local_actor: str | None = None) -> FastAPI:
     """API app with the kept routers (auth, projects, papers, docparse, autonomous).
 
     Authenticated by default; ``create_local_app`` is the single-user local runtime.
+    ``allowed_origin`` is the exact Origin (or tuple of origins) state-changing requests must carry.
     """
     app = FastAPI(title="p2r-api")
     app.state.runtime = build_runtime(db_url=db_url, session_factory=session_factory, artifact_store=artifact_store, allowed_origin=allowed_origin, secure_cookies=secure_cookies, development_auth=development_auth, docparse_service=docparse_service, local_actor=local_actor)
@@ -116,7 +117,8 @@ def create_app(*, db_url: str | None = None, session_factory=None, artifact_stor
     return app
 
 
-def create_local_app(*, db_url=None, session_factory=None, artifact_store=None, docparse_service=None) -> FastAPI:
+def create_local_app(*, db_url=None, session_factory=None, artifact_store=None, docparse_service=None,
+                     allowed_origins=None) -> FastAPI:
     """Loopback-only single-user runtime used by the launcher and the desktop app.
 
     Start with ``uvicorn p2r_api.main:create_local_app --factory --host 127.0.0.1``.
@@ -124,11 +126,17 @@ def create_local_app(*, db_url=None, session_factory=None, artifact_store=None, 
     ``.p2r-demo``; the name is historical and kept so existing data stays put):
     ``demo.sqlite3`` plus ``artifacts/``. There is no login: every request acts as
     the fixed local user, which is created on first start. Not production auth.
+
+    State-changing requests must carry an Origin that is exactly one of
+    ``allowed_origins``; when not given, ``P2R_ALLOWED_ORIGINS`` (comma-separated),
+    else ``http://127.0.0.1:8000``. Every entry must be an ``http://<loopback>:<port>``
+    origin; anything else raises ``ValueError`` before any state is touched.
     """
     from sqlalchemy.engine import URL
 
     from p2r_artifacts.store import LocalArtifactStore
 
+    origins = _local_origins(allowed_origins)
     if db_url is None and session_factory is None:
         root = data_dir()
         root.mkdir(parents=True, exist_ok=True)
@@ -136,13 +144,29 @@ def create_local_app(*, db_url=None, session_factory=None, artifact_store=None, 
         artifact_store = artifact_store or LocalArtifactStore(root / 'artifacts')
     app = create_app(
         db_url=db_url, session_factory=session_factory, artifact_store=artifact_store,
-        development_auth=True, allowed_origin='http://127.0.0.1:8000', secure_cookies=False,
+        development_auth=True, allowed_origin=origins, secure_cookies=False,
         docparse_service=docparse_service, local_actor=LOCAL_ACTOR_ID,
     )
     _ensure_local_user(app.state.runtime['session_factory'])
     _install_docparse_worker_lifespan(app)
     _mount_web_dist(app)
     return app
+
+
+DEFAULT_LOCAL_ORIGIN = 'http://127.0.0.1:8000'
+
+
+def _local_origins(allowed_origins) -> tuple[str, ...]:
+    import os
+
+    from .auth import parse_loopback_origins
+
+    if allowed_origins is not None:
+        if isinstance(allowed_origins, str):
+            allowed_origins = [allowed_origins]
+        return parse_loopback_origins(','.join(allowed_origins))
+    configured = os.environ.get('P2R_ALLOWED_ORIGINS')
+    return parse_loopback_origins(configured if configured is not None else DEFAULT_LOCAL_ORIGIN)
 
 
 def _ensure_local_user(session_factory) -> None:

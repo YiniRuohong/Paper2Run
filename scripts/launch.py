@@ -181,6 +181,11 @@ def free_port(base: int) -> int:
     raise SystemExit("[!] 8010-8029 端口均被占用 / no free port in 8010-8029")
 
 
+def allowed_origins_env(port: int) -> str:
+    """``P2R_ALLOWED_ORIGINS`` for the served port: the browser may load the UI via either loopback name."""
+    return f"http://127.0.0.1:{port},http://localhost:{port}"
+
+
 def main() -> None:
     if sys.version_info < (3, 11):
         message(f"[!] 需要 Python 3.11+，当前为 {sys.version.split()[0]} / Python 3.11+ required")
@@ -203,6 +208,8 @@ def main() -> None:
     env.update({
         "P2R_DEMO_DIR": str(DATA_DIR),  # historical variable name; it is the data dir
         "P2R_WEB_DIST": str(DIST_INDEX.parent),
+        # Autonomous writes must carry this exact Origin; it is the port uvicorn is told to bind.
+        "P2R_ALLOWED_ORIGINS": allowed_origins_env(port),
         "PYTHONIOENCODING": "utf-8",
         "PYTHONPATH": source_pythonpath(),
     })

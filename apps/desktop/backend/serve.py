@@ -79,6 +79,11 @@ def _bind_preferred(host: str, port: int, strict: bool) -> socket.socket:
     return _bind(host, 0)
 
 
+def allowed_origins(port: int) -> tuple[str, ...]:
+    """Origins the app accepts for writes: exactly the ones ``host_guard`` lets through."""
+    return tuple(f"http://{host}:{port}" for host in LOOPBACK_HOSTS)
+
+
 def host_guard(app, port: int):
     """ASGI wrapper: only serve requests addressed to this loopback origin.
 
@@ -157,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     sock = _bind_preferred(args.host, args.port, args.strict_port)
     port = sock.getsockname()[1]
     config = uvicorn.Config(
-        host_guard(create_local_app(), port),
+        host_guard(create_local_app(allowed_origins=allowed_origins(port)), port),
         log_level="info",
         access_log=False,
         server_header=False,

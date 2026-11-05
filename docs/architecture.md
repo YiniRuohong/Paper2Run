@@ -77,6 +77,6 @@ Pi 自己决定科研步骤，程序不设阶段关卡，`note_progress` 只用�
 ## 5. 启动方式
 
 - 一键：`启动Paper2Run.command` / `.bat` → `scripts/launch.py`，自动建 venv、构建前端、单端口提供 API 与页面。
-- 开发：`.venv/bin/python -m uvicorn p2r_api.main:create_local_app --factory --host 127.0.0.1`（需先 `uv pip install -e .` 或设置 `SOURCE_ROOTS` 对应的 `PYTHONPATH`）+ `pnpm --dir apps/web dev`。
-- `create_local_app` 是单用户本地运行时：无登录，固定本地用户 `demo-user`（ID 沿用旧值，既有数据归属不变，首次启动自动创建），数据目录 `P2R_DEMO_DIR`（默认 `.p2r-demo`）。`create_app()` 挂载相同路由，默认要求登录会话。
+- 开发：`P2R_ALLOWED_ORIGINS=http://127.0.0.1:5173 .venv/bin/python -m uvicorn p2r_api.main:create_local_app --factory --host 127.0.0.1`（需先 `uv pip install -e .` 或设置 `SOURCE_ROOTS` 对应的 `PYTHONPATH`）+ `pnpm --dir apps/web dev`。
+- `create_local_app` 是单用户本地运行时：无登录，固定本地用户 `demo-user`（ID 沿用旧值，既有数据归属不变，首次启动自动创建），数据目录 `P2R_DEMO_DIR`（默认 `.p2r-demo`）。写请求的 Origin 必须与 `P2R_ALLOWED_ORIGINS`（或 `allowed_origins` 参数）中的某个回环地址完全一致；一键启动与桌面后端传入自己实际绑定的端口，未配置时为 `http://127.0.0.1:8000`。`create_app()` 挂载相同路由，默认要求登录会话。
 - 桌面：`apps/desktop/backend/serve.py` 在回环端口上以 `create_local_app` 提供 API 与页面，并拒绝非本机 Host/Origin。

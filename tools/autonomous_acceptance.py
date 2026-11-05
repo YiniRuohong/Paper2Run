@@ -666,7 +666,7 @@ class Runner:
                         code = candidate
                 except (ValueError, AttributeError, AcceptanceError):
                     pass
-                hint = "; server allowed_origin must match actual service port" if code == "CSRF_FAILED" else ""
+                hint = "; the server's P2R_ALLOWED_ORIGINS must include this --base-url" if code == "CSRF_FAILED" else ""
                 raise AcceptanceError(f"{method} {path.split('?')[0]}: HTTP {response.status_code} {code}{hint}")
             return raw
 
@@ -712,6 +712,8 @@ class Runner:
         env["P2R_DEMO_DIR"] = str(self.output / "runtime")
         env["P2R_DOCPARSE_DIR"] = str(self.output / "runtime/docparse")
         env["P2R_AUTONOMOUS_DIR"] = str(self.output / "runtime/autonomous")
+        # The client sends Origin = base_url (http://127.0.0.1:<--port>); the server must accept exactly that.
+        env["P2R_ALLOWED_ORIGINS"] = self.args.base_url
         # No subprocess command-line secret, request body logging, or raw log file.
         env["PYTHONPATH"] = os.pathsep.join(str(ROOT / p) for p in
             ["services/api", *["packages/" + p for p in ("contracts", "artifacts", "persistence", "sandbox",
