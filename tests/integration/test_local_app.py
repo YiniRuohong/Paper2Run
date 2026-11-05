@@ -1,6 +1,8 @@
 """The single local runtime: fixed local actor, kept routers only, stable data dir."""
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -18,12 +20,47 @@ def _docparse(tmp_path):
     return DocParseService(root, installer=OfflineInstaller(root, platform=lambda: "darwin-arm64"))
 
 
-@pytest.fixture
-def app(tmp_path, monkeypatch):
-    monkeypatch.setenv("P2R_WEB_DIST", str(tmp_path / "no-web-dist"))
+def _local_app(tmp_path, **kwargs):
     return create_local_app(db_url=f"sqlite:///{tmp_path / 'local.sqlite3'}",
                             artifact_store=LocalArtifactStore(tmp_path / "store"),
-                            docparse_service=_docparse(tmp_path))
+                            docparse_service=_docparse(tmp_path), **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("P2R_WEB_DIST", str(tmp_path / "no-web-dist"))
+    monkeypatch.delenv("P2R_ALLOWED_ORIGINS", raising=False)
+
+
+@pytest.fixture
+def app(tmp_path):
+    return _local_app(tmp_path)
+
+
+# Restored from tests/integration/phase01/test_bootstrap.py (deleted in c6bb0a6): the request-id
+# middleware and /healthz are kept behaviour.
+def test_healthz_has_server_generated_request_id_and_payload(app):
+    response = TestClient(app).get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "service": "p2r-api"}
+    UUID(response.headers["X-Request-ID"])
+
+
+def test_client_request_id_is_not_trusted_or_reflected(app):
+    forged = "client-controlled-secret"
+    response = TestClient(app).get("/healthz", headers={"X-Request-ID": forged})
+    assert response.headers["X-Request-ID"] != forged
+    UUID(response.headers["X-Request-ID"])
+
+
+def test_validation_errors_use_the_field_error_envelope(app):
+    with TestClient(app) as client:
+        response = client.post("/api/v1/projects", json={"name": 1}, headers={**LOCAL, "Idempotency-Key": "bad"})
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert [e["path"] for e in body["error"]["details"]["field_errors"]] == ["name"]
+    UUID(body["meta"]["request_id"])
 
 
 def test_fresh_local_runtime_can_create_and_list_projects(app):
@@ -51,33 +88,49 @@ def test_existing_local_user_is_left_untouched(app):
         assert db.get(UserRecord, "demo-user").display_name == "Renamed"
 
 
-LEGACY_PREFIXES = ("/api/v1/demo", "/api/v1/sessions", "/api/v1/experiments", "/api/v1/runs",
-                   "/api/v1/spec-revisions", "/api/v1/reports", "/api/v1/artifacts", "/api/v1/operations",
-                   "/api/v1/provider-sessions", "/api/v1/environment-checks", "/api/v1/ssh-verifications",
-                   "/api/v1/attempts", "/api/v1/executions")
+# The whole public surface, exactly. Every route the web client calls is here (api-client/*.ts,
+# features/docparse), plus GET/PATCH /projects/{id}, DELETE /auth/session and GET /papers/{id}/content.
+KEPT_ROUTES = {
+    ("GET", "/healthz"),
+    ("GET", "/api/v1/auth/me"), ("DELETE", "/api/v1/auth/session"),
+    ("GET", "/api/v1/projects"), ("POST", "/api/v1/projects"),
+    ("GET", "/api/v1/projects/{project_id}"), ("PATCH", "/api/v1/projects/{project_id}"),
+    ("GET", "/api/v1/projects/{project_id}/papers"), ("POST", "/api/v1/projects/{project_id}/papers"),
+    ("POST", "/api/v1/projects/{project_id}/papers/text"),
+    ("GET", "/api/v1/papers/{paper_id}"), ("GET", "/api/v1/papers/{paper_id}/content"),
+    ("POST", "/api/v1/papers/{paper_id}/parse"), ("GET", "/api/v1/papers/{paper_id}/text"),
+    ("GET", "/api/v1/docparse/status"), ("PUT", "/api/v1/docparse/mode"),
+    ("POST", "/api/v1/docparse/offline/install"), ("POST", "/api/v1/docparse/offline/cancel"),
+    ("DELETE", "/api/v1/docparse/offline"),
+    ("GET", "/api/v1/autonomous/capabilities"), ("POST", "/api/v1/autonomous/capabilities/import"),
+    ("PUT", "/api/v1/autonomous/capabilities/{capability_id}"),
+    ("GET", "/api/v1/autonomous/profiles"), ("POST", "/api/v1/autonomous/profiles"),
+    ("GET", "/api/v1/autonomous/projects/{project_id}/config"),
+    ("PUT", "/api/v1/autonomous/projects/{project_id}/config"),
+    ("GET", "/api/v1/autonomous/projects/{project_id}/tasks"),
+    ("POST", "/api/v1/autonomous/projects/{project_id}/tasks"),
+    ("GET", "/api/v1/autonomous/tasks/{task_id}"), ("GET", "/api/v1/autonomous/tasks/{task_id}/events"),
+    ("POST", "/api/v1/autonomous/tasks/{task_id}/control"),
+    ("POST", "/api/v1/autonomous/tasks/{task_id}/decisions/{decision_id}"),
+    ("GET", "/api/v1/autonomous/tasks/{task_id}/files"), ("GET", "/api/v1/autonomous/tasks/{task_id}/files/raw"),
+    ("GET", "/api/v1/autonomous/tasks/{task_id}/export"),
+}
 
 
-def test_only_kept_routers_are_mounted(app):
-    paths = set(app.openapi()["paths"])
-    legacy = sorted(p for p in paths if p.startswith(LEGACY_PREFIXES) or "codegen" in p or "extraction" in p)
-    assert legacy == []
-    for kept in ("/healthz", "/api/v1/auth/me", "/api/v1/projects", "/api/v1/projects/{project_id}/papers",
-                 "/api/v1/projects/{project_id}/papers/text", "/api/v1/papers/{paper_id}",
-                 "/api/v1/papers/{paper_id}/parse", "/api/v1/papers/{paper_id}/text",
-                 "/api/v1/docparse/status", "/api/v1/autonomous/projects/{project_id}/tasks"):
-        assert kept in paths, kept
+def test_route_surface_is_exactly_the_kept_surface(app):
+    mounted = {(method.upper(), path) for path, ops in app.openapi()["paths"].items() for method in ops}
+    assert sorted(mounted - KEPT_ROUTES) == [], "unexpected (legacy?) routes"
+    assert sorted(KEPT_ROUTES - mounted) == [], "kept routes missing"
 
 
 def test_default_data_dir_stays_p2r_demo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("P2R_DEMO_DIR", raising=False)
-    monkeypatch.setenv("P2R_WEB_DIST", str(tmp_path / "no-web-dist"))
     create_local_app(docparse_service=_docparse(tmp_path))
     assert (tmp_path / ".p2r-demo" / "demo.sqlite3").is_file()
 
 
 def test_data_dir_env_is_honoured(tmp_path, monkeypatch):
     monkeypatch.setenv("P2R_DEMO_DIR", str(tmp_path / "custom"))
-    monkeypatch.setenv("P2R_WEB_DIST", str(tmp_path / "no-web-dist"))
     create_local_app(docparse_service=_docparse(tmp_path))
     assert (tmp_path / "custom" / "demo.sqlite3").is_file()
