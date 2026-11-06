@@ -61,7 +61,6 @@ export default function AppShell() {
 
   const view: View = route.view;
   const crumbs: [string, string] = view === 'overview' ? ['工作区', '总览']
-    : view === 'reader' ? ['工作区', '论文阅读']
     : ['Paper2Run', '设置'];
   // 阅读器铺满主区域：不走居中版面和页内滚动，PDF 自己滚。
   const full = view === 'reader';
@@ -70,15 +69,16 @@ export default function AppShell() {
     <Sidebar open={sideOpen} view={view} taskId={null} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />
     {sideOpen && <button type="button" className="side-scrim" aria-label="关闭侧栏" tabIndex={-1} onClick={() => setSideOpen(false)} />}
     <main className="main" id="main">
-      <header className="main-head drag">
+      {/* 阅读器没有面包屑顶栏：论文标题与工具栏由阅读器自己的顶栏承担，PDF 占满主区域。 */}
+      {!full && <header className="main-head drag">
         {!sideOpen && <button type="button" className="btn btn-icon" aria-label="显示侧栏" title="显示侧栏" aria-controls="app-sidebar" aria-expanded="false" onClick={() => setSideOpen(true)}><Icon name="sidebar" /></button>}
         <nav className="crumbs" aria-label="面包屑">
           <span>{crumbs[0]}</span><i aria-hidden="true">/</i><b aria-current="page" title={crumbs[1]}>{crumbs[1]}</b>
         </nav>
-      </header>
+      </header>}
       {route.view === 'reader' && <div className="main-full">
         <Suspense fallback={<p role="status" className="page-loading">加载阅读器…</p>}>
-          <ReaderPage papers={papers} paperId={route.paperId} />
+          <ReaderPage papers={papers} paperId={route.paperId} onShowSidebar={sideOpen ? undefined : () => setSideOpen(true)} />
         </Suspense>
       </div>}
       <div className="main-body" hidden={full}>

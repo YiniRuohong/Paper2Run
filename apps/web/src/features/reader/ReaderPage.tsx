@@ -2,6 +2,7 @@ import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState }
 
 import type { PaperInfo, PapersApi, ProjectInfo } from "../../api-client/papers";
 import { draftHref } from "../../shell/routes";
+import { Icon } from "../../ui/Icon";
 import { CommentDialog } from "./CommentDialog";
 import { CommentMargin } from "./CommentMargin";
 import { DrawingLayer, type Stroke, type ToolKind } from "./DrawingLayer";
@@ -81,9 +82,12 @@ function LoadError({ error }: { error?: Error }) {
 export default function ReaderPage({
   papers,
   paperId,
+  onShowSidebar,
 }: {
   papers: PapersApi;
   paperId: string;
+  /** 应用侧栏收起时由外壳传入：阅读器没有外壳顶栏，展开按钮放在阅读器顶栏里。 */
+  onShowSidebar?: () => void;
 }) {
   /* ---------- 书架：后端论文列表 + 本地偏好 ---------- */
   const [projects, setProjects] = useState<Array<ProjectInfo>>([]);
@@ -243,7 +247,8 @@ export default function ReaderPage({
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  // 书架默认收起，打开阅读器时论文占据视觉中心。
+  const [collapsed, setCollapsed] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef(0);
   const showToast = useCallback((text: string) => {
@@ -415,7 +420,20 @@ export default function ReaderPage({
         />
       ) : null}
       <section className="ptr-main" aria-label="PDF 阅读区">
-        <header className={`ptr-head${collapsed ? " collapsed-head" : ""}`}>
+        <header className={`ptr-head drag${collapsed ? " collapsed-head" : ""}`}>
+          {onShowSidebar ? (
+            <button
+              type="button"
+              className="head-icon-btn show-app-side"
+              onClick={onShowSidebar}
+              aria-label="显示侧栏"
+              title="显示侧栏"
+              aria-controls="app-sidebar"
+              aria-expanded="false"
+            >
+              <Icon name="sidebar" />
+            </button>
+          ) : null}
           {collapsed ? (
             <span className="head-frame">
               <button

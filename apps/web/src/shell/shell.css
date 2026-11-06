@@ -72,9 +72,8 @@
 .main-body { padding: 6px 28px 64px; }
 .page { max-width: var(--page-w); margin: 0 auto; display: grid; gap: 24px; min-width: 0; }
 .page-loading { color: var(--muted); font-size: 13px; }
-/* 全高视图（论文阅读器）：主区域不滚动，子视图填满顶栏以下的空间。 */
+/* 全高视图（论文阅读器）：没有外壳顶栏，主区域不滚动，子视图填满整个主区域。 */
 .shell.full .main { display: flex; flex-direction: column; overflow: hidden; scrollbar-gutter: auto; }
-.shell.full .main-head { position: static; flex: none; }
 .main-full { flex: 1; min-height: 0; }
 .main-full > .page-loading { padding: 12px 28px; }
 
@@ -86,6 +85,10 @@
 [data-shell="darwin"] .shell.side-closed .main-head { padding-left: max(82px, calc((100% - var(--page-w)) / 2 - 7px)); }
 /* Windows caption-button overlay occupies the top-right ~140px. */
 [data-shell="win32"] .main-head { padding-right: 148px; }
+/* 阅读器顶栏代替外壳顶栏贴住窗口顶边：同样给红绿灯 / 标题栏按钮让位。 */
+[data-shell="darwin"] .shell.side-closed .ptr.collapsed .ptr-head,
+[data-shell="darwin"] .shell.side-closed .ptr-side-top { padding-left: 82px; }
+[data-shell="win32"] .shell .ptr .ptr-head { padding-right: 148px; }
 
 /* ---------- narrow windows: sidebar overlays content ---------- */
 @media (max-width: 760px) {

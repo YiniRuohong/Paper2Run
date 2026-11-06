@@ -47,7 +47,7 @@
 }
 
 
-/* ---------- shell：填满 Paper2Run 主区域（外壳已有自己的侧栏与顶栏） ---------- */
+/* ---------- shell：填满 Paper2Run 主区域（外壳只留侧栏，顶栏由阅读器自己承担） ---------- */
 .ptr {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
@@ -55,7 +55,6 @@
   min-height: 0;
   overflow: hidden;
   background: var(--bg);
-  border-top: 1px solid var(--line);
 }
 
 .ptr .ptr-load-error,
@@ -600,6 +599,13 @@
 .ptr .collapsed-head .head-frame .head-icon-btn svg {
   width: 18px;
   height: 18px;
+}
+
+/* 应用侧栏收起时的展开按钮：与旁边圆角框里的按钮同尺寸 */
+.ptr .collapsed-head .show-app-side {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
 }
 
 .ptr .collapsed-head .head-title {
