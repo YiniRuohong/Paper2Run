@@ -401,3 +401,19 @@ print("actual execution complete")
         if target and hasattr(target, "container"):
             subprocess.run(["docker", "rm", "-f", target.container], capture_output=True, timeout=20)
             subprocess.run(["docker", "network", "rm", target.container + "-net"], capture_output=True, timeout=20)
+
+
+@pytest.mark.parametrize("site", ["cross-site", "same-site", "Cross-Site", "SAME-SITE"])
+def test_writes_refuse_cross_and_same_site_case_insensitively(client, site):
+    # Same rule as the target probe: another loopback port or sibling subdomain is same-site, not same-origin.
+    refused = write(client, "PUT", "/projects/project/config", {"config": config()}, headers={"Sec-Fetch-Site": site})
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "CSRF_FAILED"
+    assert client.get(BASE + "/projects/project/config").status_code == 404, "nothing was written"
+
+
+@pytest.mark.parametrize("site", ["same-origin", "Same-Origin", "none", None])
+def test_writes_allow_same_origin_launcher_and_vite_proxy(client, site):
+    # The launcher page and the Vite dev proxy both serve the page from the API's own origin,
+    # so the browser sends same-origin; tools send no header at all.
+    headers = {} if site is None else {"Sec-Fetch-Site": site}
+    assert write(client, "PUT", "/projects/project/config", {"config": config()}, headers=headers).status_code == 200

@@ -222,3 +222,29 @@ test('validateDocParseStatus refuses unknown mode/offline.state and wrong types'
   ];
   for (const value of bad) assert.throws(() => validateDocParseStatus(value), ApiError, JSON.stringify(value));
 });
+
+test('paper and docparse writes carry X-CSRF-Token when a session token exists; reads do not need it', async () => {
+  const accepted = { paper_id: 'p1', operation_id: 'op', status: 'uploaded' };
+  const { calls, fetcher } = capture(path => {
+    if (path.endsWith('/parse')) return envelope({ paper_id: 'p1', job_id: 'j', status: 'parsing' }, 202);
+    if (path.includes('/docparse/')) return envelope(statusDto());
+    if (path === '/api/v1/projects') return envelope({ id: 'pr', name: 'n', role: 'owner', version: 1, created_at: 't' }, 201);
+    if (path === '/api/v1/papers/p1/text') return envelope(parsingText);
+    return envelope(accepted, 202);
+  });
+  const api = createPapersApi('owner', fetcher, () => 'csrf-1');
+  await api.createProject('n');
+  await api.uploadPaperPdf('pr', new File([new Uint8Array([37, 80, 68, 70, 45])], 'p.pdf', { type: 'application/pdf' }));
+  await api.createTextPaper('pr', { text: 'body' });
+  await api.parsePaper('p1', 'k1');
+  await api.setDocParseMode('online');
+  await api.startOfflineInstall();
+  for (const call of calls) assert.equal(call.headers.get('X-CSRF-Token'), 'csrf-1', `${call.init.method} ${call.path}`);
+  await api.getPaperText('p1');
+  assert.equal(calls.at(-1).init.method, 'GET');
+
+  // No token (local single-user runtime): the header is simply absent.
+  const bare = capture(() => envelope(accepted, 202));
+  await createPapersApi('owner', bare.fetcher, () => undefined).createTextPaper('pr', { text: 'body' });
+  assert.equal(bare.calls[0].headers.has('X-CSRF-Token'), false);
+});
