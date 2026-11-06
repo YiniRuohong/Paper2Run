@@ -94,7 +94,7 @@ KEPT_ROUTES = {
     ("GET", "/healthz"),
     ("GET", "/api/v1/auth/me"), ("DELETE", "/api/v1/auth/session"),
     ("GET", "/api/v1/projects"), ("POST", "/api/v1/projects"),
-    ("GET", "/api/v1/projects/{project_id}"), ("PATCH", "/api/v1/projects/{project_id}"),
+    ("GET", "/api/v1/projects/{project_id}"), ("PATCH", "/api/v1/projects/{project_id}"), ("DELETE", "/api/v1/projects/{project_id}"),
     ("GET", "/api/v1/projects/{project_id}/papers"), ("POST", "/api/v1/projects/{project_id}/papers"),
     ("POST", "/api/v1/projects/{project_id}/papers/text"),
     ("GET", "/api/v1/papers/{paper_id}"), ("GET", "/api/v1/papers/{paper_id}/content"),
