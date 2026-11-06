@@ -7,9 +7,9 @@ import { evidenceKindLabel, maxRepairRounds, own } from './config';
 import { parseCandidate, parseReviews, type ReviewView } from './report';
 import { reviewFailures } from './stages';
 
-// 候选与独立复核（v3 P1-2）：Pi 提交候选后，程序冻结快照、独立评估，
+// 候选与独立复核（v3 P1-2）：智能体提交候选后，程序冻结快照、独立评估，
 // 再在新会话里复核；发现问题时进入有上限的修复轮次。这里只摊开程序记录的事实：
-// 快照、正式运行、冻结产物、复核结论与未完成的复核尝试。Pi 的提交说明单独折叠为模型叙述。
+// 快照、正式运行、冻结产物、复核结论与未完成的复核尝试。智能体的提交说明单独折叠为模型叙述。
 
 const REVIEW_STATUS: Record<string, { text: string; tone: Tone }> = {
   pending: { text: '待复核', tone: 'run' },
@@ -22,7 +22,7 @@ const VERDICT: Record<string, { text: string; tone: Tone }> = {
   issues: { text: '发现问题', tone: 'warn' },
 };
 
-export const EMPTY_CANDIDATE_TEXT = 'Pi 还没有提交候选结果。提交时程序会检查：协议已冻结；本轮登记了 code / environment / data / result；入口代码已登记；协议要求的产物齐全；入口在最后一次登记代码之后成功运行。';
+export const EMPTY_CANDIDATE_TEXT = '智能体还没有提交候选结果。提交时程序会检查：协议已冻结；本轮登记了 code / environment / data / result；入口代码已登记；协议要求的产物齐全；入口在最后一次登记代码之后成功运行。';
 
 function Sha({ value, label }: { value: string | null; label: string }) {
   if (!value) return <span className="ui-mono">未知</span>;
@@ -81,8 +81,8 @@ export function CandidateCard({ task, events }: { task: AutonomousTask; events: 
               </li>)}
             </ul>}
         </Disclosure>
-        {candidate.summary && <Disclosure variant="sub" title="Pi 提交说明（模型叙述，不是执行证据）">
-          <pre className="ui-code is-wrap" aria-label="Pi 提交说明（只读）">{candidate.summary}</pre>
+        {candidate.summary && <Disclosure variant="sub" title="智能体提交说明（模型叙述，不是执行证据）">
+          <pre className="ui-code is-wrap" aria-label="智能体提交说明（只读）">{candidate.summary}</pre>
         </Disclosure>}
       </div>}
 

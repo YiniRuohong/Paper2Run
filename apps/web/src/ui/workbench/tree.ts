@@ -151,3 +151,8 @@ export function parseCsv(text: string, maxRows = 200, delimiter = ','): { rows: 
   if (cell !== '' || row.length > 0) { row.push(cell); rows.push(row); }
   return { rows, truncated: false };
 }
+
+/** A run as the rail shows it: no "$ " prefix, no leading cd, the virtualenv's bin/ path dropped. */
+export function commandName(label: string): string {
+  return label.replace(/^(后台 )?\$ /, '').replace(/^cd \S+ && /, '').replace(/(^|\s)\S*\/\.venv\/bin\//g, '$1');
+}

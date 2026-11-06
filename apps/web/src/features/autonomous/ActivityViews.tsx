@@ -4,16 +4,16 @@ import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
 import { progressNotes, specialistCalls, type SpecialistCall } from './stages';
 
-// Pi 的自述与专家建议：都是模型叙述，与程序判定（候选复核、报告）分区展示。
+// 智能体的自述与专家建议：都是模型叙述，与程序判定（候选复核、报告）分区展示。
 
 export function ProgressNotes({ events }: { events: AutonomousEvent[] }) {
   const notes = progressNotes(events);
-  return <Card className="auto-notes" aria-label="Pi 自报进度">
-    <CardHeader icon="list" title="Pi 自报进度（模型叙述，不是程序判定）"
-      subtitle="Pi 通过 note_progress 记录的阶段与摘要，不影响证据与结局。" />
+  return <Card className="auto-notes" aria-label="智能体自报进度">
+    <CardHeader icon="list" title="智能体自报进度（模型叙述，不是程序判定）"
+      subtitle="智能体记录的阶段与摘要，不影响证据与结局。" />
     <div className="ui-card-section">
       {notes.length === 0
-        ? <p className="ui-help auto-quiet">Pi 还没有记录进度。它调用 note_progress 时，阶段与摘要会按时间倒序出现在这里。</p>
+        ? <p className="ui-help auto-quiet">智能体还没有记录进度。记录后，阶段与摘要会按时间倒序出现在这里。</p>
         : <ul className="ui-list auto-notes-list">
           {notes.map(note => <li key={note.sequence} className="ui-row">
             <span className="ui-row-main">

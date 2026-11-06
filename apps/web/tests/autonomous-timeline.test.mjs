@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  PHASES, artifactPath, artifactRound, buildStages, currentProtocolSha, progressNotes, specialistCalls, toolLabel, toWbFiles,
+  PHASES, artifactPath, artifactRound, buildStages, currentProtocolSha, flattenItems, isKeyRun, progressNotes, railItems, specialistCalls, toolLabel, toWbFiles,
 } from '../src/features/autonomous/stages.ts';
 
 // The timeline groups the real event journal into phases. It is presentation
@@ -159,7 +159,7 @@ test('safety_blocked is a bad sub-step that ends in the report phase', () => {
   assert.equal(s.review.mark, 'open', 'the review never started, so it is neither green nor failed');
 });
 
-test('Pi progress notes become the active stage detail without duplicating the tool step', () => {
+test('agent progress notes become the active stage detail without duplicating the tool step', () => {
   const events = [
     tool(1, 'a', 'execute', { command: 'python train.py' }), done(2, 'a', 'execute'),
     tool(3, 'n', 'note_progress', { phase: '训练基线', summary: '第一轮训练完成，loss 下降' }),
@@ -169,9 +169,11 @@ test('Pi progress notes become the active stage detail without duplicating the t
   const execute = byId(stages).execute;
   assert.equal(active, 'execute', 'note_progress does not move the phase');
   assert.equal(execute.items.length, 2);
-  assert.match(execute.items[1].label, /Pi 自报进度/);
+  assert.equal(execute.items[1].label, '第一轮训练完成，loss 下降', 'the rail draws the note as its own words');
+  assert.equal(execute.items[1].variant, 'note');
+  assert.doesNotMatch(JSON.stringify(stages), /\bPi\b/, 'the agent is never named');
   assert.notEqual(execute.items[1].tone, 'ok', 'a progress note is narrative, not a passed check');
-  assert.match(execute.summary, /Pi 自报 · 训练基线：第一轮训练完成/);
+  assert.match(execute.summary, /智能体 · 训练基线：第一轮训练完成/);
   const notes = progressNotes([...events, ev(9, 'progress_noted', { phase: '评估', summary: '准备提交' })]);
   assert.deepEqual(notes.map(n => n.phase), ['评估', '训练基线'], 'newest first');
 });
@@ -249,12 +251,12 @@ test('the current protocol comes from the latest protocol event, then the candid
 
 test('the timeline badge explains it is derived, not a program judgement', async () => {
   const page = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
-  assert.match(page, /阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定/);
+  assert.match(page, /阶段由智能体自报进度与事件归纳得出，不是程序判定/);
   assert.doesNotMatch(page, /契约 C1/);
   assert.match(page, /<ProgressNotes\b/);
   assert.match(page, /<SpecialistCalls\b/);
   const views = await readFile(new URL('../src/features/autonomous/ActivityViews.tsx', import.meta.url), 'utf8');
-  assert.match(views, /Pi 自报进度（模型叙述，不是程序判定）/);
+  assert.match(views, /智能体自报进度（模型叙述，不是程序判定）/);
   assert.match(views, /科研专家调用/);
   assert.match(views, /建议，不是执行证据/);
 });
@@ -339,7 +341,7 @@ test('probe: an ending and a completion pair with the most recent open call, not
   assert.deepEqual(replied.map(c => [c.sequence, c.status, c.text]), [[1, 'running', null], [5, 'done', 'use k-fold']], 'an orphaned earlier call never takes the later reply');
 });
 
-test('Pi progress notes nest the following tool calls; earlier calls stay top-level', () => {
+test('agent progress notes nest the following tool calls; earlier calls stay top-level', () => {
   const events = [
     tool(1, 'x', 'read', { path: 'before.md' }), done(2, 'x', 'read'),
     ev(3, 'progress_noted', { phase: '读代码', summary: '先核对模型配置' }),
@@ -400,4 +402,26 @@ test('timeline sub-steps open real artifacts only, never the whole raw event log
   assert.ok(items.length >= 2);
   assert.ok(items.every(item => item.openPath !== 'logs/events.log'));
   assert.ok(items.some(item => item.openPath === 'artifacts/abcdef012345/r1/m.json'));
+});
+
+test('the rail keeps nodes only: notes, milestones and script runs; other tool calls stay for the drawer', () => {
+  const events = [
+    tool(1, 'a', 'execute', { command: 'pip install numpy' }), done(2, 'a', 'execute'),
+    tool(3, 'n', 'note_progress', { phase: '训练', summary: '开始正式训练' }),
+    ev(4, 'progress_noted', { phase: '训练', summary: '开始正式训练' }), done(5, 'n', 'note_progress'),
+    tool(6, 'w', 'write', { path: 'train.py' }), done(7, 'w', 'write'),
+    tool(8, 'r', 'execute', { command: '/work/.venv/bin/python run_experiment.py --epochs 60' }), done(9, 'r', 'execute'),
+    tool(10, 'b', 'background', { command: 'bash run_all.sh' }), done(11, 'b', 'background'),
+    tool(12, 'c', 'execute', { command: 'python3 -c "import numpy"' }), done(13, 'c', 'execute'),
+    ev(14, 'artifact_frozen', { name: 'm.json', kind: 'result', protocol_sha256: 'abcdef0123456789', round: 0 }),
+  ];
+  const { stages, operations } = buildStages({ id: 't', state: 'running' }, events);
+  const all = [...operations.values()].flat();
+  const rail = railItems(all).map(item => item.id);
+  assert.deepEqual(rail, ['t3', 't8', 't10', 'e14'], 'note, two script runs and the frozen artifact');
+  assert.equal(flattenItems(all).length, 7, 'the drawer still lists every operation');
+  assert.ok(isKeyRun('execute', { command: 'cd /work && python train.py' }));
+  assert.ok(!isKeyRun('execute', { command: '/work/.venv/bin/python -m py_compile /work/run.py' }));
+  assert.ok(!isKeyRun('execute', { command: 'ls -la' }));
+  assert.ok(stages.length > 0);
 });

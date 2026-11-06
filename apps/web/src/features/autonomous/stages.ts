@@ -5,11 +5,11 @@ import { evidenceKindLabel, knownOutcome, outcomeLabel, outcomeTone, own, resear
 
 // Presentation-only: groups the autonomous task's real event journal into the
 // research phases shown on the workbench timeline. There is no backend stage
-// machine: Pi decides its own steps, so the phases are derived from tool calls
-// and events, and Pi's own progress notes (note_progress) only label them.
+// machine: the agent decides its own steps, so the phases are derived from tool
+// calls and events, and the agent's own progress notes only label them.
 // The active phase is the phase of the latest phase-mapped event, so a repair
 // round that goes back to writing code shows 编写与执行 as active again.
-// Tool calls become sub-steps, coloured by their result; Pi's notes and
+// Tool calls become sub-steps, coloured by their result; the agent's notes and
 // specialist advice are model narrative and are never coloured as passed.
 
 export type PhaseId = 'setup' | 'plan' | 'execute' | 'evidence' | 'review' | 'report';
@@ -22,7 +22,7 @@ export const PHASES: Array<{ id: PhaseId; title: string; idle: string }> = [
   { id: 'report', title: '报告与结束', idle: '生成报告（不代表复现成立）' },
 ];
 
-// note_progress 不在表里：它只是 Pi 的自述，留在当前阶段，不改变阶段。
+// note_progress 不在表里：它只是智能体的自述，留在当前阶段，不改变阶段。
 const TOOL_PHASE: Record<string, PhaseId> = {
   read: 'plan', propose_protocol: 'plan',
   write: 'execute', execute: 'execute', background: 'execute', status: 'execute', logs: 'execute', stop: 'execute',
@@ -67,8 +67,38 @@ export function toolLabel(name: string, args: Record<string, unknown>): string {
   if (name === 'propose_protocol') return '提出实验协议';
   if (name === 'register_artifact') return `登记 ${str(args.name) ?? '产物'}`;
   if (name === 'submit_candidate') return '提交候选结果';
-  if (name === 'note_progress') return str(args.phase) ? `Pi 自报进度：${short(str(args.phase)!, 40)}` : 'Pi 自报进度';
+  if (name === 'note_progress') return str(args.phase) ? `智能体进度：${short(str(args.phase)!, 40)}` : '智能体进度';
   return name;
+}
+
+// 运行脚本的命令（python x.py、bash x.sh）和后台作业是左栏节点；查看文件、装依赖、自检等留在抽屉里。
+const SCRIPT_RUN = /(^|[\s/;&|(])(python[\d.]*|bash|sh)\s+(-[\w-]+\s+)*[\w./-]+\.(py|sh)(\s|$)/;
+export function isKeyRun(name: string, args: Record<string, unknown>): boolean {
+  if (name === 'background') return true;
+  if (name !== 'execute') return false;
+  const command = str(args.command) ?? '';
+  return SCRIPT_RUN.test(command) && !/py_compile/.test(command);
+}
+
+/**
+ * 左栏只放节点（参考 Apevon 的排布）：智能体进度是一段文字，其后是里程碑事件与运行脚本的命令；
+ * 其余工具调用（读写文件、查看环境、装依赖）不在左栏，点进度或阶段标题后在抽屉里看。
+ */
+export function railItems(items: WbStageItem[]): WbStageItem[] {
+  const out: WbStageItem[] = [];
+  const walk = (list: WbStageItem[]) => {
+    for (const item of list) {
+      if (item.variant !== 'tool') out.push({ ...item, children: undefined });
+      walk(item.children ?? []);
+    }
+  };
+  walk(items);
+  return out;
+}
+
+/** 一组操作（含进度下嵌套的）按时间顺序摊平，供抽屉列出。 */
+export function flattenItems(items: WbStageItem[]): WbStageItem[] {
+  return items.flatMap(item => [item, ...flattenItems(item.children ?? [])]);
 }
 
 type Label = { label: string; detail: string | null; tone?: WbStageItem['tone'] };
@@ -137,7 +167,7 @@ const delegationKey = (p: Record<string, unknown>) => JSON.stringify([p.speciali
 const FAILED_STOP_REASONS = new Set(['error', 'aborted']);
 const CALL_STATUS_TEXT: Record<SpecialistCall['status'], string> = { running: '进行中', done: '已返回', failed: '调用失败', missing: '未返回' };
 
-export function buildStages(task: AutonomousTask | null, events: AutonomousEvent[]): { stages: WbStage[]; active: PhaseId; started: Set<PhaseId> } {
+export function buildStages(task: AutonomousTask | null, events: AutonomousEvent[]): { stages: WbStage[]; active: PhaseId; started: Set<PhaseId>; operations: Map<PhaseId, WbStageItem[]> } {
   const items = new Map<PhaseId, WbStageItem[]>(PHASES.map(p => [p.id, []]));
   const started = new Set<PhaseId>();
   const failed = new Set<PhaseId>();
@@ -147,7 +177,7 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
   let reviewFailedCount = 0;
   const notes = new Map<PhaseId, { phase: string; summary: string }>();
   let current: PhaseId = 'setup';
-  // Pi 自报进度开一个分组：之后同阶段的工具调用与事件嵌进它的 children；换阶段或下一条自报时结束。
+  // 智能体自报进度开一个分组：之后同阶段的工具调用与事件嵌进它的 children；换阶段或下一条自报时结束。
   let group: WbStageItem | null = null;
   // note_progress 工具步骤紧跟着 progress_noted 时，二者是同一次自报：把工具步骤升级成分组，不重复一条。
   let noteTool: { item: WbStageItem; container: WbStageItem[] } | null = null;
@@ -169,7 +199,8 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
       const name = str(p.name) ?? 'tool';
       const phase = own(TOOL_PHASE, name);
       if (phase) enter(phase); else started.add(current);
-      const item: WbStageItem = { ...base, id: `t${e.sequence}`, label: toolLabel(name, rec(p.arguments)), detail: `#${e.sequence} · ${name}`, tone: 'run' };
+      const args = rec(p.arguments);
+      const item: WbStageItem = { ...base, id: `t${e.sequence}`, label: toolLabel(name, args), detail: `#${e.sequence} · ${name}`, tone: 'run', variant: isKeyRun(name, args) ? 'command' : 'tool' };
       const container = push(item);
       if (name === 'note_progress') noteTool = { item, container };
       const id = str(p.id); if (id) toolItem.set(id, item);
@@ -189,14 +220,16 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
       const phase = str(p.phase); const summary = str(p.summary);
       if (phase || summary) notes.set(current, { phase: phase ?? '未命名阶段', summary: summary ?? '' });
       started.add(current);
-      const head: WbStageItem = noteTool?.item ?? { ...base, id: `n${e.sequence}`, label: summary || phase || 'Pi 自报进度', tone: 'idle' };
+      const head: WbStageItem = noteTool?.item ?? { ...base, id: `n${e.sequence}`, label: '', tone: 'idle' };
       if (noteTool) {
         const at = noteTool.container.indexOf(noteTool.item);
         if (at >= 0) noteTool.container.splice(at, 1);
-        if (summary) head.label = `Pi 自报进度：${short(summary, 60)}`;
         head.tone = 'idle';
       }
-      head.detail = 'Pi 自报（模型叙述）';
+      // 左栏把进度画成一段文字：只放摘要本身。
+      head.label = summary ? short(summary, 120) : phase ?? '智能体进度';
+      head.variant = 'note';
+      head.detail = '智能体自报（模型叙述）';
       head.children = [];
       items.get(current)!.push(head);
       group = head; noteTool = null;
@@ -261,11 +294,12 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
     else mark = hasOutcome || task?.state === 'completed' || task?.state === 'succeeded' ? 'done' : 'attention';
     const count = all.reduce((n, item) => n + 1 + (item.children?.length ?? 0), 0);
     const note = phase.id === active ? notes.get(active) : undefined;
-    const summary = note ? `Pi 自报 · ${short(note.phase, 24)}：${short(note.summary, 80)}`
+    const summary = note ? `智能体 · ${short(note.phase, 24)}：${short(note.summary, 80)}`
       : isStarted ? `${count} 条记录${all.length > list.length ? '（显示最近 14 条）' : ''}` : phase.idle;
     return { id: phase.id, title: phase.title, mark, summary, items: list, disabled: list.length === 0 };
   });
-  return { stages, active, started };
+  // 左栏只显示最近 14 条；抽屉要列出全部操作，所以把完整的列表一并返回。
+  return { stages, active, started, operations: items };
 }
 
 // ---- 由事件流得出的只读列表（候选复核卡、自报进度、专家调用、安全终止提示用）----
@@ -280,7 +314,7 @@ export function reviewFailures(events: AutonomousEvent[]): ReviewFailure[] {
 }
 
 export interface ProgressNote { sequence: number; phase: string | null; summary: string | null; time: string | null }
-/** Pi 自报进度（progress_noted），新的在前。模型叙述，不是程序判定。 */
+/** 智能体自报进度（progress_noted），新的在前。模型叙述，不是程序判定。 */
 export function progressNotes(events: AutonomousEvent[]): ProgressNote[] {
   return events.filter(e => e.type === 'progress_noted').map(e => {
     const p = rec(e.payload);

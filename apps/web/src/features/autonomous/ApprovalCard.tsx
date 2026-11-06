@@ -2,24 +2,36 @@ import { useState } from 'react';
 import { Card, CardHeader } from '../../ui/Card';
 import { CopyButton } from '../../ui/Controls';
 import { Disclosure } from '../../ui/Disclosure';
+import { Icon } from '../../ui/Icon';
 import type { ProtocolApproval } from '../../api-client/autonomous';
 
 export const REJECT_NOTE_LIMIT = 4000;
 
 // 审批卡（P0-4）：人在环中的决策做成一等公民。
 // 批准与拒绝是两个独立动作（暂停在任务页主操作栏）；批准与拒绝都走显式决定接口（契约 C2），
-// 不用自由文本消息冒充。拒绝保留当前方案，可选理由会作为你的指令转达给 Pi。
-export function ApprovalCard({ approval, busy, blockedReason, onApprove, onReject }: {
+// 不用自由文本消息冒充。拒绝保留当前方案，可选理由会作为你的指令转达给智能体。
+export function ApprovalCard({ approval, busy, blockedReason, onApprove, onReject, compact, onExpand }: {
   approval: ProtocolApproval;
   busy: boolean;
   /** 决定按钮不可用的原因（例如任务尚未暂停）。 */
   blockedReason?: string;
   onApprove: () => void;
   onReject: (note: string) => void;
+  /** 中间栏用的一行：理由摘要 + 查看方案 + 批准；完整方案与拒绝在抽屉里（onExpand）。 */
+  compact?: boolean;
+  onExpand?: () => void;
 }) {
   const [note, setNote] = useState('');
   const sha = approval.proposed.sha256;
   const blocked = busy || !!blockedReason;
+  if (compact) {
+    return <div className="auto-bar tone-warn" role="group" aria-label="等待方案审批">
+      <Icon name="alert" size={16} />
+      <span className="auto-bar-text"><b>需要你决定：方案变更</b><span className="auto-clamp" title={approval.reason}>{approval.reason}</span></span>
+      {onExpand && <button type="button" className="btn btn-secondary" onClick={onExpand}>查看方案</button>}
+      <button type="button" className="btn btn-primary" disabled={blocked} title={blockedReason} onClick={onApprove}>批准并继续</button>
+    </div>;
+  }
   return <Card className="auto-approval" aria-label="等待方案审批">
     <CardHeader icon="alert" title="需要你决定：方案变更" status={{ text: '待审批', tone: 'warn' }}
       subtitle={approval.reason} />
@@ -49,7 +61,7 @@ export function ApprovalCard({ approval, busy, blockedReason, onApprove, onRejec
         <pre className="ui-code" aria-label="拟议协议 JSON（只读）">{JSON.stringify(approval.proposed.protocol, null, 2)}</pre>
       </Disclosure>
       <div className="ui-form">
-        <label className="ui-field"><span className="ui-field-label">拒绝理由（可选）<small>拒绝时作为你的指令转达给 Pi，最多 {REJECT_NOTE_LIMIT} 字</small></span>
+        <label className="ui-field"><span className="ui-field-label">拒绝理由（可选）<small>拒绝时作为你的指令转达给智能体，最多 {REJECT_NOTE_LIMIT} 字</small></span>
           <textarea rows={2} maxLength={REJECT_NOTE_LIMIT} value={note} disabled={blocked} onChange={e => setNote(e.target.value)} placeholder="例如：保持原评估指标，先排查数据划分" />
         </label>
       </div>

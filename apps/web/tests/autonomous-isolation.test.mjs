@@ -21,6 +21,11 @@ const box = name => function Stub(props) { return { type: name, props: props ?? 
 
 const within = node => { const out = []; const visit = n => { if (Array.isArray(n)) return n.forEach(visit); if (n && typeof n === 'object') { out.push(n); visit(n.children); visit(n.props?.children); } }; visit(node); return out; };
 const drawerOf = h => h.nodes().find(n => n.type === 'Workbench').props.drawer;
+// Prompts and action errors are toasts now (bottom right), not callouts in the centre column.
+const toasts = h => h.nodes().find(n => n.type === 'ToastStack')?.props.items ?? [];
+const badToast = h => toasts(h).find(t => t.tone === 'bad');
+const isRecovery = n => n.type === 'div' && n.props['aria-label'] === '需要恢复';
+const openCompose = h => { h.nodes().find(n => n.type === 'button' && n.props.className === 'auto-compose-toggle').props.onClick(); h.render(); };
 
 async function harness(options = {}) {
   const source = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
@@ -78,10 +83,11 @@ async function harness(options = {}) {
     './ApprovalCard': { ApprovalCard: box('ApprovalCard') },
     './CandidateCard': { CandidateCard: box('CandidateCard') },
     './ActivityViews': { ProgressNotes: box('ProgressNotes'), SpecialistCalls: box('SpecialistCalls') },
-    './ReportView': { ReportSummary: box('ReportSummary'), ReportDetails: box('ReportDetails'), ReportEvidence: box('ReportEvidence') },
+    './ReportView': { ReportSummary: box('ReportSummary'), ReportDetails: box('ReportDetails'), ReportEvidence: box('ReportEvidence'), ReportBrief: box('ReportBrief') },
     './StepDrawer': { ItemDrawerBody: box('ItemDrawerBody'), itemTitle: detail => `title:${detail.kind}` },
     './stepDetail': stepDetail,
-    './FiguresView': { FiguresView: box('FiguresView') },
+    './FiguresView': { FiguresView: box('FiguresView'), pickFigures: items => items.filter(f => /\.png$/.test(f.path)) },
+    '../../ui/Toast': { ToastStack: box('ToastStack') },
     './UsageView': { UsageView: box('UsageView') },
     './autonomous.css': {},
   };
@@ -125,8 +131,9 @@ test('paused task routes resume and appended instructions through control', asyn
   resume.props.onClick(); await h.settle();
   assert.deepEqual(h.calls.control[0], { id: 'ta', action: 'resume', text: undefined });
 
-  const textarea = h.nodes().find(n => n.type === 'textarea');
-  textarea.props.onChange({ target: { value: 'do x' } }); h.render();
+  openCompose(h);
+  const field = h.nodes().find(n => n.type === 'input' && n.props['aria-label'] === '追加指令');
+  field.props.onChange({ target: { value: 'do x' } }); h.render();
   const send = h.button('发送指令');
   assert.equal(send.props.disabled, false);
   send.props.onClick(); await h.settle();
@@ -135,7 +142,8 @@ test('paused task routes resume and appended instructions through control', asyn
   assert.equal(instruction.text, 'do x');
   assert.ok(!['pause', 'resume', 'stop'].includes(instruction.action), 'an appended instruction is its own control action');
   assert.equal(instruction.action.length, 7);
-  assert.equal(h.nodes().find(n => n.type === 'textarea').props.value, '', 'the compose box clears after sending');
+  assert.equal(h.nodes().find(n => n.type === 'input' && n.props['aria-label'] === '追加指令').props.value, '', 'the compose box clears after sending');
+  assert.ok(toasts(h).some(t => t.tone === 'ok' && /指令已发送/.test(t.text)), 'sending confirms with a toast');
 });
 
 test('a pending protocol decision shows the approval card and gates resume behind it', async () => {
@@ -161,7 +169,7 @@ test('recovery_required gates resume behind key re-injection, then unlocks it', 
     { sequence: 3, type: 'application_exit', payload: { background_jobs_retained: ['job-1'] }, created_at: '' },
   ];
   const h = await harness({ events, profiles: [profile], taskOver: { config_snapshot: config } });
-  assert.ok(h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'), 'recovery card renders');
+  assert.ok(h.nodes().some(isRecovery), 'recovery card renders');
   const resume = h.button('继续');
   assert.equal(resume.props.disabled, true);
   assert.equal(resume.props.title, '请先重新输入模型密钥');
@@ -175,7 +183,7 @@ test('recovery_required gates resume behind key re-injection, then unlocks it', 
   assert.equal(h.calls.saveProfile[0].id, 'main');
   assert.equal(h.calls.saveProfile[0].api_key, 'secret-key');
 
-  assert.ok(!h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'), 'recovery card clears after injection');
+  assert.ok(!h.nodes().some(isRecovery), 'recovery card clears after injection');
   assert.equal(h.button('继续').props.disabled, false);
 });
 
@@ -186,7 +194,7 @@ test('after a restart a paused task recovers from the frozen profile and re-read
   // Paused before the restart: no recovery_required event, and the live profile store is empty.
   const options = { profiles: [], taskOver: { config_snapshot: frozenConfig } };
   const h = await harness(options);
-  assert.ok(h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'), 'recovery card renders without an event');
+  assert.ok(h.nodes().some(isRecovery), 'recovery card renders without an event');
   const keyInput = h.nodes().find(n => n.type === 'input' && n.props.type === 'password');
   assert.equal(keyInput.props.disabled, false, 'the frozen profile makes the key field usable');
   keyInput.props.onChange({ target: { value: 'sk-again' } }); h.render();
@@ -196,16 +204,16 @@ test('after a restart a paused task recovers from the frozen profile and re-read
   const saved = h.calls.saveProfile[0];
   assert.deepEqual([saved.id, saved.base_url, saved.model, saved.api, saved.api_key], ['main', 'https://example.test', 'm', 'openai-completions', 'sk-again']);
   assert.ok(reads >= 1, 'profiles are re-read after injection');
-  assert.ok(!h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'));
+  assert.ok(!h.nodes().some(isRecovery));
   assert.equal(h.button('继续').props.disabled, false);
 });
 
 test('a CREDENTIAL_REQUIRED resume error opens the recovery card with guidance', async () => {
   const h = await harness({ profiles: [{ ...frozenProfile }], taskOver: { config_snapshot: frozenConfig }, controlError: new ApiError('reconfigure', 409, 'CREDENTIAL_REQUIRED', 'req-c') });
-  assert.ok(!h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'));
+  assert.ok(!h.nodes().some(isRecovery));
   h.button('继续').props.onClick(); await h.settle();
-  assert.ok(h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'));
-  assert.match(JSON.stringify(h.nodes().find(n => n.type === 'div' && n.props.role === 'alert').children), /需要恢复.*CREDENTIAL_REQUIRED · req-c/);
+  assert.ok(h.nodes().some(isRecovery));
+  assert.match(badToast(h).text, /需要恢复.*CREDENTIAL_REQUIRED · req-c/);
 });
 
 test('a late poll response cannot overwrite the task after switching tasks', async () => {
@@ -243,20 +251,19 @@ test('a task with an outcome is finished: resume is disabled with the reason and
 test('safety termination shows the bad callout with its code and keeps export available', async () => {
   const events = [{ sequence: 1, type: 'safety_blocked', payload: { code: 'ISOLATION_PROBE_FAILED', message: 'probe', outcome_snapshot_sha256: null }, created_at: '' }];
   const h = await harness({ events, taskOver: { state: 'stopped', outcome: 'blocked_by_safety' } });
-  const callout = h.nodes().find(n => n.type === 'div' && /tone-bad/.test(n.props.className ?? '') && JSON.stringify(n.children).includes('容器隔离校验失败，任务已安全终止，不能恢复。'));
+  const callout = h.nodes().find(n => n.type === 'div' && /tone-bad/.test(n.props.className ?? '') && JSON.stringify(n.children).includes('容器隔离校验失败，任务已安全终止，不能恢复'));
   assert.ok(callout, 'safety callout renders');
   assert.match(JSON.stringify(callout.children), /ISOLATION_PROBE_FAILED/);
   assert.equal(h.button('导出 ZIP').props.disabled, false);
   // A safety_blocked event alone (outcome not yet persisted) also shows it.
   const early = await harness({ events, taskOver: { state: 'stopping', outcome: null } });
-  assert.match(early.text(), /容器隔离校验失败，任务已安全终止，不能恢复。/);
+  assert.match(early.text(), /容器隔离校验失败，任务已安全终止，不能恢复/);
 });
 
 test('LEGACY_TASK and TASK_FINISHED errors get a specific explanation and keep code and request_id', async () => {
   const h = await harness({ controlError: new ApiError('raw', 409, 'LEGACY_TASK', 'req-9') });
   h.button('继续').props.onClick(); await h.settle();
-  const alert = h.nodes().find(n => n.type === 'div' && n.props.role === 'alert');
-  const text = JSON.stringify(alert.children);
+  const text = badToast(h).text;
   assert.match(text, /该任务创建于新版 harness 之前，只能导出/);
   assert.match(text, /LEGACY_TASK/);
   assert.match(text, /req-9/);
@@ -314,12 +321,12 @@ test('a decision that was already handled or expired refreshes the task instead 
     const before = h.calls.task;
     h.nodes().find(n => n.type === 'ApprovalCard').props.onApprove(); await h.settle();
     assert.ok(h.calls.task > before, `${code}: the task is re-read`);
-    assert.ok(!h.nodes().some(n => n.type === 'div' && n.props.role === 'alert'), `${code}: no error callout`);
+    assert.ok(!badToast(h), `${code}: no error toast`);
     assert.match(h.text(), /该决定已被处理或已过期，已刷新任务/, code);
   }
   const other = await harness({ taskOver: { pending_decision: pendingDecision }, decideError: new ApiError('boom', 500, 'INTERNAL', 'req-x') });
   other.nodes().find(n => n.type === 'ApprovalCard').props.onApprove(); await other.settle();
-  assert.match(JSON.stringify(other.nodes().find(n => n.type === 'div' && n.props.role === 'alert').children), /INTERNAL/);
+  assert.match(badToast(other).text, /INTERNAL/);
 });
 
 test('stop stays available on a paused task with an outcome and says what it does', async () => {
@@ -345,7 +352,7 @@ test('the status card says 运行中 and 正在 only while the task is running w
   for (const [over, head, line] of cases) {
     const h = await harness({ taskOver: over, events: [note('跑基线')] });
     const status = h.nodes().find(n => n.type === 'div' && n.props.className === 'auto-live-status');
-    const b = h.nodes().find(n => n.type === 'b');
+    const b = within(status.children).find(n => n.type === 'b');
     assert.equal(flat(b), head, over.state);
     assert.ok(flat(status).includes(line), `${over.state}/${over.outcome}: ${line} in ${flat(status)}`);
     if (head !== '运行中') assert.ok(!flat(status).replace(/（生命周期：[^）]*）/, '').includes('运行中'), 'no 运行中 claim outside the running state (the lifecycle suffix may name it)');
@@ -384,11 +391,13 @@ test('the centre column holds only conclusions, figures and actions; process ope
   ];
   const h = await harness({ events, taskOver: { state: 'stopped', outcome: 'not_comparable', report, error } });
   const types = new Set(h.nodes().map(n => n.type));
-  for (const kept of ['ReportSummary', 'FiguresView']) assert.ok(types.has(kept), kept);
-  for (const moved of ['ReportDetails', 'ReportEvidence', 'CandidateCard', 'UsageView', 'ProgressNotes', 'SpecialistCalls']) assert.ok(!types.has(moved), `${moved} is not in the centre column`);
+  for (const kept of ['ReportBrief', 'FiguresView']) assert.ok(types.has(kept), kept);
+  for (const moved of ['ReportSummary', 'ReportDetails', 'ReportEvidence', 'CandidateCard', 'UsageView', 'ProgressNotes', 'SpecialistCalls']) assert.ok(!types.has(moved), `${moved} is not in the centre column`);
   assert.ok(!h.nodes().some(n => n.type === 'Disclosure' && /详细记录/.test(n.props.title)), 'no folded 详细记录 block');
   assert.match(h.text(), /任务预算/, 'a known error code reads as a plain sentence');
-  assert.ok(h.nodes().some(n => n.type === 'Disclosure' && n.props.title === '原始错误'), 'the raw error JSON is folded');
+  h.button('原始错误').props.onClick(); h.render();
+  assert.equal(drawerOf(h).title, '阻塞 / 错误', 'the raw error JSON opens in the drawer');
+  drawerOf(h).onClose(); h.render();
   assert.equal(h.button('发送指令'), undefined, 'a finished task has no instruction composer');
   assert.equal(drawerOf(h), null, 'the drawer starts closed');
 
@@ -401,9 +410,11 @@ test('the centre column holds only conclusions, figures and actions; process ope
   assert.equal(body.props.detail.stdout, 'ok');
 
   workbench().props.onOpenStage('report'); h.render();
-  assert.ok(within(drawerOf(h).body).some(n => n.type === 'ReportDetails'), '09 opens the report process');
+  assert.ok(within(drawerOf(h).body).some(n => n.type === 'ReportDetails'), '09 opens the full report');
+  assert.ok(within(drawerOf(h).body).some(n => n.type === 'ReportSummary'));
   workbench().props.onOpenStage('execute'); h.render();
-  assert.ok(within(drawerOf(h).body).some(n => n.type === 'ReportDetails'), 'other stage heads only expand the rail');
+  assert.equal(drawerOf(h).title, '这一步的全部操作', 'other stage heads list the stage operations');
+  assert.match(JSON.stringify(drawerOf(h).body), /python train\.py/);
 
   const details = workbench().props.actions;
   details.props.onClick(); h.render();
@@ -415,4 +426,29 @@ test('the centre column holds only conclusions, figures and actions; process ope
   drawerOf(h).onClose(); h.render();
   assert.equal(drawerOf(h), null);
   assert.equal(workbench().props.selectedItemId, null);
+});
+
+test('prompts are toasts: an approval result pops up bottom right, state hints show once per state', async () => {
+  const h = await harness({ taskOver: { pending_decision: pendingDecision } });
+  h.nodes().find(n => n.type === 'ApprovalCard').props.onApprove(); await h.settle();
+  assert.ok(toasts(h).some(t => t.tone === 'ok' && t.text === '已批准方案变更，任务已排队继续。'));
+  assert.ok(!h.nodes().some(n => n.type === 'p' && n.props.role === 'status' && /已批准方案变更/.test(JSON.stringify(n.children))), 'not a callout in the page');
+  const stopped = await harness({ taskOver: { state: 'stopped' } });
+  assert.equal(toasts(stopped).filter(t => /停止任务不会停止远端实例计费/.test(t.text)).length, 1);
+  stopped.poll(); await stopped.settle();
+  assert.equal(toasts(stopped).filter(t => /停止任务不会停止远端实例计费/.test(t.text)).length, 1, 'polling does not repeat it');
+});
+
+test('the instruction box is folded at the top; send sits to the right of the field and sent ones are listed', async () => {
+  const events = [{ sequence: 1, type: 'user_message', payload: { message: '先跑小数据集' }, created_at: '2026-11-06T11:00:00Z' }];
+  const h = await harness({ events });
+  const toggle = h.nodes().find(n => n.type === 'button' && n.props.className === 'auto-compose-toggle');
+  assert.equal(toggle.props['aria-expanded'], false, 'folded by default');
+  assert.match(JSON.stringify(toggle.children), /已发送 ",1," 条/);
+  assert.equal(h.nodes().find(n => n.type === 'input' && n.props['aria-label'] === '追加指令'), undefined);
+  openCompose(h);
+  const row = h.nodes().find(n => n.type === 'div' && n.props.className === 'auto-compose-row');
+  const kids = within(row.children).filter(n => n.type === 'input' || n.type === 'button');
+  assert.deepEqual(kids.map(n => n.type), ['input', 'button'], 'field then the send button on its right');
+  assert.match(JSON.stringify(h.nodes().find(n => n.type === 'ul' && n.props.className === 'auto-sent')), /先跑小数据集/);
 });

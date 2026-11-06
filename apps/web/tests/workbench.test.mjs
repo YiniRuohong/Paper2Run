@@ -137,7 +137,7 @@ test('task page continues the nine-step timeline in the full-bleed layout', asyn
   assert.match(page, /\n\s+bareLive\n/);
   assert.match(page, /<StepFrame title=\{task \? activeTitle/);
   assert.match(page, /actions=\{controls\}/);
-  assert.match(page, /阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定/);
+  assert.match(page, /阶段由智能体自报进度与事件归纳得出，不是程序判定/);
 });
 
 test('at 860px and below the app rail is capped like the plain layout so the form stays on the first screen', async () => {
@@ -161,4 +161,11 @@ test('rail sub-steps open the drawer when the page asks for it, and stage heads 
   assert.match(drawer, /e\.key === 'Escape'/);
   assert.match(drawer, /wb-drawer-scrim[^\n]*onClick/);
   assert.match(drawer, /opener\?\.focus/);
+});
+
+test('rail runs read as the command, without the virtualenv path', async () => {
+  const { commandName } = await import('../src/ui/workbench/tree.ts');
+  assert.equal(commandName('$ /work/.venv/bin/python run_experiment.py --epochs 60'), 'python run_experiment.py --epochs 60');
+  assert.equal(commandName('后台 $ cd /work && /work/.venv/bin/python train.py'), 'python train.py');
+  assert.equal(commandName('$ bash run.sh'), 'bash run.sh');
 });

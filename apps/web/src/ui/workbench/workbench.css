@@ -322,3 +322,15 @@ button.wb-tab.wb-tab-bar { max-width: 360px; gap: 9px; }
 @keyframes wb-slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes wb-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .wb-drawer, .wb-drawer-scrim { animation: none; } }
+
+/* ---------- rail nodes (Apevon-style): prose notes, one-line runs, a pending line ---------- */
+.wb-sub.is-note { padding-top: 5px; padding-bottom: 5px; }
+.wb-sub.is-note .wb-sub-label { color: var(--text); font-size: 12.5px; line-height: 1.6; opacity: 0.86; }
+.wb-substeps > li { min-width: 0; }
+.wb-sub.is-command { align-items: center; width: 100%; min-width: 0; padding-top: 4px; padding-bottom: 4px; overflow: hidden; }
+.wb-sub.is-command .wb-sub-label { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 500 12.5px/1.5 var(--mono); }
+.wb-sub-prompt { flex: none; color: var(--muted); }
+.wb-sub.is-command .wb-sub-go { margin-top: 0; }
+.wb-sub.is-pending { align-items: center; }
+.wb-sub.is-pending .wb-sub-label { font-style: italic; color: var(--faint); }
+.wb-sub.is-pending .wb-sub-dot { margin-top: 0; animation: wb-pulse 1.6s var(--ease) infinite; color: var(--accent); }

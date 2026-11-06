@@ -1,31 +1,20 @@
 import { useEffect, useState } from 'react';
 import type { AutonomousFile } from '../../api-client/autonomous';
 import { Card, CardHeader } from '../../ui/Card';
+import { baseName, ext, pickFigures } from './figures';
 
-// 图表：实验在冻结证据或工作区里产出的图片，直接显示在中间栏。
-// 只读真实文件（与文件树同一来源），不生成或改画任何图；文件名就是图注。
-// 冻结证据排在工作区文件之前；最多显示 MAX_FIGURES 张，其余在文件树里看。
-const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
-const MAX_FIGURES = 6;
-const MAX_FIGURE_BYTES = 8 * 1024 * 1024;
-
-const ext = (path: string) => path.slice(path.lastIndexOf('.') + 1).toLowerCase();
-const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
-
-/** The figures to show: images only, frozen evidence first, then by path, at most MAX_FIGURES. */
-export function pickFigures(items: AutonomousFile[]): AutonomousFile[] {
-  return items
-    .filter(f => IMAGE_EXT.has(ext(f.path)) && f.bytes > 0 && f.bytes <= MAX_FIGURE_BYTES)
-    .sort((a, b) => (a.source === b.source ? a.path.localeCompare(b.path) : a.source === 'artifact' ? -1 : 1))
-    .slice(0, MAX_FIGURES);
-}
+// 图表：实验产出的图片直接显示在中间栏；挑哪些图见 figures.ts。
+export { pickFigures } from './figures';
 
 type Loaded = { key: string; url: string } | { key: string; error: true };
 const keyOf = (f: AutonomousFile) => `${f.source}:${f.path}:${f.sha256 ?? f.bytes}`;
 
-export function FiguresView({ items, load }: {
+export function FiguresView({ items, load, compact, onOpen }: {
   items: AutonomousFile[];
   load: (file: AutonomousFile, signal: AbortSignal) => Promise<Blob>;
+  /** 中间栏一屏布局：不套卡片，图片按可用高度缩放，点击放大。 */
+  compact?: boolean;
+  onOpen?: (file: AutonomousFile, url: string) => void;
 }) {
   const figures = pickFigures(items);
   const signature = figures.map(keyOf).join('|');
@@ -50,6 +39,25 @@ export function FiguresView({ items, load }: {
   }, [signature]); // the signature captures the figure list; load is stable per task
 
   if (figures.length === 0) return null;
+  if (compact) {
+    // 1–2 张竖排，3 张及以上两列；行高平分可用高度，图片 object-fit: contain。
+    const cols = figures.length <= 2 ? 1 : 2;
+    return <section className="auto-figures-fill" aria-label="图表" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+      {figures.map(file => {
+        const entry = loaded.find(l => l.key === keyOf(file));
+        const url = entry && 'url' in entry ? entry.url : null;
+        const name = baseName(file.path);
+        return <button type="button" key={keyOf(file)} className="auto-figure-tile" disabled={!url || !onOpen} title={`放大查看 ${name}`} onClick={() => { if (url && onOpen) onOpen(file, url); }}>
+          <span className="auto-figure-img">
+            {!entry && <span className="ui-help">读取中…</span>}
+            {entry && 'error' in entry && <span className="ui-help">读取失败，可在右侧文件树打开</span>}
+            {url && <img src={url} alt={name} />}
+          </span>
+          <span className="auto-figure-cap"><span className="ui-mono">{name}</span><small>{file.source === 'artifact' ? '证据' : '工作区'}</small></span>
+        </button>;
+      })}
+    </section>;
+  }
   return <Card>
     <CardHeader icon="image" title="图表" subtitle="实验产出的图片，原样显示；文件名即图注。是否支持结论以上方程序判定为准。" />
     <div className="ui-card-section">

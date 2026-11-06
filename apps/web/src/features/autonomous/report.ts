@@ -82,7 +82,7 @@ export interface CandidateView {
   protocolSha256: string | null;
   artifacts: CandidateArtifactView[];
   run: { jobId: string | null; exitCode: number | null } | null;
-  /** Pi 提交时的说明：模型叙述，不是执行证据。 */
+  /** 智能体提交时的说明：模型叙述，不是执行证据。 */
   summary: string | null;
   reviewStatus: string | null;
   attempts: number | null;

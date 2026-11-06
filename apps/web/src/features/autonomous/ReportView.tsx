@@ -39,6 +39,38 @@ export function ReportSummary({ report }: { report: unknown }) {
   </div>;
 }
 
+/** 中间栏的报告摘要：结局、比较结论、报告状态、前两条原因与指标；全文在「报告」抽屉里（onOpen）。 */
+export function ReportBrief({ report, onOpen }: { report: unknown; onOpen: () => void }) {
+  const parsed = parseReport(report);
+  if (!parsed) return <div className="auto-brief">
+    <p className="ui-help">报告结构与前端预期不一致。</p>
+    <button type="button" className="btn btn-secondary" onClick={onOpen}>查看完整报告</button>
+  </div>;
+  const label = outcomeLabel(parsed.outcome);
+  const tone = outcomeTone(parsed.outcome);
+  const verdictText = parsed.verdict === 'not_comparable' ? '不可比较' : parsed.verdict;
+  const statusText = parsed.status === 'incomplete' ? '流程未完成' : parsed.status;
+  const all = Object.entries(parsed.evaluation.metrics);
+  const metrics = all.slice(0, 6);
+  return <div className="auto-brief">
+    <div className="auto-brief-head">
+      <div><span>结局</span><b className={label && tone ? `tone-${tone}` : undefined}>{label ?? '无结局'}</b></div>
+      <div><span>比较结论</span><b className={parsed.verdict === 'not_comparable' ? 'tone-warn' : undefined}>{verdictText}</b></div>
+      <div><span>报告状态</span><b>{statusText}</b></div>
+    </div>
+    {parsed.evaluation.reasons.length > 0 && <ul className="auto-brief-reasons">
+      {parsed.evaluation.reasons.slice(0, 2).map((reason, i) => <li key={i} title={reason}>{reason}</li>)}
+    </ul>}
+    {metrics.length > 0 && <div className="wb-stat-grid auto-metrics">
+      {metrics.map(([name, value]) => <div className="wb-stat" key={name}><span className="ui-mono">{name}</span><b>{formatNumber(value)}</b></div>)}
+    </div>}
+    <p className="auto-brief-note">
+      <span>判定由程序给出，不来自模型自述{all.length > metrics.length ? `；另有 ${all.length - metrics.length} 项指标在完整报告里` : ''}。</span>
+      <button type="button" className="btn btn-secondary" onClick={onOpen}>查看完整报告</button>
+    </p>
+  </div>;
+}
+
 /** 证据完备性（程序判定），放在「候选与复核」的抽屉里。 */
 export function ReportEvidence({ report }: { report: unknown }) {
   const parsed = parseReport(report);

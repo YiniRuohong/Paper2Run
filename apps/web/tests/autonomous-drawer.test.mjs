@@ -101,3 +101,10 @@ test('every rail sub-step the stages builder makes resolves to a detail', () => 
   assert.ok(ids.length >= 3);
   for (const id of ids) assert.ok(itemDetail(events, id), id);
 });
+
+test('figures show each image once, preferring the frozen evidence copy', async () => {
+  const { pickFigures } = await import('../src/features/autonomous/figures.ts');
+  const f = (path, source, sha) => ({ path, source, bytes: 10, media_type: 'image/png', modified_at: null, sha256: sha, kind: null, protocol_sha256: null });
+  const picked = pickFigures([f('outputs/a.png', 'workspace', null), f('artifacts/x/r0/a.png', 'artifact', 's1'), f('outputs/b.png', 'workspace', null)]);
+  assert.deepEqual(picked.map(p => p.path), ['artifacts/x/r0/a.png', 'outputs/b.png']);
+});

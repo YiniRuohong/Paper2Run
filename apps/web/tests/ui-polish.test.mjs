@@ -85,5 +85,5 @@ test('C: progressBar replaces the 实时 tab segment and the rail progress line'
   const task = await read('features/autonomous/TaskPage.tsx');
   assert.match(task, /\n\s+bareLive\n/);
   assert.doesNotMatch(task, /progressBar=|progress=\{/);
-  assert.match(task, /阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定/);
+  assert.match(task, /阶段由智能体自报进度与事件归纳得出，不是程序判定/);
 });

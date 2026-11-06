@@ -3,11 +3,13 @@ import {
   ApiError, createAutonomousApi, type AutonomousApi, type AutonomousEvent, type AutonomousFiles, type AutonomousTask, type Capability, type ModelProfile,
 } from '../../api-client/autonomous';
 import { createPapersApi, type PapersApi } from '../../api-client/papers';
-import { Workbench, type WbContent, type WbDrawer, type WbFile } from '../../ui/workbench/Workbench';
+import { Workbench, type WbContent, type WbDrawer, type WbFile, type WbStage, type WbStageItem } from '../../ui/workbench/Workbench';
+import { ToastStack, type ToastItem } from '../../ui/Toast';
+import type { ToastTone } from '../../ui/toastTiming';
 import { Badge, Card, CardHeader } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { PHASES, currentProtocolSha, progressNotes, safetyBlock, toWbFiles } from './stages';
+import { PHASES, buildStages, currentProtocolSha, flattenItems, progressNotes, railItems, safetyBlock, toWbFiles, type PhaseId } from './stages';
 import { ProgressNotes, SpecialistCalls } from './ActivityViews';
 import { decisionSuperseded, decisionVisible, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { errorDetail } from './errors';
@@ -17,8 +19,8 @@ import StepFrame from '../flow/StepFrame';
 import { flowStages, type SetupView } from '../flow/timeline';
 import { ApprovalCard } from './ApprovalCard';
 import { CandidateCard } from './CandidateCard';
-import { FiguresView } from './FiguresView';
-import { ReportDetails, ReportEvidence, ReportSummary } from './ReportView';
+import { FiguresView, pickFigures } from './FiguresView';
+import { ReportBrief, ReportDetails, ReportEvidence, ReportSummary } from './ReportView';
 import { ItemDrawerBody, itemTitle } from './StepDrawer';
 import { itemDetail } from './stepDetail';
 import { UsageView } from './UsageView';
@@ -28,7 +30,7 @@ import './autonomous.css';
 
 const defaultApi = createAutonomousApi();
 const defaultPapers = createPapersApi('demo-user');
-const STAGE_NOTE = '阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定';
+const STAGE_NOTE = '阶段由智能体自报进度与事件归纳得出，不是程序判定';
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
 /** 一句话说明任务错误：有已知代码时用中文解释，否则用后端消息；原始 JSON 另放折叠区。 */
@@ -41,8 +43,26 @@ function errorSummary(error: unknown): string {
 
 // 任务工作台（#/task/<id>）：阶段时间线 + 当前阶段 + 文件树，与准备阶段同一套版式：
 // 中间栏没有页签栏，内容铺满，标题旁「!」放阶段说明，底部固定操作栏放控制按钮。
-// 中间栏只放结论性内容（实时 / 结局、结论、指标、图表）和需要动手的卡片；
-// 过程在右侧抽屉里看：点左栏子步骤、第 08 / 09 步标题，或标题旁的「任务详情」。
+// 抽屉里显示什么：一条操作（可带返回）、一组操作（一段进度或一个阶段）、08 / 09 阶段、审批、图片、错误或任务详情。
+type DrawerState =
+  | { kind: 'item'; stageId: string; itemId: string; back?: DrawerState }
+  | { kind: 'group'; stageId: string; noteId?: string }
+  | { kind: 'stage'; stageId: 'review' | 'report' }
+  | { kind: 'details' } | { kind: 'approval' } | { kind: 'error' }
+  | { kind: 'figure'; path: string; url: string; name: string };
+
+// 状态说明进入该状态时在右下角弹一次。
+const STATE_HINTS = {
+  paused: '智能体已暂停；后台训练作业可能仍在运行，暂停不会停止远端计费。',
+  stopped: '任务已结束；停止任务不会停止远端实例计费。',
+  failed: '任务失败。导出 ZIP 可保留全部证据与日志。',
+} as const;
+
+const phaseOf = (stageId: string): PhaseId | null => stageId === 'launch' ? 'setup' : PHASES.some(p => p.id === stageId) ? stageId as PhaseId : null;
+
+// 中间栏一屏放下、不滚动：追加指令（折叠）、需要动手的一行（恢复 / 审批）、实时卡、报告摘要与图表。
+// 左栏只放节点；过程在右侧抽屉里看：点左栏节点、阶段标题，或标题旁的「任务详情」。
+// 提示与操作结果在右下角弹出（5 秒收起，报错要手动关）。
 // 审批、继续、暂停、停止是四个独立动作；报告的程序判定与模型叙述分区。
 export default function TaskPage({ taskId, api = defaultApi, papers = defaultPapers }: { taskId: string; api?: AutonomousApi; papers?: Pick<PapersApi, 'getProject'> }) {
   const [task, setTask] = useState<AutonomousTask | null>(null);
@@ -56,13 +76,18 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const [profilesTick, setProfilesTick] = useState(0);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toastSeq = useRef(0);
+  const pushToast = (tone: ToastTone, text: string) => setToasts(prev => prev.some(t => t.text === text)
+    ? prev : [...prev, { id: `t${++toastSeq.current}`, tone, text }]);
+  const closeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
+  const pollError = useRef('');
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [composeOpen, setComposeOpen] = useState(false);
   const [keyInput, setKeyInput] = useState('');
   const [keysInjected, setKeysInjected] = useState(false);
-  // 抽屉里显示什么：左栏一条子步骤、一个阶段（08 候选与复核 / 09 报告），或任务详情。
-  const [drawerOpen, setDrawerOpen] = useState<{ kind: 'item'; stageId: string; itemId: string } | { kind: 'stage'; stageId: string } | { kind: 'details' } | null>(null);
-  useEffect(() => { setDrawerOpen(null); }, [taskId]);
+  const [drawerOpen, setDrawerOpen] = useState<DrawerState | null>(null);
+  useEffect(() => { setDrawerOpen(null); setToasts([]); setLoadFailed(false); pollError.current = ''; }, [taskId]);
   // 最近一次操作失败的错误码：CREDENTIAL_REQUIRED 时显示「需要恢复」。
   const [lastControlError, setLastControlError] = useState<string | null>(null);
   const [paperTitle, setPaperTitle] = useState<{ projectId: string; name: string } | null>(null);
@@ -71,12 +96,12 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   useEffect(() => { setKeysInjected(false); setKeyInput(''); setLastControlError(null); }, [taskId]);
 
   async function act(work: () => Promise<void>) {
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true);
     try {
       await work();
       setLastControlError(null);
     } catch (e) {
-      setError(errorDetail(e));
+      pushToast('bad', errorDetail(e));
       if (e instanceof ApiError) {
         setLastControlError(e.code);
         if (e.code === 'CREDENTIAL_REQUIRED') setKeysInjected(false);
@@ -87,7 +112,7 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   async function controlTask(id: string, action: 'pause' | 'resume' | 'stop' | 'message', text?: string) {
     const scope = taskScope.current;
     const result = await api.control(id, action, text);
-    if (applyTask(scope, id, result) && action === 'message') setMessage('');
+    if (applyTask(scope, id, result) && action === 'message') { setMessage(''); pushToast('ok', '指令已发送，智能体会在下一步读取。'); }
   }
 
   function applyTask(scope: typeof taskScope.current, id: string, result: AutonomousTask) {
@@ -102,11 +127,11 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     const scope = taskScope.current;
     try {
       const result = await api.decide(id, decisionId, action, note);
-      if (applyTask(scope, id, result)) setNotice(action === 'approve' ? '已批准方案变更，任务已排队继续。' : '已拒绝方案变更，当前方案保持不变，任务已排队继续。');
+      if (applyTask(scope, id, result)) pushToast('ok', action === 'approve' ? '已批准方案变更，任务已排队继续。' : '已拒绝方案变更，当前方案保持不变，任务已排队继续。');
     } catch (e) {
       if (!(e instanceof ApiError) || !decisionSuperseded(e.code)) throw e;
       applyTask(scope, id, await api.task(id));
-      setNotice(errorExplanation('DECISION_MISMATCH')!);
+      pushToast('idle', errorExplanation('DECISION_MISMATCH')!);
     }
   }
 
@@ -125,8 +150,14 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
         setTask(current);
         setEvents(old => mergeEvents(old, stream.events));
         cursor = stream.next_cursor;
+        pollError.current = ''; setLoadFailed(false);
       } catch (e) {
-        if (!controller.signal.aborted) setError(errorDetail(e));
+        // 轮询每 2 秒一次：同一个错误只弹一次，恢复后再出错才再弹。
+        if (!controller.signal.aborted) {
+          const text = `任务读取失败：${errorDetail(e)}`;
+          if (pollError.current !== text) { pollError.current = text; pushToast('bad', text); }
+          setLoadFailed(true);
+        }
       }
       if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
     }
@@ -180,6 +211,9 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     { id: 'launch', done: !!task, summary: !snapshot ? null : snapshot.target?.kind === 'ssh' ? `SSH · ${snapshot.target.ssh_config_alias ?? ''}` : '本地隔离环境' },
   ];
   const { stages, activeId } = flowStages({ setup, current: null, task, events });
+  // 左栏节点由完整操作列表筛出；抽屉列出全部操作。
+  const operations = task ? buildStages(task, events).operations : new Map<PhaseId, WbStageItem[]>();
+  const opsOf = (stageId: string) => { const phase = phaseOf(stageId); return phase ? operations.get(phase) ?? [] : []; };
   const stepNumber = stages.findIndex(st => st.id === activeId) + 1;
   const activeTitle = stages[stepNumber - 1]?.title ?? '';
   const latestNote = progressNotes(events)[0]?.summary ?? null;
@@ -221,6 +255,32 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const terminal = task ? terminalState(task.state) : false;
   const paused = task?.state === 'paused';
   const stopped = task ? task.state === 'stopped' || task.state === 'cancelled' : false;
+  const hint: keyof typeof STATE_HINTS | null = !task || safety ? null
+    : task.state === 'failed' ? 'failed'
+    : paused && !approval && !hasOutcome ? 'paused'
+    : stopped && !hasOutcome ? 'stopped' : null;
+  const hintShown = useRef('');
+  useEffect(() => {
+    const key = hint ? `${taskId}:${hint}` : '';
+    if (key === hintShown.current) return;
+    hintShown.current = key;
+    if (hint) pushToast('idle', STATE_HINTS[hint]);
+  }, [hint, taskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const railStages: WbStage[] = stages.map(stage => {
+    const phase = phaseOf(stage.id);
+    if (!phase || !task) return stage;
+    const ops = opsOf(stage.id);
+    const nodes = railItems(ops).slice(-14);
+    if (stage.id === activeId && running) nodes.push({ id: 'pending', label: '正在整理进展…', variant: 'pending' });
+    return { ...stage, items: nodes, disabled: ops.length === 0 && nodes.length === 0 };
+  });
+  const sentMessages = events.filter(e => e.type === 'user_message').map(e => {
+    const payload = (e.payload ?? {}) as Record<string, unknown>;
+    return { sequence: e.sequence, text: typeof payload.message === 'string' ? payload.message : '', time: e.created_at.slice(11, 16) };
+  }).filter(m => m.text);
+  const figureFiles = pickFigures(files?.items ?? []);
+
   const budgetExhausted = [...events].reverse().find(e => e.type === 'budget_exhausted');
   // reason 是 {code, message}（worker.record_budget_cancel）；旧事件可能是字符串。
   const budgetReason = budgetExhausted && budgetExhausted.payload && typeof budgetExhausted.payload === 'object'
@@ -263,19 +323,56 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     return index < 0 ? '' : `步骤 ${String(index + 1).padStart(2, '0')} · ${stages[index].title}`;
   };
   const closeDrawer = () => setDrawerOpen(null);
+  const opRows = (stageId: string, items: WbStageItem[], from: DrawerState) => items.length === 0
+    ? <p className="ui-help">这里还没有操作记录。</p>
+    : <ul className="auto-ops" aria-label="操作">{items.map(item => item.variant === 'note'
+      ? <li key={item.id}><button type="button" className="auto-op-note" onClick={() => setDrawerOpen({ kind: 'group', stageId, noteId: item.id })}>{item.label}</button></li>
+      : <li key={item.id}><button type="button" className="auto-op" onClick={() => setDrawerOpen({ kind: 'item', stageId, itemId: item.id, back: from })}>
+        <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
+        <span className="auto-op-text"><span className="auto-op-label">{item.label}</span>{(item.detail || item.time) && <small>{[item.detail, item.time].filter(Boolean).join(' · ')}</small>}</span>
+        <Icon name="chevron-right" size={12} className="wb-sub-go" />
+      </button></li>)}</ul>;
   let drawer: WbDrawer | null = null;
   if (task && drawerOpen?.kind === 'item') {
     const detail = itemDetail(events, drawerOpen.itemId, task);
-    if (detail) drawer = { label: stepLabel(drawerOpen.stageId), title: itemTitle(detail), body: <ItemDrawerBody detail={detail} />, onClose: closeDrawer, openPath: detail.kind === 'artifact' ? detail.path : undefined };
+    const back = drawerOpen.back;
+    if (detail) drawer = { label: stepLabel(drawerOpen.stageId), title: itemTitle(detail), onClose: closeDrawer, openPath: detail.kind === 'artifact' ? detail.path : undefined, body: <>
+      {back && <button type="button" className="btn btn-ghost btn-sm auto-drawer-back" onClick={() => setDrawerOpen(back)}><Icon name="chevron-left" size={13} />返回列表</button>}
+      <ItemDrawerBody detail={detail} />
+    </> };
+  } else if (task && drawerOpen?.kind === 'group') {
+    const from = drawerOpen;
+    const all = flattenItems(opsOf(drawerOpen.stageId));
+    const note = drawerOpen.noteId ? all.find(item => item.id === drawerOpen.noteId) : undefined;
+    drawer = note
+      ? { label: stepLabel(drawerOpen.stageId), title: '智能体进度', onClose: closeDrawer, body: <>
+        <p className="auto-drawer-note"><Badge tone="idle">模型叙述（不是执行证据）</Badge>{note.time && <time className="ui-help"> {note.time}</time>}</p>
+        <p className="auto-drawer-text">{note.label}</p>
+        <span className="auto-drawer-label">这段进度下的操作</span>
+        {opRows(drawerOpen.stageId, flattenItems(note.children ?? []), from)}
+      </> }
+      : { label: stepLabel(drawerOpen.stageId), title: '这一步的全部操作', onClose: closeDrawer, body: opRows(drawerOpen.stageId, all, from) };
+  } else if (task && drawerOpen?.kind === 'approval' && approval) {
+    drawer = { label: stepLabel('plan'), title: '方案审批', onClose: closeDrawer, body: <ApprovalCard approval={approval} busy={busy}
+      blockedReason={task.state !== 'paused' ? '任务暂停后才能处理决定' : undefined}
+      onApprove={() => { closeDrawer(); void act(() => decideTask(task.id, approval.id, 'approve')); }}
+      onReject={note => { closeDrawer(); void act(() => decideTask(task.id, approval.id, 'reject', note)); }} /> };
+  } else if (task && drawerOpen?.kind === 'error' && task.error != null) {
+    drawer = { label: '任务', title: '阻塞 / 错误', onClose: closeDrawer, body: <>
+      <p className="auto-drawer-text">{errorSummary(task.error)}</p>
+      <section className="auto-drawer-block"><span className="auto-drawer-label">原始错误</span><pre className="ui-code is-wrap">{pretty(task.error)}</pre></section>
+    </> };
+  } else if (drawerOpen?.kind === 'figure') {
+    drawer = { label: '图表', title: drawerOpen.name, onClose: closeDrawer, openPath: drawerOpen.path, body: <img className="auto-drawer-figure" src={drawerOpen.url} alt={drawerOpen.name} /> };
   } else if (task && drawerOpen?.kind === 'stage' && drawerOpen.stageId === 'review') {
     drawer = { label: stepLabel('review'), title: '证据与独立复核', onClose: closeDrawer, body: <>
       {task.report != null && <ReportEvidence report={task.report} />}
       <CandidateCard task={task} events={events} />
     </> };
   } else if (task && drawerOpen?.kind === 'stage' && drawerOpen.stageId === 'report') {
-    drawer = { label: stepLabel('report'), title: '报告过程', onClose: closeDrawer, body: task.report != null
-      ? <ReportDetails report={task.report} />
-      : <p className="ui-help">报告尚未生成；生成后这里显示完成门槛、执行观测、模型叙述与局限。</p> };
+    drawer = { label: stepLabel('report'), title: '实验报告', onClose: closeDrawer, body: task.report != null
+      ? <><ReportSummary report={task.report} /><ReportDetails report={task.report} /></>
+      : <p className="ui-help">报告尚未生成；生成后这里显示结局、结论、指标、完成门槛、执行观测、模型叙述与局限。</p> };
   } else if (task && drawerOpen?.kind === 'details') {
     drawer = { label: '任务', title: '任务详情', onClose: closeDrawer, body: <>
       {summaryList}
@@ -335,11 +432,14 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     actions={task ? <button type="button" className="btn btn-secondary btn-sm" aria-haspopup="dialog" onClick={() => setDrawerOpen({ kind: 'details' })}><Icon name="list" size={14} />任务详情</button> : undefined}
     bareLive
     liveLabel={activeTitle || '当前阶段'}
-    onOpenItem={(stageId, item) => setDrawerOpen({ kind: 'item', stageId, itemId: item.id })}
-    onOpenStage={stageId => { if (stageId === 'review' || stageId === 'report') setDrawerOpen({ kind: 'stage', stageId }); }}
-    selectedItemId={drawerOpen?.kind === 'item' ? drawerOpen.itemId : null}
+    onOpenItem={(stageId, item) => setDrawerOpen(item.variant === 'note' ? { kind: 'group', stageId, noteId: item.id } : { kind: 'item', stageId, itemId: item.id })}
+    onOpenStage={stageId => {
+      if (stageId === 'review' || stageId === 'report') setDrawerOpen({ kind: 'stage', stageId });
+      else if (task && opsOf(stageId).length > 0) setDrawerOpen({ kind: 'group', stageId });
+    }}
+    selectedItemId={drawerOpen?.kind === 'item' ? drawerOpen.itemId : drawerOpen?.kind === 'group' ? drawerOpen.noteId ?? null : null}
     drawer={drawer}
-    stages={stages}
+    stages={railStages}
     activeStageId={task ? activeId : null}
     files={wbFiles}
     filesError={filesError || null}
@@ -348,88 +448,76 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     loadFile={loadFile}
   >
     <StepFrame title={task ? activeTitle || '当前阶段' : '正在读取任务…'} guide={guide} actions={controls}>
-      {error && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" /><span>{error}</span><button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>重新读取</button></div>}
-      {notice && <p role="status" className="ui-callout tone-idle"><Icon name="info" /><span>{notice}</span></p>}
+      {!task && <div className="wb-empty-live"><span>{loadFailed ? '任务读取失败，正在重试…' : '正在读取任务…'}</span></div>}
 
-      {!task && !error && <div className="wb-empty-live"><span>正在读取任务…</span></div>}
+      {task && <div className="auto-screen">
+        {!terminal && !hasOutcome && <div className={`auto-compose-bar${composeOpen ? ' is-open' : ''}`}>
+          <button type="button" className="auto-compose-toggle" aria-expanded={composeOpen} onClick={() => setComposeOpen(open => !open)}>
+            <Icon name="chevron-right" size={13} className="auto-compose-chev" /><b>追加指令</b>
+            {sentMessages.length > 0 && <span className="ui-help">已发送 {sentMessages.length} 条</span>}
+          </button>
+          {composeOpen && <div className="auto-compose-body">
+            <div className="auto-compose-row">
+              <input type="text" aria-label="追加指令" value={message} placeholder="例如：先用小数据集跑通，再扩大规模"
+                onChange={e => setMessage(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && message.trim() && !busy) void act(async () => { await controlTask(task.id, 'message', message.trim()); }); }} />
+              <button type="button" className="btn btn-primary" disabled={busy || !message.trim()} onClick={() => void act(async () => { await controlTask(task.id, 'message', message.trim()); })}>发送指令</button>
+            </div>
+            {sentMessages.length > 0 && <ul className="auto-sent" aria-label="已发送的指令">
+              {sentMessages.slice(-3).reverse().map(m => <li key={m.sequence}><time>{m.time}</time><span title={m.text}>{m.text}</span></li>)}
+            </ul>}
+          </div>}
+        </div>}
 
-      {task && <>
+        {safety && <div className="auto-bar tone-bad" role="alert"><Icon name="shield" size={16} />
+          <span className="auto-bar-text"><b>容器隔离校验失败，任务已安全终止，不能恢复</b><span className="auto-clamp">代码 {safety.code ?? '未知'}；仍可导出 ZIP 保留证据。</span></span>
+        </div>}
+
+        {needsRecovery && <div className="auto-bar tone-warn" role="group" aria-label="需要恢复">
+          <Icon name="key" size={16} />
+          <span className="auto-bar-text"><b>需要恢复</b><span className="auto-clamp">{recoveryProfile
+            ? `应用曾退出，密钥已失效：重新输入「${recoveryProfile.model}」的 API Key（只存在内存里），再点「继续」。`
+            : '任务快照中没有可用的主模型配置，无法注入密钥；可以导出 ZIP 后新建任务。'}</span></span>
+          {recoveryProfile && <>
+            <input className="auto-bar-input" type="password" autoComplete="off" aria-label="API Key" placeholder="API Key" value={keyInput} disabled={busy} onChange={e => setKeyInput(e.target.value)} />
+            <button type="button" className="btn btn-primary" disabled={busy || !!injectHint} title={injectHint} onClick={() => void act(async () => {
+              const request = recoveryProfileRequest(mainProfile, task.config_snapshot, keyInput);
+              if (!request) return;
+              await api.saveProfile(request);
+              setKeyInput('');
+              setKeysInjected(true);
+              setProfilesTick(x => x + 1);
+              pushToast('ok', '密钥已重新注入；现在可以点击「继续」恢复任务。');
+            })}>注入密钥</button>
+          </>}
+        </div>}
+
+        {approval && <ApprovalCard compact approval={approval} busy={busy}
+          blockedReason={task.state !== 'paused' ? '任务暂停后才能处理决定' : undefined}
+          onExpand={() => setDrawerOpen({ kind: 'approval' })}
+          onApprove={() => void act(() => decideTask(task.id, approval.id, 'approve'))}
+          onReject={note => void act(() => decideTask(task.id, approval.id, 'reject', note))} />}
+
         <div className="auto-live-status" role="status">
           <p className="wb-live-head">
             {running && <span className="wb-live-dot" aria-hidden="true" />}
             <b>{running ? '运行中' : display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {stepNumber} / 9 步 · {activeTitle}
             <Badge tone="idle" title={STAGE_NOTE}>按事件归纳</Badge>
           </p>
-          {latestNote && <p className="auto-live-now">{running ? '正在：' : '最近进度：'}{latestNote}</p>}
+          {latestNote && <p className="auto-live-now" title={latestNote}>{running ? '正在：' : '最近进度：'}{latestNote}</p>}
           <p className="ui-help">已执行 {toolSteps} 步操作{display?.caption ? ` · ${display.caption}` : ''}</p>
+          {task.error != null && <p className="auto-live-error" role="alert"><Icon name="alert" size={14} /><span title={errorSummary(task.error)}>{errorSummary(task.error)}</span>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDrawerOpen({ kind: 'error' })}>原始错误</button></p>}
         </div>
 
-        {safety && <div className="ui-callout tone-bad" role="alert"><Icon name="shield" />
-          <span>容器隔离校验失败，任务已安全终止，不能恢复。代码：<code className="ui-mono">{safety.code ?? '未知'}</code>。仍可导出 ZIP 保留证据。</span>
-        </div>}
-        {paused && !approval && !hasOutcome && <div className="ui-callout tone-warn" role="status"><Icon name="clock" /><span>AI 调度已暂停；后台训练作业可能仍在运行，暂停不会停止远端计费。</span></div>}
-        {stopped && !hasOutcome && <div className="ui-callout tone-idle" role="status"><Icon name="info" /><span>任务已结束；停止任务不会停止远端实例计费。</span></div>}
-        {task.state === 'failed' && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" /><span>任务失败。导出 ZIP 可保留全部证据与日志。</span></div>}
-
-        {needsRecovery && <Card className="auto-recovery">
-          <CardHeader icon="key" title="需要恢复" status={{ text: '需重新注入密钥', tone: 'warn' }}
-            subtitle="应用曾退出：AI 调度已停止，密钥仅存于内存已失效。按顺序完成以下三步后可继续。" />
-          <div className="ui-card-section auto-recovery-body">
-            <ol className="auto-steps">
-              <li>查看后台作业状态{recovery.retainedJobs.length > 0 ? `（保留 ${recovery.retainedJobs.length} 个作业）` : '（文件树与事件日志可回看）'}</li>
-              <li>重新输入模型密钥（仅保存在内存，不写入浏览器存储）</li>
-              <li>点击「继续」恢复任务</li>
-            </ol>
-            <div className="ui-form">
-              <label className="ui-field"><span className="ui-field-label">模型配置</span>
-                <select value={mainProfileId} disabled>{recoveryProfile
-                  ? <option value={mainProfileId}>{recoveryProfile.id} · {recoveryProfile.model}{mainProfile ? '' : '（任务快照）'}</option>
-                  : <option value={mainProfileId}>{mainProfileId || '未知'}</option>}</select>
-              </label>
-              <label className="ui-field"><span className="ui-field-label">API Key<small>仅本次内存注入，重启应用后需重新输入</small></span>
-                <input type="password" autoComplete="off" value={keyInput} disabled={busy || !recoveryProfile} onChange={e => setKeyInput(e.target.value)} />
-              </label>
-            </div>
-            <div className="auto-actions">
-              <button type="button" className="btn btn-primary" disabled={busy || !!injectHint} title={injectHint} onClick={() => void act(async () => {
-                const request = recoveryProfileRequest(mainProfile, task.config_snapshot, keyInput);
-                if (!request) return;
-                await api.saveProfile(request);
-                setKeyInput('');
-                setKeysInjected(true);
-                setProfilesTick(x => x + 1);
-                setNotice('密钥已重新注入；现在可以点击「继续」恢复任务。');
-              })}>注入密钥</button>
-              {injectHint && !recoveryProfile && <span className="ui-help">{injectHint}</span>}
-            </div>
-          </div>
-        </Card>}
-
-        {approval && <ApprovalCard approval={approval} busy={busy}
-          blockedReason={task.state !== 'paused' ? '任务暂停后才能处理决定' : undefined}
-          onApprove={() => void act(() => decideTask(task.id, approval.id, 'approve'))}
-          onReject={note => void act(() => decideTask(task.id, approval.id, 'reject', note))} />}
-
-        {task.error != null && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" />
-          <div className="auto-error"><b>阻塞 / 错误</b><span>{errorSummary(task.error)}</span>
-            <Disclosure variant="sub" title="原始错误"><pre className="ui-code">{pretty(task.error)}</pre></Disclosure>
-          </div>
-        </div>}
-
-        {task.report != null && <ReportSummary report={task.report} />}
-
-        <FiguresView items={files?.items ?? []} load={(file, signal) => api.fileBlob(task.id, { source: file.source, path: file.path }, signal)} />
-
-        {!terminal && !hasOutcome && <div className="ui-form auto-compose">
-          <label className="ui-field"><span className="ui-field-label">追加指令</span>
-            <textarea rows={2} value={message} onChange={e => setMessage(e.target.value)} placeholder="例如：先用小数据集跑通，再扩大规模" />
-          </label>
-          <div className="auto-actions">
-            <button type="button" className="btn btn-primary" disabled={busy || !message.trim()} onClick={() => void act(async () => { await controlTask(task.id, 'message', message.trim()); })}>发送指令</button>
-          </div>
-        </div>}
-
-      </>}
+        <div className={`auto-results${figureFiles.length > 0 ? ' has-figures' : ''}`}>
+          {task.report != null
+            ? <ReportBrief report={task.report} onOpen={() => setDrawerOpen({ kind: 'stage', stageId: 'report' })} />
+            : <div className="auto-results-empty"><Icon name="chart" size={22} /><p>报告生成后，结局、结论与指标显示在这里{figureFiles.length > 0 ? '' : '；实验产出的图片也会显示在这里'}。</p></div>}
+          <FiguresView compact items={files?.items ?? []} load={(file, signal) => api.fileBlob(task.id, { source: file.source, path: file.path }, signal)}
+            onOpen={(file, url) => setDrawerOpen({ kind: 'figure', path: file.path, url, name: file.path.slice(file.path.lastIndexOf('/') + 1) })} />
+        </div>
+      </div>}
     </StepFrame>
-  </Workbench></div>;
+  </Workbench><ToastStack items={toasts} onClose={closeToast} /></div>;
 }

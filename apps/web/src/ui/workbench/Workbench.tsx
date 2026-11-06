@@ -3,7 +3,7 @@ import { Icon, type IconName } from '../Icon';
 import type { Tone } from '../Card';
 import { CopyButton } from '../Controls';
 import { Drawer, type WbDrawer } from './Drawer';
-import { ancestors, baseName, buildTree, countFolders, fileTone, filterFiles, formatBytes, parseCsv, previewKind, type WbFile, type WbFolderNode, type WbNode, type WbTag } from './tree';
+import { ancestors, baseName, buildTree, commandName, countFolders, fileTone, filterFiles, formatBytes, parseCsv, previewKind, type WbFile, type WbFolderNode, type WbNode, type WbTag } from './tree';
 import './workbench.css';
 
 export type { WbFile, WbTag } from './tree';
@@ -26,8 +26,11 @@ export interface WbStageItem {
   tone?: Tone;
   /** Opens this file (by WbFile.path) in the viewer when clicked. */
   openPath?: string;
-  /** Sub-steps nested under this item (e.g. tool calls under a Pi progress note). */
+  /** Sub-steps nested under this item (e.g. tool calls under an agent progress note). */
   children?: WbStageItem[];
+  /** How the rail draws it: note = a line of prose, command = a one-line run with a terminal icon,
+   *  tool = an operation kept for the drawer (not drawn as a rail node), pending = italic "still working" line. */
+  variant?: 'note' | 'command' | 'tool' | 'pending';
 }
 export interface WbStage {
   id: string;
@@ -208,13 +211,24 @@ export function Workbench(props: WorkbenchProps) {
     const onOpenItem = props.onOpenItem;
     const kids = item.children ?? [];
     const childOpen = openItems.has(key);
-    const inner = <>
-      <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
-      <span className="wb-sub-text"><span className="wb-sub-label">{item.label}</span>{(item.detail || item.time) && <small>{item.detail}{item.detail && item.time ? ' · ' : ''}{item.time && <time>{item.time}</time>}</small>}</span>
-      {(target || onOpenItem) && <Icon name="chevron-right" size={12} className="wb-sub-go" />}
-    </>;
+    const variant = item.variant ? ` is-${item.variant}` : '';
+    // A pending line ("still working") is plain text, never a control.
+    if (item.variant === 'pending') return <li key={item.id}><div className="wb-sub is-pending"><span className="wb-sub-dot tone-run" aria-hidden="true" /><span className="wb-sub-label">{item.label}</span></div></li>;
+    const inner = item.variant === 'note'
+      ? <span className="wb-sub-label">{item.label}</span>
+      : item.variant === 'command'
+      ? <>
+        <Icon name="chevron-right" size={12} className="wb-sub-prompt" />
+        <span className="wb-sub-label">{commandName(item.label)}</span>
+        <Icon name="chevron-right" size={12} className="wb-sub-go" />
+      </>
+      : <>
+        <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
+        <span className="wb-sub-text"><span className="wb-sub-label">{item.label}</span>{(item.detail || item.time) && <small>{item.detail}{item.detail && item.time ? ' · ' : ''}{item.time && <time>{item.time}</time>}</small>}</span>
+        {(target || onOpenItem) && <Icon name="chevron-right" size={12} className="wb-sub-go" />}
+      </>;
     const row = onOpenItem
-      ? <button type="button" className={`wb-sub${props.selectedItemId === item.id ? ' is-on' : ''}`} aria-haspopup="dialog" onClick={() => onOpenItem(stageId, item)}>{inner}</button>
+      ? <button type="button" className={`wb-sub${variant}${props.selectedItemId === item.id ? ' is-on' : ''}`} aria-haspopup="dialog" title={item.variant === 'command' ? item.label : undefined} onClick={() => onOpenItem(stageId, item)}>{inner}</button>
       : target
       ? <button type="button" className={`wb-sub${active === target ? ' is-on' : ''}`} onClick={() => open(target)} title={`打开 ${baseName(target)}`}>{inner}</button>
       : kids.length > 0
@@ -267,7 +281,7 @@ export function Workbench(props: WorkbenchProps) {
               <li className={`wb-stage is-${stage.mark}${isActive ? ' is-active' : ''}`}>
               <div className="wb-stage-row">
                 <button type="button" className="wb-stage-head" aria-current={isActive ? 'step' : undefined}
-                  disabled={stage.disabled || props.stagesBusy || (!props.onSelectStage && !hasItems)}
+                  disabled={stage.disabled || props.stagesBusy || (!props.onSelectStage && !props.onOpenStage && !hasItems)}
                   onClick={() => { if (props.onSelectStage) props.onSelectStage(stage.id); props.onOpenStage?.(stage.id); if (hasItems && (!props.onSelectStage || !expanded)) toggleStage(stage.id); }}>
                   <StageMarker mark={stage.mark} index={i} />
                   <span className="wb-stage-text">

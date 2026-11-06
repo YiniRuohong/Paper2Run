@@ -84,10 +84,10 @@ test('6: step feedback and errors are toasts, not inline callouts', async () => 
   assert.doesNotMatch(draft, /error && <div className="ui-callout/);
 });
 
-test('6: toasts auto-dismiss after about six seconds, errors stay', () => {
-  assert.equal(TOAST_MS, 6000);
-  assert.equal(toastLifetime('ok'), 6000);
-  assert.equal(toastLifetime('idle'), 6000);
+test('6: toasts auto-dismiss after five seconds, errors stay', () => {
+  assert.equal(TOAST_MS, 5000);
+  assert.equal(toastLifetime('ok'), 5000);
+  assert.equal(toastLifetime('idle'), 5000);
   assert.equal(toastLifetime('bad'), null);
 });
 
