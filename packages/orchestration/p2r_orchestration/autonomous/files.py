@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 import stat
 from urllib.parse import quote
 
+from p2r_evaluation.safe_read import is_link_or_reparse, open_below_root_windows
 from .evidence import MAX_FILE, safe_name
 from p2r_orchestration.errors import ServiceError
 from .security import fail
@@ -118,22 +119,23 @@ def list_files(snap) -> dict:
                       "media_type": media_type(name), "modified_at": modified, "sha256": item.get("sha256"),
                       "kind": item.get("kind"), "protocol_sha256": item.get("protocol_sha256")})
     root, truncated, available = snap["workspace"], False, False
-    if root is not None and root.is_dir() and not root.is_symlink():
+    if root is not None and root.is_dir() and not _is_link(root):
         available = True
         resolved_root = root.resolve()
         count = 0
         for current, dirnames, filenames in os.walk(root, followlinks=False):
             here = Path(current)
             depth = len(here.relative_to(root).parts)
-            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not (here / d).is_symlink()
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not _is_link(here / d)
                                  and depth + 1 <= MAX_DEPTH)
             for filename in sorted(filenames):
                 full = here / filename
                 try:
-                    info = full.lstat()
+                    info = os.lstat(full)
                 except OSError:
                     continue
-                if not stat.S_ISREG(info.st_mode) or not full.resolve().is_relative_to(resolved_root):
+                if (not stat.S_ISREG(info.st_mode) or is_link_or_reparse(info)
+                        or not full.resolve().is_relative_to(resolved_root)):
                     continue
                 if count >= MAX_LIST_FILES:
                     truncated = True
@@ -163,11 +165,34 @@ def _not_found():
     fail("RESOURCE_NOT_FOUND", "file not found", 404)
 
 
-def _read_nofollow(path: Path) -> bytes:
+def _windows_reads() -> bool:
+    return os.name == "nt"
+
+
+def _is_link(path: Path) -> bool:
+    """``is_symlink()`` plus Windows reparse points (junctions), which ``is_symlink()`` misses."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        return is_link_or_reparse(os.lstat(path))
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        return False
+
+
+def _open_nofollow(root: Path, parts) -> int:
+    if _windows_reads():
+        # No O_NOFOLLOW on Windows: refuse links/reparse points on the whole
+        # path and a file swapped between the check and the open.
+        try:
+            return open_below_root_windows(root, list(parts))
+        except (OSError, ValueError):
+            _not_found()
+    try:
+        return os.open(root.joinpath(*parts), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         _not_found()
+
+
+def _read_nofollow(root: Path, parts) -> bytes:
+    fd = _open_nofollow(root, parts)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
@@ -207,9 +232,9 @@ def read_file(snap, source: str, path: str) -> tuple[bytes, str, str]:
         name = safe_name(item["name"])
         root = _artifact_dir(snap, item)
         disk = root / name
-        if disk.is_symlink() or not disk.resolve().is_relative_to(root.resolve()) or not disk.is_file():
+        if _is_link(disk) or not disk.resolve().is_relative_to(root.resolve()) or not disk.is_file():
             fail("EVIDENCE_INTEGRITY", "frozen artifact is missing or unsafe", 409)
-        raw = _read_nofollow(disk)
+        raw = _read_nofollow(root, [name])
         if hashlib.sha256(raw).hexdigest() != item.get("sha256"):
             fail("EVIDENCE_INTEGRITY", "frozen artifact hash mismatch", 409)
         return raw, media_type(name), rel.name
@@ -220,16 +245,16 @@ def read_file(snap, source: str, path: str) -> tuple[bytes, str, str]:
         inner = rel.parts[1:]
         if len(inner) > MAX_DEPTH + 1 or any(part in SKIP_DIRS for part in inner[:-1]):
             _not_found()
-        if not root.is_dir() or root.is_symlink():
+        if not root.is_dir() or _is_link(root):
             _not_found()
         current = root
         for part in inner:
             current = current / part
-            if current.is_symlink():
+            if _is_link(current):
                 _not_found()
         if not current.resolve().is_relative_to(root.resolve()):
             _not_found()
-        raw = _read_nofollow(current)
+        raw = _read_nofollow(root, inner)
         return raw, media_type(rel.name), rel.name
     fail("VALIDATION_ERROR", "source must be artifact or workspace")
 

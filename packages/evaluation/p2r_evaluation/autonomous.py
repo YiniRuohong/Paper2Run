@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from p2r_contracts.autonomous import canonical_hash, freeze_protocol
+from .safe_read import UnsafePath, open_below_root_windows
 
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 EVALUATOR_VERSION = "paper2run.builtin.v2"
@@ -77,6 +78,33 @@ def _bootstrap_ci(values, statistic, *, replicates=BOOTSTRAP_REPLICATES, seed=BO
             "upper": estimates[int(0.975 * (replicates - 1))]}
 
 
+def _read_mode() -> str | None:
+    """POSIX dir_fd/O_NOFOLLOW wherever available; the Windows checks only on Windows."""
+    if hasattr(os, "O_NOFOLLOW") and os.open in os.supports_dir_fd:
+        return "posix"
+    if os.name == "nt":
+        return "windows"
+    return None
+
+
+@contextmanager
+def _artifact_reader(root: Path):
+    """Yield ``read(name) -> (value, sha256)`` for a trusted artifact directory.
+
+    Any other platform fails closed.
+    """
+    mode = _read_mode()
+    if mode == "posix":
+        with _artifact_root(root) as root_fd:
+            yield lambda name: _read(root_fd, name)
+    elif mode == "windows":
+        if not root.is_absolute() or ".." in root.parts:
+            raise ValueError("unsafe artifact root: expected absolute path without traversal")
+        yield lambda name: _read_windows(root, name)
+    else:
+        raise ValueError("safe artifact reads require POSIX no-follow directory fds or Windows reparse-point checks")
+
+
 @contextmanager
 def _artifact_root(root: Path):
     """Pin a directory below the trusted filesystem root, rejecting every symlink.
@@ -114,6 +142,20 @@ def _read(root: int, name: str) -> tuple[Any, str]:
         if exc.errno in (errno.ELOOP, errno.ENOTDIR):
             raise ValueError(f"unsafe artifact path: {name}") from exc
         raise
+    return _parse(fd, name)
+
+
+def _read_windows(root: Path, name: str) -> tuple[Any, str]:
+    if name not in ("predictions.json", "labels.json"):
+        raise ValueError("unsafe artifact name")
+    try:
+        fd = open_below_root_windows(root, [name])
+    except UnsafePath as exc:
+        raise ValueError(f"unsafe artifact path: {name}: {exc}") from exc
+    return _parse(fd, name)
+
+
+def _parse(fd: int, name: str) -> tuple[Any, str]:
     with os.fdopen(fd, "rb") as stream:
         before = os.fstat(stream.fileno())
         if not stat.S_ISREG(before.st_mode):
@@ -170,9 +212,9 @@ def evaluate_artifacts(frozen: dict, artifacts_dir: Path) -> dict:
         result["reasons"].append("no supported evaluation adapter selected")
         return result
     try:
-        with _artifact_root(artifacts_dir) as root_fd:
-            predictions, predictions_hash = _read(root_fd, "predictions.json")
-            labels, labels_hash = _read(root_fd, "labels.json")
+        with _artifact_reader(artifacts_dir) as read:
+            predictions, predictions_hash = read("predictions.json")
+            labels, labels_hash = read("labels.json")
     except FileNotFoundError as exc:
         result["reasons"].append(f"missing evaluation artifact: {Path(exc.filename).name}")
         return result

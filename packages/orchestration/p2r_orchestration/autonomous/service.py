@@ -13,6 +13,7 @@ from sqlalchemy import select
 from p2r_contracts.autonomous import resolve_project_config
 from p2r_evaluation.autonomous import freeze_protocol
 from p2r_evaluation.reference_verification import validate_reference_values
+from p2r_orchestration import locks
 from p2r_orchestration.research_capabilities import CapabilityRegistry
 from p2r_persistence.autonomous import AutonomousConfigRecord as Config, AutonomousTaskRecord as Task, AutonomousEventRecord as Event
 from p2r_persistence.models import PaperRecord, PaperVersionRecord, PaperTextRecord, utcnow
@@ -219,17 +220,11 @@ class AutonomousService(ControlMixin):
         with self.lock:
             if self._lease is None:
                 self.root.mkdir(parents=True, exist_ok=True)
-                lease = (self.root / "runtime.lock").open("a+b")
+                lease = locks.open_lock_file(self.root / "runtime.lock")
                 try:
-                    if os.name == "nt":
-                        import msvcrt
-                        lease.seek(0); lease.write(b"0"); lease.flush(); lease.seek(0)
-                        msvcrt.locking(lease.fileno(), msvcrt.LK_NBLCK, 1)
-                    else:
-                        import fcntl
-                        fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locks.acquire(lease, blocking=False)
                 except OSError:
-                    lease.close()
+                    os.close(lease)
                     fail("RUNTIME_ALREADY_ACTIVE", "another autonomous runtime owns this control directory", 409)
                 self._lease = lease
         with self.lock, self.sessions() as db:
@@ -309,5 +304,5 @@ class AutonomousService(ControlMixin):
             worker["thread"].join(timeout=max(0, deadline - time.monotonic()))
         with self.lock:
             if self._lease is not None and not any(w["thread"].is_alive() for _, w in workers):
-                self._lease.close()
+                locks.release(self._lease)
                 self._lease = None
