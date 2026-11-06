@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 from typing_extensions import Annotated
 
 from .common import canonical_json
@@ -176,6 +177,9 @@ class Provenance(StrictModel):
     environment_sha256: Digest | None = None
 
 
+ENTRYPOINT_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-/]{0,255}")
+
+
 class ExperimentProtocol(StrictModel):
     schema_version: Literal["paper2run.protocol.v1"] = "paper2run.protocol.v1"
     objective: Text
@@ -191,6 +195,21 @@ class ExperimentProtocol(StrictModel):
     allowed_changes: list[Text] = Field(default_factory=list)
     budget: Limits
     provenance: Provenance = Field(default_factory=Provenance)
+
+    @field_validator("entrypoint")
+    @classmethod
+    def _entrypoint_is_a_script_path(cls, value: str) -> str:
+        # The candidate gate matches the entrypoint against a registered code artifact
+        # (name or source path) and a run whose first argument after the interpreter is
+        # this path. A whole command can never match either, so a proposal carrying one
+        # would be approved and then reject every submit_candidate. Refuse it here.
+        parts = value.split("/")
+        if not ENTRYPOINT_PATH.fullmatch(value) or value.startswith("./") or ".." in parts or "" in parts:
+            raise ValueError(
+                f"entrypoint must be the script's path relative to /work, e.g. train.py or src/run.py, not a command "
+                f"({value[:80]!r}); put the interpreter and arguments in parameters, and run it as "
+                f"<interpreter> <entrypoint> <arguments>")
+        return value
 
 
 def freeze_protocol(protocol: dict | ExperimentProtocol) -> dict:
