@@ -72,3 +72,14 @@ test('task page keeps approval, three-state notices, recovery and report section
   assert.match(page, /UsageView/);
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
 });
+
+test('app shell mounts no page while a legacy route redirect is pending', async () => {
+  const shell = await readFile(new URL('../src/shell/AppShell.tsx', import.meta.url), 'utf8');
+  const effect = shell.indexOf('window.location.replace(redirect)');
+  const guard = shell.search(/if \(redirect\) return /);
+  const flowBranch = shell.indexOf("route.view === 'new' || route.view === 'draft'");
+  assert.ok(effect > -1, 'the redirect effect is kept');
+  assert.ok(guard > -1, 'AppShell returns early while a redirect is pending');
+  assert.ok(guard > effect, 'the guard follows every hook (the redirect effect) so hook order stays stable');
+  assert.ok(guard < flowBranch, 'the guard runs before the flow/shell page branches');
+});

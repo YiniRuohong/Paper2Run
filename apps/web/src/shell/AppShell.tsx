@@ -43,6 +43,8 @@ export default function AppShell() {
 
   // 旧入口 / 旧查询参数：重定向到新路由，并替换历史记录。
   useEffect(() => { if (redirect) window.location.replace(redirect); }, [redirect]);
+  // 重定向待决时不挂载任何页面，避免旧页面先挂载（并触发取数）再被替换。
+  if (redirect) return <p role="status" className="page-loading">加载中…</p>;
 
   if (route.view === 'new' || route.view === 'draft' || route.view === 'task') {
     const projectId = route.view === 'draft' ? route.projectId : null;
