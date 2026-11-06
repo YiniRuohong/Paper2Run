@@ -5,7 +5,7 @@ import hashlib
 import json
 import shutil
 
-from .evidence import (MAX_FILE, artifact_root, current_round, ensure_not_under_review, entrypoint_code,
+from .evidence import (MAX_FILE, artifact_root, link_or_reparse, current_round, ensure_not_under_review, entrypoint_code,
                        entrypoint_executions, round_artifacts, safe_name, store_candidate)
 from .security import digest, fail
 
@@ -45,7 +45,7 @@ def gate(db, row):
 
 def _copy_verified(source, destination, sha256):
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if source.is_symlink() or not source.is_file() or source.stat().st_size > MAX_FILE:
+    if link_or_reparse(source) or not source.is_file() or source.stat().st_size > MAX_FILE:
         fail("EVIDENCE_INTEGRITY", "frozen artifact is missing or unsafe", 409)
     shutil.copyfile(source, destination)
     if hashlib.sha256(destination.read_bytes()).hexdigest() != sha256:

@@ -49,6 +49,47 @@ def test_frozen_target_rejects_symlinked_directory(service, tmp_path):
     assert code_of(caught) == "INVALID_PATH"
 
 
+def reparse_at(monkeypatch, *paths):
+    """Make the given paths look like Windows reparse points (junctions), which is_symlink() misses."""
+    import types
+    marked = {str(p) for p in paths}
+    real = evidence._lstat
+
+    def fake(path):
+        info = real(path)
+        if str(path) not in marked:
+            return info
+        return types.SimpleNamespace(st_mode=info.st_mode, st_file_attributes=0x400)
+    monkeypatch.setattr(evidence, "_lstat", fake)
+
+
+def test_frozen_target_refuses_reparse_points(service, monkeypatch):
+    _, _, snap, root = frozen(service)
+    reparse_at(monkeypatch, root / "artifacts" / "main.py", root / "logs")
+    with pytest.raises(ServiceError) as caught:
+        FrozenTarget(root, snap).read("main.py")
+    assert code_of(caught) == "INVALID_PATH"
+    with pytest.raises(ServiceError) as caught:
+        FrozenTarget(root, snap).logs(snap["run"]["job_id"])
+    assert code_of(caught) == "EVIDENCE_INTEGRITY"
+
+
+def test_copy_verified_refuses_reparse_points(tmp_path, monkeypatch):
+    import hashlib
+    from p2r_orchestration.autonomous.candidate import _copy_verified
+    source = tmp_path / "src.txt"; source.write_bytes(b"data")
+    reparse_at(monkeypatch, source)
+    with pytest.raises(ServiceError) as caught:
+        _copy_verified(source, tmp_path / "out" / "dst.txt", hashlib.sha256(b"data").hexdigest())
+    assert code_of(caught) == "EVIDENCE_INTEGRITY" and not (tmp_path / "out" / "dst.txt").exists()
+
+
+def test_link_or_reparse_matches_is_symlink_on_posix(tmp_path):
+    (tmp_path / "f").write_text("x"); (tmp_path / "l").symlink_to(tmp_path / "f")
+    assert evidence.link_or_reparse(tmp_path / "l") and not evidence.link_or_reparse(tmp_path / "f")
+    assert evidence.link_or_reparse(tmp_path / "missing") is False, "a missing path is not a link; callers check is_file"
+
+
 def test_frozen_target_ignores_live_changes(service):
     task_id, target, snap, root = frozen(service)
     target.files["main.py"] = b"changed after freeze"
