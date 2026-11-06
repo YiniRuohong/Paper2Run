@@ -287,6 +287,9 @@ class OfflineInstaller:
         return None if self._disk_free(self._root) >= needed else _ERRORS["preflight"]
 
     def _step_venv(self) -> str | None:
+        # A venv left half-deleted by an interrupted install or cancel makes pip fail
+        # on it; every install builds the environment from scratch (models are kept).
+        shutil.rmtree(self._root / "venv", ignore_errors=True)
         base = str(self._base_python)
         self._pip_standalone = _ok(self._exec([base, "-m", "pip", "--version"], _TIMEOUTS["venv"]))
         argv = [base, "-m", "venv"] + (["--without-pip"] if self._pip_standalone else [])

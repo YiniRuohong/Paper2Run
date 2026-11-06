@@ -18,6 +18,7 @@ from .proc import CompletedRun, mineru_kit, run_tree, venv_python  # noqa: F401 
 
 _TEXT_FIELDS = ("text", "table_body", "latex")
 _PROXY_NAMES = {"http_proxy", "https_proxy", "no_proxy", "all_proxy"}
+_MODEL_SOURCES = ("auto", "huggingface", "modelscope")
 
 # mineru-kit 4.1.3 `-f zip` layout: markdown.md, middle_json.json, structured_content.json
 # and images/ at the top level of <output>/<input stem>.zip.
@@ -60,11 +61,27 @@ def offline_env(root: Path) -> dict[str, str]:
 
 
 def install_env(root: Path) -> dict[str, str]:
-    """Like offline_env but lets pip and model downloads reach the network."""
+    """Like offline_env but lets pip and model downloads reach the network.
+
+    ``P2R_DOCPARSE_PROXY`` (e.g. ``http://127.0.0.1:7890``) sends only these
+    downloads through a proxy, without setting a proxy for the whole server
+    (whose other children, such as experiment containers, must not inherit it).
+    ``P2R_DOCPARSE_MODEL_SOURCE`` (auto | huggingface | modelscope) picks where
+    MinerU downloads its models from; the local model directory is the same
+    for every source, so parsing does not depend on it.
+    """
     env = _base_env(root)
     for key, value in os.environ.items():
         if key.upper().startswith("PIP_") or key.lower() in _PROXY_NAMES:
             env[key] = value
+    proxy = os.environ.get("P2R_DOCPARSE_PROXY", "").strip()
+    if proxy:
+        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+            env[key] = proxy
+        env["no_proxy"] = env["NO_PROXY"] = "127.0.0.1,localhost,::1"
+    source = os.environ.get("P2R_DOCPARSE_MODEL_SOURCE", "").strip().lower()
+    if source in _MODEL_SOURCES:
+        env["MINERU_MODEL_SOURCE"] = source
     return env
 
 

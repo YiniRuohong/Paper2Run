@@ -1,45 +1,40 @@
-import type { DocParseMode } from '../../api-client/papers';
 import { StatusWord, type Tone } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { docParseErrorReason, docParseLabel, hasMissingChunks, offlineNotices, otherParseMode, parseActionNotes, type DocParseView } from './docparse';
+import { OFFLINE_UNREADY, docParseErrorReason, docParseLabel, hasMissingChunks, offlineNotices, parseActionNotes, type DocParseView } from './docparse';
 import './docparse.css';
 
-// Parse status of the current PDF inside the upload step. It only renders what
-// the controller state says and offers explicit buttons: 重试 re-requests the
-// parse under the current mode, 改用… switches mode on a click, and installing
-// the offline component is its own click. Nothing here switches by itself, and
-// raw server error text is never shown (docParseErrorReason maps fixed codes).
-//   <ParseProgress docparse={state.docparse} busy={busy} onRetry={…} onChoose={…} onReopenChoice={…} />
-const BACKEND_LABEL = { online_agent: '在线解析（mineru.net）', offline_mineru: '离线解析（本机）' } as const;
-const OFFLINE_UNREADY = new Set(['not_installed', 'failed', 'broken']);
+// Parse status of the current PDF inside the upload step. PDFs are parsed only
+// on this machine; the page downloads the local component the first time. This
+// renders what the state says and offers explicit buttons: 重试 asks for the
+// parse again, 下载本地解析组件 starts (or restarts) the component download.
+// Raw server error text is never shown (docParseErrorReason maps fixed codes).
+//   <ParseProgress docparse={view} busy={busy} onRetry={…} onInstall={…} onRefresh={…} />
+const BACKEND_LABEL = { online_agent: '在线解析（mineru.net）', offline_mineru: '本地解析（本机）' } as const;
 
-export default function ParseProgress({ docparse, busy, onRetry, onChoose, onReopenChoice, onRefresh }: {
+export default function ParseProgress({ docparse, busy, onRetry, onInstall, onRefresh }: {
   docparse: DocParseView;
   busy: boolean;
   onRetry: () => void;
-  onChoose: (mode: DocParseMode) => void;
-  onReopenChoice: () => void;
+  onInstall: () => void;
   onRefresh: () => void;
 }) {
-  const { pdf, needsChoice, status, text } = docparse;
+  const { pdf, status, text } = docparse;
   if (!pdf) return null;
   const label = docParseLabel(status, text);
   const offline = status?.mode === 'offline' ? status.offline : null;
   const installing = offline?.state === 'installing';
   const needsInstall = offline !== null && OFFLINE_UNREADY.has(offline.state);
-  const stuck = offline !== null && (needsInstall || offline.state === 'unsupported');
   const failedText = text?.status === 'failed' ? text : null;
   const readyText = text?.status === 'ready' ? text : null;
   const parsing = text?.status === 'parsing';
   const tone: Tone = readyText ? 'ok' : failedText ? 'bad' : parsing || installing ? 'run' : 'idle';
   const total = text?.chunks.length ?? 0;
   const done = text?.chunks.filter(chunk => chunk.status === 'done').length ?? 0;
-  const other = otherParseMode(status);
   const partial = hasMissingChunks(text);
-  const actions = failedText !== null || partial || (stuck && readyText === null && !parsing);
-  const notices = status?.mode === 'offline' && offline ? offlineNotices(offline) : [];
-  const notes = actions ? parseActionNotes({ install: needsInstall, other }) : [];
+  const actions = failedText !== null || partial || (needsInstall && readyText === null && !parsing);
+  const notices = offline ? offlineNotices(offline) : [];
+  const notes = actions ? parseActionNotes({ install: needsInstall }) : [];
 
   return <div className="dp-progress">
     <div className="dp-line" role="status" aria-live="polite">
@@ -52,16 +47,15 @@ export default function ParseProgress({ docparse, busy, onRetry, onChoose, onReo
       <button type="button" className="btn btn-ghost" disabled={busy} onClick={onRefresh}><Icon name="refresh" size={14} />刷新解析状态</button>
     </div>}
     {installing && offline && <div className="dp-line">
-      <progress className="dp-bar" value={offline.progress} max={1} aria-label="离线组件安装进度" />
-      <span className="dp-meta">{Math.round(offline.progress * 100)}%</span>
+      <progress className="dp-bar" value={offline.progress} max={1} aria-label="本地解析组件下载进度" />
+      <span className="dp-meta">{Math.round(offline.progress * 100)}% · 完成后自动开始解析</span>
     </div>}
     {failedText && <p className="ui-callout tone-bad" role="alert"><Icon name="alert" /><span>{docParseErrorReason(failedText.error_code)}</span></p>}
     {notices.map(notice => <p key={notice} className="dp-hint" role="status">{notice}</p>)}
     {actions && <div className="flow-actions">
-      {failedText && <button type="button" className="btn btn-primary" disabled={busy} onClick={onRetry}>重试</button>}
+      {failedText && !needsInstall && <button type="button" className="btn btn-primary" disabled={busy} onClick={onRetry}>重试</button>}
       {partial && <button type="button" className="btn btn-secondary" disabled={busy} onClick={onRetry}>重试失败页</button>}
-      {needsInstall && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => onChoose('offline')}>安装离线组件</button>}
-      {other && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => onChoose(other)}>{other === 'offline' ? '改用离线解析' : '改用在线解析'}</button>}
+      {needsInstall && <button type="button" className="btn btn-primary" disabled={busy} onClick={onInstall}>下载本地解析组件</button>}
     </div>}
     {notes.length > 0 && <p className="dp-hint">{notes.join('；')}</p>}
     {readyText && readyText.warnings.length > 0 && <div className="ui-callout tone-warn" role="status">
@@ -74,9 +68,5 @@ export default function ParseProgress({ docparse, busy, onRetry, onChoose, onReo
     {readyText?.preview && <Disclosure variant="sub" title="解析预览">
       <pre className="ui-code" aria-label="解析出的 Markdown 预览（只读）">{readyText.preview}</pre>
     </Disclosure>}
-    {needsChoice && <div className="dp-line">
-      <span className="dp-meta">尚未选择解析方式，PDF 解析后才能抽取。</span>
-      <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={onReopenChoice}>选择解析方式</button>
-    </div>}
   </div>;
 }

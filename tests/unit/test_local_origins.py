@@ -81,3 +81,11 @@ def test_desktop_backend_allows_exactly_its_host_guard_origins():
     origins = serve.allowed_origins(49152)
     assert origins == tuple(f"http://{host}:49152" for host in serve.LOOPBACK_HOSTS)
     assert parse_loopback_origins(",".join(origins)) == origins
+
+
+def test_launcher_downloads_parse_models_from_modelscope_unless_overridden():
+    launch = load_script("p2r_launch_for_docparse_source", "scripts/launch.py")
+    assert launch.DOCPARSE_MODEL_SOURCE == "modelscope"
+    source = (ROOT / "scripts/launch.py").read_text(encoding="utf-8")
+    # setdefault: a user-set P2R_DOCPARSE_MODEL_SOURCE wins over the default.
+    assert 'env.setdefault("P2R_DOCPARSE_MODEL_SOURCE", DOCPARSE_MODEL_SOURCE)' in source

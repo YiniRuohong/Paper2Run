@@ -1,16 +1,18 @@
-import type { DocParseMode, DocParseOfflineStatus, DocParseStatus, PaperText } from '../../api-client/papers.ts';
+import type { DocParseOfflineStatus, DocParseStatus, PaperText } from '../../api-client/papers.ts';
 
 // Pure docparse helpers shared by the upload step and the settings page.
 // Nothing here talks to the network or decides a mode; it only reads DTOs.
 
-// 上传步骤的解析视图状态：status 是全局解析设置（模式 + 离线安装器），
-// 换论文后保留；pdf / needsChoice / text 属于当前论文。
+// 上传步骤的解析视图状态：status 是全局解析状态（本地解析组件），换论文后保留；
+// pdf / text 属于当前论文。PDF 只在本机解析，没有方式可选。
 export interface DocParseView {
   pdf: boolean;
-  needsChoice: boolean;
   status: DocParseStatus | null;
   text: PaperText | null;
 }
+
+// The offline component is missing or unusable: parsing has to install it first.
+export const OFFLINE_UNREADY: ReadonlySet<DocParseOfflineStatus['state']> = new Set(['not_installed', 'failed', 'broken']);
 
 // A parse is still owed for this paper: nothing was ever parsed, or the last
 // attempt failed only because the offline component was not ready yet.
@@ -19,10 +21,9 @@ export function isParsePending(text: PaperText | null): boolean {
   return text.status === 'none' || (text.status === 'failed' && text.error_code === 'DOCPARSE_OFFLINE_NOT_READY');
 }
 
-// The server can start a parse right now with the given (chosen) mode.
-export function canParseNow(status: DocParseStatus, mode: DocParseMode | null = status.mode): boolean {
-  if (mode === null || status.mode !== mode) return false;
-  return mode === 'online' || status.offline.state === 'ready';
+// The server can parse locally right now: local parsing is the only mode, and its component is ready.
+export function canParseNow(status: DocParseStatus): boolean {
+  return status.mode === 'offline' && status.offline.state === 'ready';
 }
 
 // Text papers can always be extracted; a PDF only once its parsed text exists.
@@ -31,12 +32,12 @@ export function canExtract(state: { docparse: { pdf: boolean; text: PaperText | 
 }
 
 const OFFLINE_LABELS: Record<DocParseStatus['offline']['state'], string> = {
-  not_installed: '离线组件未安装',
-  installing: '离线组件安装中',
+  not_installed: '首次使用需下载本地解析组件',
+  installing: '正在下载本地解析组件',
   ready: '等待解析',
-  broken: '离线组件已损坏',
-  failed: '离线组件安装失败',
-  unsupported: '当前平台不支持离线解析',
+  broken: '本地解析组件已损坏',
+  failed: '本地解析组件下载失败',
+  unsupported: '本机不支持本地解析',
 };
 
 export function docParseLabel(status: DocParseStatus | null, text: PaperText | null): string {
@@ -47,12 +48,9 @@ export function docParseLabel(status: DocParseStatus | null, text: PaperText | n
     return total > 0 ? `解析中 · 第 ${done}/${total} 段` : '解析中';
   }
   if (isParsePending(text) && status !== null) {
-    if (status.mode === null) return '等待选择解析方式';
-    if (status.mode === 'offline') {
-      const label = OFFLINE_LABELS[status.offline.state];
-      return status.offline.state === 'installing' && status.offline.step ? `${label} · ${status.offline.step}` : label;
-    }
-    if (text?.status !== 'failed') return '等待解析';
+    const state = status.mode === 'offline' ? status.offline.state : 'unsupported';
+    const label = OFFLINE_LABELS[state];
+    return state === 'installing' && status.offline.step ? `${label} · ${status.offline.step}` : label;
   }
   if (text?.status === 'failed') return '解析失败';
   return '读取解析状态…';
@@ -89,15 +87,6 @@ export function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
 }
 
-// The mode a user could switch to from the current one, or null when there is
-// no current mode or the other backend is unavailable on this platform. Used
-// only to decide which explicit button to show; nothing switches by itself.
-export function otherParseMode(status: DocParseStatus | null): DocParseMode | null {
-  if (status === null || status.mode === null) return null;
-  if (status.mode === 'online') return status.offline.state === 'unsupported' ? null : 'offline';
-  return 'online';
-}
-
 // A finished parse that skipped some page ranges: offer a retry of just those.
 export function hasMissingChunks(text: PaperText | null): boolean {
   return text?.status === 'ready' && text.chunks.some(chunk => chunk.status === 'missing');
@@ -110,8 +99,7 @@ export function canUninstallOffline(offline: DocParseOfflineStatus): boolean {
 }
 
 export const FLASH_NOTICE = '本机只能用极速解析 (flash)，表格和公式质量较低';
-export const DOWNLOAD_NOTE = '需下载约 1–3 GB';
-export const ONLINE_UPLOAD_NOTE = '论文将上传到 mineru.net';
+export const DOWNLOAD_NOTE = '首次使用需下载约 1–3 GB，之后完全在本机解析';
 
 // Fixed installer reason (set by the server, never raw output) and the flash notice.
 export function offlineNotices(offline: DocParseOfflineStatus): string[] {
@@ -122,9 +110,6 @@ export function offlineNotices(offline: DocParseOfflineStatus): string[] {
 }
 
 // One-line notes for the explicit buttons that are currently shown.
-export function parseActionNotes(shown: { install: boolean; other: DocParseMode | null }): string[] {
-  const notes: string[] = [];
-  if (shown.install || shown.other === 'offline') notes.push(DOWNLOAD_NOTE);
-  if (shown.other === 'online') notes.push(ONLINE_UPLOAD_NOTE);
-  return notes;
+export function parseActionNotes(shown: { install: boolean }): string[] {
+  return shown.install ? [DOWNLOAD_NOTE] : [];
 }

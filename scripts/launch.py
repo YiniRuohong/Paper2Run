@@ -41,6 +41,7 @@ SOURCE_ROOTS = ("services/api", "packages/contracts", "packages/artifacts", "pac
                 "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/orchestration")
 
 WINDOWS = sys.platform == "win32"
+DOCPARSE_MODEL_SOURCE = "modelscope"
 
 
 def message(text: str) -> None:
@@ -224,6 +225,9 @@ def main() -> None:
         "PYTHONIOENCODING": "utf-8",
         "PYTHONPATH": source_pythonpath(),
     })
+    # Local PDF parsing downloads its models on first use. Hugging Face (MinerU's default) stalls
+    # for minutes at a time from here, so models come from ModelScope unless the user chose otherwise.
+    env.setdefault("P2R_DOCPARSE_MODEL_SOURCE", DOCPARSE_MODEL_SOURCE)
     message(f"[3/3] 启动服务 / starting server at {url} （数据目录 .p2r-app）")
     message("    停止 / stop: 关闭本窗口或按 Ctrl+C")
     server = subprocess.Popen(

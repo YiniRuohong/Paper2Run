@@ -796,14 +796,14 @@ class Runner:
         (self.output / "reference-data.csv.gz").write_bytes(reference_data_raw)
         (self.output / "reference-target.csv.gz").write_bytes(reference_labels_raw)
         source = {"title": "Least Angle Regression", "paper_url": PAPER_SOURCE, "pdf_url": PAPER_URL,
-            "pdf_sha256": digest(pdf), "pages": pdf_pages, "ingestion": "product PDF upload + online MinerU" if self.args.pdf else "external pypdf full-text extraction -> product text upload (NOT product PDF parsing)",
+            "pdf_sha256": digest(pdf), "pages": pdf_pages, "ingestion": "product PDF upload + local MinerU" if self.args.pdf else "external pypdf full-text extraction -> product text upload (NOT product PDF parsing)",
             "reference_data": {"url": DATA_URL, "sha256": digest(reference_data_raw)},
             "reference_labels": {"url": LABEL_URL, "sha256": digest(reference_labels_raw)}}
         self.save("source.json", source)
         self.summary["source"] = source
         self.stage(source["ingestion"])
         if self.args.pdf:
-            self.api("PUT", "/docparse/mode", json={"mode": "online"})
+            self.api("PUT", "/docparse/mode", json={"mode": "offline"})  # only local parsing is offered
             paper = self.api("POST", f"/projects/{project_id}/papers", files={"file": ("least-angle-regression.pdf", pdf, "application/pdf")},
                 data={"source_processing_consent": "true", "title_hint": source["title"]})
             source["uploaded_sha256"] = digest(pdf)
@@ -819,10 +819,10 @@ class Runner:
                 if status["status"] == "ready":
                     verify_complete_pdf_parse(status, pdf_pages)
                     break
-                require(status["status"] not in ("failed", "error"), "online PDF parse failed; no text fallback")
+                require(status["status"] not in ("failed", "error"), "local PDF parse failed; no text fallback")
                 time.sleep(self.args.poll_interval)
             else:
-                raise AcceptanceError("online PDF parse deadline exceeded")
+                raise AcceptanceError("local PDF parse deadline exceeded")
         else:
             text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
             require(len(text) > 10000 and "least angle" in text.lower(), "paper full-text extraction incomplete or unexpected")

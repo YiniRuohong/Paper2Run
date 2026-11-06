@@ -21,6 +21,7 @@ from p2r_persistence.models import IdempotencyKey, OperationRecord, PaperRecord,
 from p2r_persistence.repositories import IdempotencyRepository
 from ..auth import csrf_token, validate_csrf, validate_origin, require_project_access
 from ..dependencies import actor_id
+from ..docparse_mode import local_mode
 
 router = APIRouter()
 _PDF_MAGIC = b"%PDF-"
@@ -154,10 +155,11 @@ async def upload_paper(project_id: str, request: Request):
         db.add_all([version, operation]); db.flush()
         status = "uploaded"
         service = runtime["docparse_service"]
-        mode = service.mode()
-        # Offline without a ready component would fail at once; leave the paper for the explicit flow.
-        if mode == "online" or (mode == "offline" and service.installer.state().state == "ready"):
-            enqueue_paper_parse(db, paper_id=paper.id, mode=mode, idempotency_key=f"paper_parse:{paper.id}:upload")
+        # Local parsing is the only mode (docparse_mode.local_mode); a setting saved as "online"
+        # never uploads the paper. Without a ready component the parse would fail at once: the
+        # page installs the component first and then asks for the parse.
+        if local_mode(service) == "offline" and service.installer.state().state == "ready":
+            enqueue_paper_parse(db, paper_id=paper.id, mode="offline", idempotency_key=f"paper_parse:{paper.id}:upload")
             status = "parsing"
         payload = {"paper_id": paper.id, "operation_id": operation.id, "status": status}
         claim.record.response_json = payload; db.commit()

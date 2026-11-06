@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DOWNLOAD_NOTE, FLASH_NOTICE, ONLINE_UPLOAD_NOTE, canUninstallOffline, docParseErrorReason, formatBytes,
-  hasMissingChunks, offlineNotices, otherParseMode, parseActionNotes,
+  DOWNLOAD_NOTE, FLASH_NOTICE, OFFLINE_UNREADY, canParseNow, canUninstallOffline, docParseErrorReason, docParseLabel, formatBytes,
+  hasMissingChunks, offlineNotices, parseActionNotes,
 } from '../src/features/docparse/docparse.ts';
 
 // Every fixed public docparse error code maps to one specific Chinese reason.
@@ -61,14 +61,37 @@ test('formatBytes renders MB below one GB and GB above', () => {
   assert.equal(formatBytes(Number.NaN), '0 MB');
 });
 
-test('otherParseMode offers the opposite mode only when it is available', () => {
-  assert.equal(otherParseMode(null), null);
-  assert.equal(otherParseMode(status(null, 'ready')), null);
-  assert.equal(otherParseMode(status('online', 'ready')), 'offline');
-  assert.equal(otherParseMode(status('online', 'not_installed')), 'offline');
-  assert.equal(otherParseMode(status('online', 'unsupported')), null);
-  assert.equal(otherParseMode(status('offline', 'unsupported')), 'online');
-  assert.equal(otherParseMode(status('offline', 'failed')), 'online');
+test('PDFs are parsed only locally: there is no mode to choose', async () => {
+  // The server reports offline whenever the platform can run it; anything else cannot be parsed here.
+  assert.equal(canParseNow(status('offline', 'ready')), true);
+  assert.equal(canParseNow(status('offline', 'not_installed')), false);
+  assert.equal(canParseNow(status('offline', 'installing')), false);
+  assert.equal(canParseNow(status('online', 'ready')), false);
+  assert.equal(canParseNow(status(null, 'unsupported')), false);
+  assert.deepEqual([...OFFLINE_UNREADY].sort(), ['broken', 'failed', 'not_installed']);
+  assert.equal(docParseLabel(status('offline', 'not_installed'), null), '首次使用需下载本地解析组件');
+  assert.equal(docParseLabel(status(null, 'unsupported'), null), '本机不支持本地解析');
+  const { readFile, access } = await import('node:fs/promises');
+  const src = path => readFile(new URL(`../src/features/${path}`, import.meta.url), 'utf8');
+  await assert.rejects(access(new URL('../src/features/docparse/ModeDialog.tsx', import.meta.url)), 'the mode dialog is gone');
+  const draft = await src('flow/DraftPage.tsx');
+  assert.doesNotMatch(draft, /ModeDialog|setDocParseMode|'online'/);
+  // First use downloads the component, and the paper is parsed once it is ready.
+  assert.match(draft, /papers\.startOfflineInstall\(\)/);
+  assert.match(draft, /parseAfterInstall\.current = paperId/);
+  assert.match(draft, /status\.offline\.state === 'installing' && isParsePending\(next\.paperText\)/);
+  // Leaving "installing" ends the install effect; the parse, its polling and the re-read must still
+  // happen, so the finish is guarded by the page being mounted, and the status flips after the parse.
+  const finishAt = draft.indexOf('const finish = async');
+  const finish = finishAt < 0 ? '' : draft.slice(finishAt, draft.indexOf('const tick = async', finishAt));
+  assert.ok(finish.length > 0, 'install finish step exists');
+  assert.doesNotMatch(finish, /\balive\b/);
+  assert.ok(finish.indexOf('parsePaper(') < finish.indexOf('setParseStatus(next)'), 'parse is requested before the status ends the effect');
+  assert.match(finish, /if \(!mounted\.current\) return;/);
+  assert.match(finish, /setPolling\(target\)/);
+  assert.match(finish, /await reload\(\)/);
+  assert.doesNotMatch(await src('docparse/ParseProgress.tsx'), /改用在线解析|改用本地解析|选择解析方式/);
+  assert.doesNotMatch(await src('docparse/DocParseSettings.tsx'), /Segmented|setDocParseMode/);
 });
 
 const chunk = (first, last, st) => ({ first_page: first, last_page: last, status: st });
@@ -99,8 +122,7 @@ test('offlineNotices shows the install failure reason and the flash notice', () 
   assert.deepEqual(offlineNotices(offline('failed', { tier: 'flash', error: '下载模型失败' })), ['下载模型失败', FLASH_NOTICE]);
 });
 
-test('parseActionNotes warns about the download and the upload', () => {
-  assert.deepEqual(parseActionNotes({ install: true, other: 'online' }), [DOWNLOAD_NOTE, ONLINE_UPLOAD_NOTE]);
-  assert.deepEqual(parseActionNotes({ install: false, other: 'offline' }), [DOWNLOAD_NOTE]);
-  assert.deepEqual(parseActionNotes({ install: false, other: null }), []);
+test('parseActionNotes warns about the first-use download', () => {
+  assert.deepEqual(parseActionNotes({ install: true }), [DOWNLOAD_NOTE]);
+  assert.deepEqual(parseActionNotes({ install: false }), []);
 });
