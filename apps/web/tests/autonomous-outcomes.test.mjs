@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  defaultConfig, validateConfig, withoutTokenCap, taskDisplay, taskBucket, outcomeLabel, outcomeTone, errorExplanation, maxRepairRounds, stateLabel, terminalState,
+  defaultConfig, validateConfig, withoutBudgetCaps, taskDisplay, taskBucket, outcomeLabel, outcomeTone, errorExplanation, maxRepairRounds, stateLabel, terminalState,
   decisionVisible, taskTone,
 } from '../src/features/autonomous/config.ts';
 import { parseReport, parseCandidate, parseReviews } from '../src/features/autonomous/report.ts';
@@ -222,22 +222,24 @@ test('the verified caveat appears in the overview row and the sidebar title, wit
   }
 });
 
-test('no token cap: default omits it, saved caps are dropped on load, and the form has no field for it', async () => {
+test('no time, call or token caps: defaults omit them, saved caps are dropped on load, and no step has a field for them', async () => {
   const config = defaultConfig('p'); config.model = { provider_profile: 'm', credential_ref: 'profile:m' }; config.experiment.objective = 'test';
-  assert.equal('max_model_tokens' in config.limits, false);
+  const CAPS = ['wall_time_seconds', 'max_model_calls', 'max_model_tokens'];
+  for (const key of CAPS) assert.equal(key in config.limits, false, key);
   assert.doesNotThrow(() => validateConfig(config));
-  for (const legacy of [100000, null]) {
-    const saved = { ...config, limits: { ...config.limits, max_model_tokens: legacy } };
-    const cleaned = withoutTokenCap(saved);
-    assert.equal('max_model_tokens' in cleaned.limits, false, String(legacy));
-    assert.equal(saved.limits.max_model_tokens, legacy, 'input is not mutated');
+  for (const legacy of [1800, null]) {
+    const saved = { ...config, limits: { ...config.limits, ...Object.fromEntries(CAPS.map(key => [key, legacy])) } };
+    assert.doesNotThrow(() => validateConfig(saved), 'a saved cap or null still validates');
+    const cleaned = withoutBudgetCaps(saved);
+    for (const key of CAPS) assert.equal(key in cleaned.limits, false, `${key}=${legacy}`);
+    assert.equal(saved.limits.max_model_calls, legacy, 'input is not mutated');
     assert.deepEqual({ ...cleaned.limits }, { ...config.limits });
   }
   // The guided flow reads every saved config through readConfig, which drops the cap; no step offers a field for it.
   const data = await readFile(new URL('../src/features/flow/draftData.ts', import.meta.url), 'utf8');
-  assert.match(data, /config: withoutTokenCap\(saved\.config\)/);
+  assert.match(data, /config: withoutBudgetCaps\(saved\.config\)/);
   for (const name of ['ObjectiveStep', 'ModelStep', 'LaunchStep']) {
     const step = await readFile(new URL(`../src/features/flow/steps/${name}.tsx`, import.meta.url), 'utf8');
-    assert.doesNotMatch(step, /max_model_tokens|Token 上限/, name);
+    assert.doesNotMatch(step, /max_model_tokens|max_model_calls|wall_time_seconds|Token 上限/, name);
   }
 });

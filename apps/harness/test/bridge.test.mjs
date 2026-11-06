@@ -414,3 +414,16 @@ test('pending tool abort, EOF, SIGTERM and wall deadline settle', async t => {
     await b.done; assert.equal(s.calls(), 1);
   }
 });
+
+test('no limits at all: calls, tokens and wall time may all be absent or null', async t => {
+  const s = await server(t, (_body, res) => reply(res, false, 12));
+  const c = config(await temp(), s.url);
+  delete c.limits.max_model_calls; delete c.limits.max_model_tokens; delete c.limits.wall_time_seconds;
+  assert.doesNotThrow(() => validateStart({ type: 'start', prompt: 'hi', config: structuredClone(c) }));
+  assert.doesNotThrow(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: { max_model_calls: null, wall_time_seconds: null } } }));
+  assert.doesNotThrow(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: undefined } }));
+  assert.throws(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: { max_model_calls: -1 } } }));
+  assert.throws(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: { wall_time_seconds: 0 } } }));
+  const b = bridge(); b.send({ type: 'start', config: c, prompt: 'hi' });
+  assert.equal((await b.wait(m => m.type === 'result' || m.type === 'error')).type, 'result'); await b.done;
+});

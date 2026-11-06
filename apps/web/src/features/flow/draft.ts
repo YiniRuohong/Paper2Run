@@ -92,10 +92,14 @@ export function objectiveError(text: string): string {
 }
 
 export function budgetLine(limits: ProjectConfig['limits']): string {
-  // No token cap by default; a cap is shown only when a config still carries one.
-  const cap = limits.max_model_tokens;
-  const tokens = typeof cap === 'number' ? ` · ${cap % 10000 === 0 ? `${cap / 10000} 万` : cap} tokens` : '';
-  return `${Math.round(limits.wall_time_seconds / 60)} 分钟 · ${limits.max_model_calls} 次模型调用${tokens} · ${limits.max_repair_rounds ?? 3} 轮修复`;
+  // No time, call or token cap by default; a cap is shown only when a config still carries one.
+  const { wall_time_seconds: wall, max_model_calls: calls, max_model_tokens: tokens } = limits;
+  const caps = [
+    typeof wall === 'number' ? `${Math.round(wall / 60)} 分钟` : '',
+    typeof calls === 'number' ? `${calls} 次模型调用` : '',
+    typeof tokens === 'number' ? `${tokens % 10000 === 0 ? `${tokens / 10000} 万` : tokens} tokens` : '',
+  ].filter(Boolean);
+  return `${caps.length ? caps.join(' · ') : '不限时长、调用次数和 tokens'} · ${limits.max_repair_rounds ?? 3} 轮修复`;
 }
 
 export function newestTaskId(tasks: Pick<AutonomousTask, 'id' | 'created_at' | 'updated_at'>[]): string | null {

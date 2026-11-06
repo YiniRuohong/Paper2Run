@@ -288,14 +288,15 @@ class AutonomousService(ControlMixin):
         return factory(config, self.task_root(row.id) / "execution")
 
     def remaining(self, row):
+        # Only limits that are set appear here; an absent or None limit means no limit.
         limits, usage = row.config_snapshot["limits"], row.usage_json
-        remaining = {"max_model_calls": limits["max_model_calls"] - usage.get("calls", 0),
-                     "wall_time_seconds": limits["wall_time_seconds"] - usage.get("wall_time_seconds", 0)}
-        if limits.get("max_model_tokens") is not None:  # absent or None: no token cap
-            remaining["max_model_tokens"] = limits["max_model_tokens"] - usage.get("total_tokens", 0)
+        used = {"max_model_calls": usage.get("calls", 0), "max_model_tokens": usage.get("total_tokens", 0),
+                "wall_time_seconds": usage.get("wall_time_seconds", 0)}
+        remaining = {key: limits[key] - spent for key, spent in used.items() if limits.get(key) is not None}
         if any(value <= 0 for value in remaining.values()):
             fail("BUDGET_EXHAUSTED", "cumulative task budget exhausted", 409)
-        remaining["wall_time_seconds"] = min(remaining["wall_time_seconds"], 2147483)
+        if "wall_time_seconds" in remaining:
+            remaining["wall_time_seconds"] = min(remaining["wall_time_seconds"], 2147483)
         return remaining
 
     def shutdown(self):

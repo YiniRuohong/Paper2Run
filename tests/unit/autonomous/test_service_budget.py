@@ -361,3 +361,30 @@ def test_no_token_limit_never_exhausts_on_tokens(service):
     assert row.usage_json["total_tokens"] >= 5_000_010
     assert seen and "max_model_tokens" not in seen[0]
     assert "max_model_tokens" not in service.remaining(row)
+
+
+def test_no_limits_at_all_never_exhausts(service):
+    from .test_service import configuration
+    settings = configuration()
+    for key in ("max_model_calls", "max_model_tokens", "wall_time_seconds"):
+        settings["limits"].pop(key, None)
+    with service.sessions() as db:
+        service.put_config(db, "project", settings, 1); db.commit()
+    seen = []
+    class BusyBridge(Bridge):
+        def run(self, config, prompt, callback):
+            seen.append(dict(config["limits"]))
+            for _ in range(50):
+                callback({"type": "event", "event": {"type": "turn_start"}})
+            callback({"type": "event", "event": {"type": "message_end", "message": {
+                "role": "assistant", "content": [{"type": "text", "text": "done"}],
+                "usage": {"input": 5_000_000, "output": 10, "totalTokens": 5_000_010}}}})
+            callback({"type": "result", "text": "done", "usage": {"calls": 50, "total_tokens": 5_000_010}})
+    service.bridge_factory = BusyBridge
+    task_id = create(service)
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert (row.error_json or {}).get("code") != "BUDGET_EXHAUSTED"
+    assert row.usage_json["calls"] >= 50
+    assert seen and seen[0] == {}, "the harness gets no limits"
+    assert service.remaining(row) == {}

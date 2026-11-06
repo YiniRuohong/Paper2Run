@@ -30,11 +30,15 @@ export function validateStart(message) {
   if (!c || typeof c.cwd !== 'string' || typeof c.session_dir !== 'string') fail('config.cwd and session_dir are required');
   if (typeof c.system_prompt !== 'string' || !Array.isArray(c.tools)) fail('system_prompt and tools are required');
   validateModel(c.model);
-  if (!Number.isSafeInteger(c.limits?.max_model_calls) || c.limits.max_model_calls < 0) fail('limits.max_model_calls must be a nonnegative integer');
-  // An absent or null token limit means no token cap.
-  if (c.limits.max_model_tokens == null) delete c.limits.max_model_tokens;
-  else if (!Number.isSafeInteger(c.limits.max_model_tokens) || c.limits.max_model_tokens < 0) fail('limits.max_model_tokens must be a nonnegative integer');
-  if (!Number.isFinite(c.limits.wall_time_seconds) || c.limits.wall_time_seconds <= 0 || c.limits.wall_time_seconds > 2147483) fail('wall_time_seconds must be positive and bounded');
+  // Every limit is optional: absent or null means no limit; a value that is set is enforced.
+  if (c.limits == null) c.limits = {};
+  if (typeof c.limits !== 'object' || Array.isArray(c.limits)) fail('limits must be an object');
+  for (const field of ['max_model_calls', 'max_model_tokens']) {
+    if (c.limits[field] == null) delete c.limits[field];
+    else if (!Number.isSafeInteger(c.limits[field]) || c.limits[field] < 0) fail(`limits.${field} must be a nonnegative integer`);
+  }
+  if (c.limits.wall_time_seconds == null) delete c.limits.wall_time_seconds;
+  else if (!Number.isFinite(c.limits.wall_time_seconds) || c.limits.wall_time_seconds <= 0 || c.limits.wall_time_seconds > 2147483) fail('wall_time_seconds must be positive and bounded');
   c.specialists ??= [];
   if (!Array.isArray(c.specialists)) fail('specialists must be an array');
   if (c.specialists.length > 16) fail('specialists must contain at most 16 profiles');
@@ -62,7 +66,7 @@ export function validateStart(message) {
 export function guardedStream(streamFn, limits, usage, stopped) {
   return async (...args) => {
     if (stopped()) throw new BridgeError('aborted', 'run aborted');
-    if (usage.calls >= limits.max_model_calls || (limits.max_model_tokens !== undefined && usage.total_tokens >= limits.max_model_tokens)) throw new BridgeError('budget_exceeded', 'model budget exhausted');
+    if ((limits.max_model_calls !== undefined && usage.calls >= limits.max_model_calls) || (limits.max_model_tokens !== undefined && usage.total_tokens >= limits.max_model_tokens)) throw new BridgeError('budget_exceeded', 'model budget exhausted');
     usage.calls++;
     return streamFn(...args);
   };
@@ -305,7 +309,7 @@ export async function runBridge(input = process.stdin, output = process.stdout) 
       return new Promise((resolveTool, rejectTool) => {
         const finish = (fn, value) => { clearTimeout(timer); signal?.removeEventListener('abort', abort); pending.delete(id); fn(value); };
         const abort = () => finish(rejectTool, new BridgeError('aborted', 'tool aborted'));
-        const timer = setTimeout(() => { finish(rejectTool, new BridgeError('tool_timeout', 'parent tool response timed out')); cancel('tool_timeout'); }, Math.min(300000, c.limits.wall_time_seconds * 1000));
+        const timer = setTimeout(() => { finish(rejectTool, new BridgeError('tool_timeout', 'parent tool response timed out')); cancel('tool_timeout'); }, c.limits.wall_time_seconds === undefined ? 300000 : Math.min(300000, c.limits.wall_time_seconds * 1000));
         signal?.addEventListener('abort', abort, { once: true });
         pending.set(id, { resolve: response => {
           const safeResult = clean(response.result);
@@ -332,7 +336,7 @@ export async function runBridge(input = process.stdin, output = process.stdout) 
       if (event.type !== 'message_update') send({ type: 'event', event });
     });
     send({ type: 'ready', session_file: manager.getSessionFile(), session_id: manager.getSessionId() });
-    wallTimer = setTimeout(() => cancel('wall_time_exceeded'), c.limits.wall_time_seconds * 1000);
+    if (c.limits.wall_time_seconds !== undefined) wallTimer = setTimeout(() => cancel('wall_time_exceeded'), c.limits.wall_time_seconds * 1000);
     try {
       if (stopReason) throw new BridgeError(stopReason, stopReason);
       await session.prompt(clean(message.prompt), { expandPromptTemplates: false });

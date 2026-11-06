@@ -44,13 +44,16 @@ def dispatch(service, target, task_id, name, args, request_id):
         if row.state != "running" or service.cancel_requested(row):
             fail("TASK_PAUSED", "task is not accepting tool execution", 409)
         remaining = service.remaining(row)
-        deadline = time.monotonic() + remaining["wall_time_seconds"]
+        wall = remaining.get("wall_time_seconds")  # None: no wall-time limit
+        deadline = None if wall is None else time.monotonic() + wall
         service.event(db, row, "tool_started", {"id": request_id, "name": name, "arguments": args})
         if name in ("background", "execute"):
             launch_id = args.get("launch_id") or f"execute-{request_id}"
             if len(launch_id) > 256:
                 raise ValueError("launch_id exceeds 256 characters")
-            timeout = min(args.get("timeout_seconds", 60), max(1, int(remaining["wall_time_seconds"])))
+            timeout = args.get("timeout_seconds", 60)
+            if wall is not None:
+                timeout = min(timeout, max(1, int(wall)))
             job_id = hashlib.sha256(launch_id.encode()).hexdigest()
             previous = row.jobs_json.get(launch_id)
             intent = {"job_id": job_id, "command": args["command"], "timeout_seconds": timeout, "state": "submitting",
@@ -98,7 +101,7 @@ def dispatch(service, target, task_id, name, args, request_id):
                 with service.lock, service.sessions() as db:
                     if service.row(db, task_id).state != "running":
                         return {**result, "decision_paused": True}
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     fail("BUDGET_EXHAUSTED", "cumulative task wall-time budget exhausted", 409)
                 time.sleep(.1)
                 result = target.status(result["job_id"])

@@ -1,7 +1,7 @@
 import type { AutonomousApi, AutonomousTask, ModelProfile, ProjectConfig } from '../../api-client/autonomous.ts';
 import { ApiError } from '../../api-client/client.ts';
 import type { PapersApi, PaperInfo, PaperText, ProjectInfo } from '../../api-client/papers.ts';
-import { withoutTokenCap } from '../autonomous/config.ts';
+import { withoutBudgetCaps } from '../autonomous/config.ts';
 import { paperIsPdf } from '../autonomous/launch.ts';
 import { pickPaper, type DraftFacts, type DraftPaper } from './draft.ts';
 
@@ -22,9 +22,9 @@ export interface DraftData {
 }
 
 /** The saved project config, or null when none has been written yet (404).
- *  A token cap left in an older config is dropped here, so the next save persists without it. */
+ *  Time, call and token caps left in an older config are dropped here, so the next save persists without them. */
 export function readConfig(api: Pick<AutonomousApi, 'config'>, projectId: string): Promise<SavedConfig | null> {
-  return api.config(projectId).then(saved => saved && { ...saved, config: withoutTokenCap(saved.config) }, error => {
+  return api.config(projectId).then(saved => saved && { ...saved, config: withoutBudgetCaps(saved.config) }, error => {
     if (error instanceof ApiError && error.status === 404) return null;
     throw error;
   });

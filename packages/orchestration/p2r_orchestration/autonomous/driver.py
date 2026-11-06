@@ -62,7 +62,8 @@ def facts_message(service, db, row, findings=True):
             raise
         lines.append("Remaining budget: exhausted.")
     else:
-        lines.append("Remaining budget: " + ", ".join(f"{key} {value}" for key, value in remaining.items()) + ".")
+        lines.append("Remaining budget: " + (", ".join(f"{key} {value}" for key, value in remaining.items())
+                                             or "no time, call or token limit") + ".")
     reviews = harness.get("reviews") or []
     if reviews and findings:
         lines.append("Latest review findings, verbatim:")

@@ -47,6 +47,17 @@ def test_invalid_config(section, key, value):
         ProjectConfig.model_validate(data)
 
 
+def test_every_task_budget_is_optional():
+    data = config()
+    for key in ("max_model_calls", "max_model_tokens", "wall_time_seconds"):
+        del data["limits"][key]
+    limits = ProjectConfig.model_validate(data).limits
+    assert (limits.max_model_calls, limits.max_model_tokens, limits.wall_time_seconds) == (None, None, None)
+    for key in ("max_model_calls", "wall_time_seconds"):
+        data["limits"][key] = None
+    assert ProjectConfig.model_validate(data).limits.max_model_calls is None
+
+
 def test_token_limit_is_optional():
     data = config()
     del data["limits"]["max_model_tokens"]

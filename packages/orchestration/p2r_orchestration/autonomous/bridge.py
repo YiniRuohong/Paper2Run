@@ -92,7 +92,8 @@ class HarnessBridge:
                     pass
         threading.Thread(target=reader, daemon=True, name="autonomous-sdk-output").start()
         self.send({"type": "start", "config": config, "prompt": prompt})
-        deadline = time.monotonic() + config["limits"]["wall_time_seconds"]
+        wall = (config.get("limits") or {}).get("wall_time_seconds")  # None: no wall-time limit
+        deadline = float("inf") if wall is None else time.monotonic() + wall
         terminal, abort_at = False, None
         try:
             while True:

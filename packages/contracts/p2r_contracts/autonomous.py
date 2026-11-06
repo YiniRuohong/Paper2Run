@@ -80,9 +80,10 @@ OUTCOMES = ("verified", "completed_with_issues", "review_unavailable", "blocked_
 
 
 class Limits(StrictModel):
-    wall_time_seconds: int = Field(gt=0, le=31_536_000)
-    max_model_calls: int = Field(gt=0, le=1_000_000)
-    # None (the default) means no token cap; calls and wall time still bound the task.
+    # Task budgets are optional: None (the default) means no limit. A task runs until it
+    # reaches an outcome or the user stops it; an explicit value is still enforced.
+    wall_time_seconds: int | None = Field(default=None, gt=0, le=31_536_000)
+    max_model_calls: int | None = Field(default=None, gt=0, le=1_000_000)
     max_model_tokens: int | None = Field(default=None, gt=0, le=10_000_000_000)
     storage_bytes: int = Field(gt=0, le=1_125_899_906_842_624)
     gpu_devices: list[Name] = Field(default_factory=list, max_length=256)
