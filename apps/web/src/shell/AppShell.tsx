@@ -4,16 +4,18 @@ import { createPapersApi } from '../api-client/papers';
 import { backendHost, getDesktop } from '../desktop';
 import { useBackendHealth, useRecentTasks } from './hooks';
 import { Sidebar, type View } from './Sidebar';
+import { parseRoute } from './routes';
 import { Icon } from '../ui/Icon';
 import '../ui/ui.css';
 import './shell.css';
 
 // App shell (magpie-style sidebar + quiet header). Hash routes:
 //   #/            总览（全部项目的自主任务，只读）
-//   #/new         新建实验（论文上传解析 + 分层配置 + 授权启动，同一流程）
-//   #/task/<id>   任务工作台（阶段时间线 + 实时页签 + 报告 + 用量）
+//   #/new         新建实验（全幅工作台）
+//   #/draft/<id>  草稿工作台（全幅；DraftPage 就绪前先挂 NewExperimentPage）
+//   #/task/<id>   任务工作台（全幅）
 //   #/settings    设置（主题、本地服务、解析模式）
-// 旧链接 #/autonomous 重定向：带 ?task=<id> 去任务页，否则去新建实验。
+// 路由解析与旧链接重定向见 routes.ts。new/draft/task 不渲染侧栏与面包屑栏。
 const api = createAutonomousApi();
 const papers = createPapersApi('demo-user');
 const OverviewPage = lazy(() => import('../features/overview/OverviewPage'));
@@ -21,65 +23,45 @@ const NewExperimentPage = lazy(() => import('../features/autonomous/NewExperimen
 const TaskPage = lazy(() => import('../features/autonomous/TaskPage'));
 const Settings = lazy(() => import('../features/settings/Settings'));
 
-interface Route { view: View | 'legacy'; taskId: string | null; project: string }
-
-const queryOf = (hash: string) => new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '');
-const routeFromHash = (): Route => {
-  const h = window.location.hash;
-  if (h.startsWith('#/autonomous')) return { view: 'legacy', taskId: queryOf(h).get('task'), project: '' };
-  if (h.startsWith('#/new')) return { view: 'new', taskId: null, project: queryOf(h).get('project') ?? '' };
-  if (h.startsWith('#/task/')) return { view: 'task', taskId: decodeURIComponent(h.slice('#/task/'.length).split('?')[0]), project: '' };
-  if (h.startsWith('#/settings')) return { view: 'settings', taskId: null, project: '' };
-  return { view: 'overview', taskId: null, project: '' };
-};
+const hashRoute = () => parseRoute(window.location.hash);
 const narrow = () => window.matchMedia?.('(max-width: 760px)').matches ?? false;
 
 export default function AppShell() {
-  const [route, setRoute] = useState<Route>(routeFromHash);
+  const [{ route, redirect }, setParsed] = useState(hashRoute);
   const [sideOpen, setSideOpen] = useState(() => !narrow());
   const [refreshTick, setRefreshTick] = useState(0);
   const [health, recheckHealth] = useBackendHealth();
-  const recent = useRecentTasks(api, papers, `${route.view}:${route.taskId ?? ''}:${refreshTick}`);
+  const taskId = route.view === 'task' ? route.taskId : null;
+  const recent = useRecentTasks(api, papers, `${route.view}:${taskId ?? ''}:${refreshTick}`);
   const host = backendHost(getDesktop()?.backendUrl, window.location.host);
   useEffect(() => {
-    const onHash = () => { setRoute(routeFromHash()); if (narrow()) setSideOpen(false); };
+    const onHash = () => { setParsed(hashRoute()); if (narrow()) setSideOpen(false); };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
   const refresh = useCallback(() => { setRefreshTick(x => x + 1); recheckHealth(); }, [recheckHealth]);
 
-  // 旧入口 #/autonomous 已删除：重定向到新路由，并替换历史记录。
-  useEffect(() => {
-    if (route.view === 'legacy') {
-      window.location.replace(route.taskId ? `#/task/${encodeURIComponent(route.taskId)}` : '#/new');
-    }
-  }, [route]);
+  // 旧入口 / 旧查询参数：重定向到新路由，并替换历史记录。
+  useEffect(() => { if (redirect) window.location.replace(redirect); }, [redirect]);
 
-  // 新建实验页持有内存中的 API Key 与解析进度；任务页持有重注入的密钥。
-  // 打开过后保持挂载（hidden），切走再切回不丢状态。
-  const [newOpened, setNewOpened] = useState(false);
-  const [openedTasks, setOpenedTasks] = useState<string[]>([]);
-  useEffect(() => {
-    if (route.view === 'new') setNewOpened(true);
-    if (route.view === 'task' && route.taskId) {
-      const id = route.taskId;
-      setOpenedTasks(old => (old.includes(id) ? old : [...old, id]));
-    }
-  }, [route]);
+  if (route.view === 'new' || route.view === 'draft' || route.view === 'task') {
+    const projectId = route.view === 'draft' ? route.projectId : null;
+    return <div className="shell flow">
+      <main className="main" id="main">
+        <Suspense fallback={<p role="status" className="page-loading">加载中…</p>}>
+          {route.view === 'task'
+            ? <TaskPage key={route.taskId} taskId={route.taskId} api={api} />
+            : <NewExperimentPage key={projectId ?? 'new'} api={api} papers={papers} initialProject={projectId ?? ''} />}
+        </Suspense>
+      </main>
+    </div>;
+  }
 
-  const view: View = route.view === 'legacy' ? 'overview' : route.view;
-  const taskTitle = view === 'task'
-    ? recent.tasks?.find(t => t.id === route.taskId)?.objective ?? '任务详情'
-    : '';
-  const crumbs: [string, string] = view === 'overview' ? ['工作区', '总览']
-    : view === 'new' ? ['工作区', '新建实验']
-    : view === 'task' ? ['任务', taskTitle]
-    : ['Paper2Run', '设置'];
-  // 工作台视图（多栏）用更宽的版面。
-  const wide = view === 'new' || view === 'task';
+  const view: View = route.view;
+  const crumbs: [string, string] = view === 'overview' ? ['工作区', '总览'] : ['Paper2Run', '设置'];
 
-  return <div className={`shell${sideOpen ? '' : ' side-closed'}${wide ? ' wide' : ''}`}>
-    {sideOpen && <Sidebar view={view} taskId={route.taskId} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />}
+  return <div className={`shell${sideOpen ? '' : ' side-closed'}`}>
+    {sideOpen && <Sidebar view={view} taskId={null} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />}
     {sideOpen && <button type="button" className="side-scrim" aria-label="关闭侧栏" tabIndex={-1} onClick={() => setSideOpen(false)} />}
     <main className="main" id="main">
       <header className="main-head drag">
@@ -89,7 +71,7 @@ export default function AppShell() {
         </nav>
         <div className="main-actions">
           <a className="btn btn-sm btn-secondary" href="#/new"><Icon name="plus" size={14} />新建实验</a>
-          {(view === 'overview' || view === 'task') && <button type="button" className="btn btn-icon" aria-label="刷新" title="刷新" onClick={refresh}><Icon name="refresh" /></button>}
+          {view === 'overview' && <button type="button" className="btn btn-icon" aria-label="刷新" title="刷新" onClick={refresh}><Icon name="refresh" /></button>}
         </div>
       </header>
       <div className="main-body">
@@ -97,16 +79,6 @@ export default function AppShell() {
           {view === 'overview' && <Suspense fallback={<p role="status" className="page-loading">加载总览…</p>}>
             <OverviewPage api={api} papers={papers} />
           </Suspense>}
-          {newOpened && <div hidden={view !== 'new'}>
-            <Suspense fallback={<p role="status" className="page-loading">加载新建实验…</p>}>
-              <NewExperimentPage api={api} papers={papers} initialProject={route.project} />
-            </Suspense>
-          </div>}
-          {openedTasks.map(id => <div key={id} hidden={view !== 'task' || route.taskId !== id}>
-            <Suspense fallback={<p role="status" className="page-loading">加载任务…</p>}>
-              <TaskPage taskId={id} api={api} />
-            </Suspense>
-          </div>)}
           {view === 'settings' && <Suspense fallback={<p role="status" className="page-loading">加载设置…</p>}>
             <Settings health={health} host={host} api={papers} />
           </Suspense>}

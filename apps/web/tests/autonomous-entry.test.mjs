@@ -25,10 +25,11 @@ test('entry mounts the autonomous-only app shell and redirects the retired route
   const entry = await readFile(new URL('../src/main.tsx', import.meta.url), 'utf8');
   assert.match(entry, /lazy\(\(\) => import\('\.\/shell\/AppShell'\)\)/, 'the app shell is the only lazily mounted surface');
   assert.doesNotMatch(entry, /GuidedPage|MockWorkspace|Phase01Lab|resolveSurface/);
+  const routes = await readFile(new URL('../src/shell/routes.ts', import.meta.url), 'utf8');
+  assert.match(routes, /startsWith\('#\/autonomous'\)/, 'legacy #/autonomous links still land somewhere sensible');
+  assert.match(routes, /#\/task\//);
   const shell = await readFile(new URL('../src/shell/AppShell.tsx', import.meta.url), 'utf8');
-  assert.match(shell, /startsWith\('#\/autonomous'\)/, 'legacy #/autonomous links still land somewhere sensible');
   assert.match(shell, /location\.replace/);
-  assert.match(shell, /#\/task\//);
   assert.doesNotMatch(shell, /guided|MockWorkspace/);
 });
 
