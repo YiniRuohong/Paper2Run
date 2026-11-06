@@ -154,11 +154,11 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
           </li>;
         })}
       </ul>}
-      {phase === 'ready' && tasks.length === 0 && drafts.length === 0 && <div className="ui-card ui-empty overview-empty">
-        <span className="ui-tile"><Icon name="flask" size={22} /></span>
-        <h3>还没有自主实验任务</h3>
-        <p>上传一篇论文，配置模型与预算后授权启动；AI 会规划、执行并冻结证据，最后给出程序判定的报告。</p>
-        <a className="btn btn-primary" href="#/new"><Icon name="plus" size={15} />开始第一个实验</a>
+      {phase === 'ready' && tasks.length === 0 && drafts.length === 0 && <div className="ui-empty overview-empty">
+        <span className="ui-tile overview-empty-flask" aria-hidden="true"><Icon name="flask" size={56} /></span>
+        <h3>当前空空如也</h3>
+        <p>开始你的第一个复现吧</p>
+        <a className="btn btn-primary" href="#/new"><Icon name="plus" size={15} />新建实验</a>
       </div>}
       {phase === 'ready' && visible.length + visibleDrafts.length === 0 && (tasks.length > 0 || drafts.length > 0) && <div className="ui-card ui-empty">
         <h3>没有匹配的任务</h3><p>换个筛选条件试试。</p>

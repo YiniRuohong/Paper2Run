@@ -17,6 +17,11 @@
 .overview .ui-empty h3 { margin-top: 10px; font-size: 20px; }
 .overview .ui-empty p { margin-bottom: 14px; font-size: 15px; max-width: 52ch; }
 .overview-empty { margin-top: 6vh; }
+/* the no-task state: no card behind it, a large grey flask */
+.overview .overview-empty .overview-empty-flask { width: 112px; height: 112px; border-radius: 30px; }
+.overview .overview-empty h3 { margin-top: 18px; font-size: 24px; }
+.overview .overview-empty p { margin-bottom: 18px; font-size: 16px; }
+.overview .overview-empty .btn-primary { height: 40px; padding: 0 20px; font-size: 14.5px; }
 @media (max-width: 760px) {
   .overview { gap: 24px; }
   .overview .ui-row { padding: 12px 14px; }
