@@ -18,8 +18,9 @@
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
   height: 32px; padding: 0 13px; border: 1px solid transparent; border-radius: var(--r-m);
   background: transparent; color: var(--text); font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap;
-  cursor: pointer; transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
+  cursor: pointer; text-decoration: none; transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
+.btn:hover { text-decoration: none; }
 .btn:disabled { cursor: not-allowed; opacity: 0.45; }
 .btn-primary { background: var(--accent); color: var(--accent-ink); }
 .btn-primary:not(:disabled):hover { background: var(--accent-hover); }
@@ -205,6 +206,22 @@ button.ui-row { width: 100%; border: 0; background: transparent; text-align: lef
   .ui-card-head { flex-wrap: wrap; }
   .ui-kv-row { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* ---------- toasts (bottom-right of the viewport) ---------- */
+.ui-toasts { position: fixed; right: 24px; bottom: 24px; z-index: 80; display: grid; justify-items: end; gap: 10px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+.ui-toast {
+  display: flex; align-items: flex-start; gap: 10px; box-sizing: border-box; width: 100%; padding: 12px 10px 12px 14px;
+  border: 1px solid var(--line); border-radius: var(--r-m); background: var(--surface); box-shadow: var(--shadow-pop);
+  color: var(--text); font-size: 13px; line-height: 1.6; pointer-events: auto; animation: ui-toast-in 260ms var(--ease-expo) both;
+}
+.ui-toast > .ico { margin-top: 2px; color: var(--tone); }
+.ui-toast.tone-bad { border-color: var(--bad); }
+.ui-toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ui-toast-close { display: grid; place-items: center; flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--muted); cursor: pointer; }
+.ui-toast-close:hover { background: var(--hover); color: var(--text); }
+@keyframes ui-toast-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+
 @media (prefers-reduced-motion: reduce) {
   .ico.spin, .ui-skel { animation: none; }
+  .ui-toast { animation: none; }
 }

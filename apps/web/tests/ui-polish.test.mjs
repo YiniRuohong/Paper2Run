@@ -71,10 +71,10 @@ test('C: progressBar replaces the 实时 tab segment and the rail progress line'
   assert.match(wb, /aria-label=\{`实时 · \$\{bar\.label\}`\}/);
   assert.match(wb, /!props\.progressBar && props\.progress/);
   const css = await read('ui/workbench/workbench.css');
-  const fill = css.match(/\.wb-bar-fill\s*\{[^}]*\}/);
-  assert.ok(fill, 'fill rule exists');
-  assert.match(fill[0], /var\(--accent\)/);
-  assert.doesNotMatch(fill[0], /--ok/);
+  const done = css.match(/\.wb-step\.is-done\s*\{[^}]*\}/);
+  assert.ok(done, 'done segment rule exists');
+  assert.match(done[0], /var\(--accent\)/);
+  assert.doesNotMatch(done[0], /--ok/);
   const draft = await read('features/flow/DraftPage.tsx');
   assert.match(draft, /progressBar=\{\{ done: doneCount, total: 9, label: /);
   assert.doesNotMatch(draft, /progress=\{/);

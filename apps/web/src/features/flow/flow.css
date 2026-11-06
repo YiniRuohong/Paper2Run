@@ -1,6 +1,8 @@
 /* Guided draft page: rail head, the step frame and its few fields. Tokens only. */
 
-.flow-page { padding: 20px 20px 0; min-width: 0; }
+.flow-page { padding: 20px 20px 0; min-width: 0; animation: flow-enter 280ms var(--ease-expo) backwards; }
+@keyframes flow-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .flow-page { animation: none; } }
 
 /* rail head (shared with the task page) */
 .flow-brand { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }

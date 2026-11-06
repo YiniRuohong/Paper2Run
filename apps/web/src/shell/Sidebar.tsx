@@ -13,12 +13,14 @@ export const taskHref = (taskId: string): string => `#/task/${encodeURIComponent
 
 // magpie-style sidebar: brand row (window-controls area on desktop), grouped
 // nav, nested "最近" disclosure of recent tasks, footer with 设置 + backend dot.
-export function Sidebar({ view, taskId, recent, recentFailed, health, host, onHide }: {
-  view: View; taskId: string | null; recent: RecentTask[] | null; recentFailed: boolean; health: Health; host: string; onHide: () => void;
+export function Sidebar({ open: visible = true, view, taskId, recent, recentFailed, health, host, onHide }: {
+  open?: boolean; view: View; taskId: string | null; recent: RecentTask[] | null; recentFailed: boolean; health: Health; host: string; onHide: () => void;
 }) {
   const [open, setOpen] = useState(true);
   const item = (target: View) => ({ className: `side-item${view === target ? ' on' : ''}`, 'aria-current': view === target ? 'page' as const : undefined });
-  return <aside className="side" id="app-sidebar" aria-label="侧栏">
+  // Stays mounted while collapsed so it can animate out; inert keeps it out of the tab order and the a11y tree.
+  const hiddenProps = visible ? {} : ({ inert: 'true', 'aria-hidden': true } as Record<string, string | boolean>);
+  return <aside className="side" id="app-sidebar" aria-label="侧栏" {...hiddenProps}>
     <div className="side-head drag">
       <button type="button" className="btn btn-icon" aria-label="隐藏侧栏" title="隐藏侧栏" aria-controls="app-sidebar" aria-expanded="true" onClick={onHide}><Icon name="sidebar" /></button>
       <span className="side-brand"><AppMark size={19} /><b>Paper2Run</b></span>

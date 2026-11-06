@@ -8,7 +8,7 @@ import { parseProbe, probeMissingNotice } from '../../autonomous/probe';
 import TargetProbeView, { type ProbeState } from '../../autonomous/TargetProbeView';
 import { budgetLine, connectionLabel, legacyConfigLine, legacyLaunchBlock, mergeConfig, saveConfigWithRetry, type DraftPaper } from '../draft';
 import { readConfig, type SavedConfig } from '../draftData';
-import StepFrame, { type Act, type StepFeedback } from '../StepFrame';
+import StepFrame, { type Act } from '../StepFrame';
 import { SETUP_TITLES } from '../timeline';
 import '../../autonomous/autonomous.css';
 
@@ -23,7 +23,7 @@ function withTarget(base: ProjectConfig['target'], ssh: boolean, alias: string, 
 // on request), the saved budget, authorization and start. The target probe is
 // a hint only; it never blocks the start button. Hidden parts of a v3 config
 // are named read-only, and a lost specialist connection blocks the start.
-export default function LaunchStep({ projectId, paper, paperText, saved, profile, profiles, objective, api, busy, act, feedback, onSaved }: {
+export default function LaunchStep({ projectId, paper, paperText, saved, profile, profiles, objective, api, busy, act, onSaved }: {
   projectId: string;
   paper: DraftPaper | null;
   paperText: PaperText | null;
@@ -34,7 +34,6 @@ export default function LaunchStep({ projectId, paper, paperText, saved, profile
   api: Pick<AutonomousApi, 'config' | 'saveConfig' | 'probeTarget' | 'start'>;
   busy: boolean;
   act: Act;
-  feedback: StepFeedback | null;
   onSaved(): Promise<void>;
 }) {
   const target = saved.config.target;
@@ -86,7 +85,7 @@ export default function LaunchStep({ projectId, paper, paperText, saved, profile
     window.location.replace(`#/task/${encodeURIComponent(created.id)}`);
   });
 
-  return <StepFrame title={SETUP_TITLES.launch} guide="确认论文、目标和模型，选择执行位置后授权启动。" feedback={feedback}
+  return <StepFrame title={SETUP_TITLES.launch} guide="确认论文、目标和模型，选择执行位置后授权启动。"
     next={{ label: '授权并启动', disabled: startBlockReason || undefined, onClick: start }}>
     <dl className="flow-summary">
       <div><dt>论文</dt><dd>{paper?.title ?? '—'}</dd></div>

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { createAutonomousApi } from '../api-client/autonomous';
 import { createPapersApi } from '../api-client/papers';
 import { backendHost, getDesktop } from '../desktop';
@@ -29,17 +29,15 @@ const narrow = () => window.matchMedia?.('(max-width: 760px)').matches ?? false;
 export default function AppShell() {
   const [{ route, redirect }, setParsed] = useState(hashRoute);
   const [sideOpen, setSideOpen] = useState(() => !narrow());
-  const [refreshTick, setRefreshTick] = useState(0);
-  const [health, recheckHealth] = useBackendHealth();
+  const [health] = useBackendHealth();
   const taskId = route.view === 'task' ? route.taskId : null;
-  const recent = useRecentTasks(api, papers, `${route.view}:${taskId ?? ''}:${refreshTick}`);
+  const recent = useRecentTasks(api, papers, `${route.view}:${taskId ?? ''}`);
   const host = backendHost(getDesktop()?.backendUrl, window.location.host);
   useEffect(() => {
     const onHash = () => { setParsed(hashRoute()); if (narrow()) setSideOpen(false); };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-  const refresh = useCallback(() => { setRefreshTick(x => x + 1); recheckHealth(); }, [recheckHealth]);
 
   // 旧入口 / 旧查询参数：重定向到新路由，并替换历史记录。
   useEffect(() => { if (redirect) window.location.replace(redirect); }, [redirect]);
@@ -63,7 +61,7 @@ export default function AppShell() {
   const crumbs: [string, string] = view === 'overview' ? ['工作区', '总览'] : ['Paper2Run', '设置'];
 
   return <div className={`shell${sideOpen ? '' : ' side-closed'}`}>
-    {sideOpen && <Sidebar view={view} taskId={null} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />}
+    <Sidebar open={sideOpen} view={view} taskId={null} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />
     {sideOpen && <button type="button" className="side-scrim" aria-label="关闭侧栏" tabIndex={-1} onClick={() => setSideOpen(false)} />}
     <main className="main" id="main">
       <header className="main-head drag">
@@ -71,10 +69,6 @@ export default function AppShell() {
         <nav className="crumbs" aria-label="面包屑">
           <span>{crumbs[0]}</span><i aria-hidden="true">/</i><b aria-current="page" title={crumbs[1]}>{crumbs[1]}</b>
         </nav>
-        <div className="main-actions">
-          <a className="btn btn-sm btn-secondary" href="#/new"><Icon name="plus" size={14} />新建实验</a>
-          {view === 'overview' && <button type="button" className="btn btn-icon" aria-label="刷新" title="刷新" onClick={refresh}><Icon name="refresh" /></button>}
-        </div>
       </header>
       <div className="main-body">
         <div className={`page page-${view}`}>

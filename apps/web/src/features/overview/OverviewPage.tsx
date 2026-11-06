@@ -12,6 +12,7 @@ import { SETUP_TITLES } from '../flow/timeline';
 import { loadAutonomousTasks, type RecentDraft, type RecentTask } from '../../shell/hooks';
 import { draftHref } from '../../shell/routes';
 import { taskHref } from '../../shell/Sidebar';
+import './overview.css';
 
 const defaultApi = createAutonomousApi();
 const defaultPapers = createPapersApi('demo-user');
@@ -153,8 +154,8 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
           </li>;
         })}
       </ul>}
-      {phase === 'ready' && tasks.length === 0 && drafts.length === 0 && <div className="ui-card ui-empty">
-        <span className="ui-tile"><Icon name="flask" size={18} /></span>
+      {phase === 'ready' && tasks.length === 0 && drafts.length === 0 && <div className="ui-card ui-empty overview-empty">
+        <span className="ui-tile"><Icon name="flask" size={22} /></span>
         <h3>还没有自主实验任务</h3>
         <p>上传一篇论文，配置模型与预算后授权启动；AI 会规划、执行并冻结证据，最后给出程序判定的报告。</p>
         <a className="btn btn-primary" href="#/new"><Icon name="plus" size={15} />开始第一个实验</a>

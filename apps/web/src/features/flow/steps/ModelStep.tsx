@@ -5,7 +5,7 @@ import { Icon } from '../../../ui/Icon';
 import { modelReference, profileRequest } from '../../autonomous/config';
 import { connectionLabel, mergeConfig, profileIdFor, refreshOnFailure, saveConfigWithRetry, usableConnection } from '../draft';
 import { readConfig } from '../draftData';
-import StepFrame, { type Act, type StepFeedback } from '../StepFrame';
+import StepFrame, { type Act } from '../StepFrame';
 import { SETUP_TITLES } from '../timeline';
 
 const NEW = '';
@@ -15,7 +15,7 @@ const API_OPTIONS = [{ value: 'openai-completions', label: 'OpenAI 兼容' }, { 
 // and the API kind. The profile ID, auth mode and credential reuse are not shown.
 // Saving cannot prove the connection works; the server checks it at start.
 // A failed save re-reads the page, so a connection that was saved is offered on retry.
-export default function ModelStep({ projectId, config, profiles, connectionLost, objective, api, busy, act, feedback, refresh, onDone }: {
+export default function ModelStep({ projectId, config, profiles, connectionLost, objective, api, busy, act, refresh, onDone }: {
   projectId: string;
   config: ProjectConfig | null;
   profiles: ModelProfile[];
@@ -24,7 +24,6 @@ export default function ModelStep({ projectId, config, profiles, connectionLost,
   api: Pick<AutonomousApi, 'config' | 'saveConfig' | 'saveProfile'>;
   busy: boolean;
   act: Act;
-  feedback: StepFeedback | null;
   /** Reads the draft again (profiles, config, version) after a failed save. */
   refresh(): Promise<unknown>;
   onDone(): Promise<void>;
@@ -66,7 +65,7 @@ export default function ModelStep({ projectId, config, profiles, connectionLost,
     }
   }, refresh).then(onDone));
 
-  return <StepFrame title={SETUP_TITLES.model} guide="AI 用这个模型阅读论文、写代码、推进实验。" feedback={feedback}
+  return <StepFrame title={SETUP_TITLES.model} guide="AI 用这个模型阅读论文、写代码、推进实验。"
     next={{ label: creating ? '保存并继续' : unchanged ? '下一步' : '使用此连接并继续', disabled: reason || undefined, onClick: save }}>
     {connectionLost && <p className="ui-callout tone-warn" role="status"><Icon name="alert" /><span>应用重启后模型连接已清空，请重新填写。</span></p>}
     <div className="ui-form">

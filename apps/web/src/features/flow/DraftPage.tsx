@@ -3,6 +3,7 @@ import { createAutonomousApi, type AutonomousApi } from '../../api-client/autono
 import { createPapersApi, type DocParseMode, type DocParseStatus, type PapersApi } from '../../api-client/papers';
 import { draftHref } from '../../shell/routes';
 import { Icon } from '../../ui/Icon';
+import { ToastStack, type ToastItem } from '../../ui/Toast';
 import { Workbench, type WbContent, type WbFile } from '../../ui/workbench/Workbench';
 import { errorDetail } from '../autonomous/errors';
 import ModeDialog from '../docparse/ModeDialog';
@@ -58,6 +59,8 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
   const dialogOffered = useRef(false);
   const createdProject = useRef<string | null>(null);
   const loadAbort = useRef<AbortController | null>(null);
+  const [notes, setNotes] = useState<ToastItem[]>([]);
+  const noteSeq = useRef(0);
 
   // Reads everything again; a project that already has a task opens that task instead.
   const reload = useCallback(async (): Promise<DraftData | null> => {
@@ -136,6 +139,15 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
 
   /** Move on after a step saved: read again, then open the requested step if it is reachable. */
   const advance = (step: SetupStepId) => async () => { await reload(); setViewing(step); };
+
+  // The previous step's result appears as a toast when the step opens (or its text changes).
+  const feedback = feedbackFor(shown, facts, progress);
+  const feedbackText = feedback?.text ?? '';
+  const feedbackTone = feedback?.tone ?? 'idle';
+  useEffect(() => {
+    if (!feedbackText) return;
+    setNotes(list => list.some(n => n.text === feedbackText) ? list : [...list, { id: `note-${++noteSeq.current}`, tone: feedbackTone, text: feedbackText }]);
+  }, [shown, feedbackText, feedbackTone]);
 
   // ---- 01: project creation, upload and parsing ----
   async function ensureProject(hint: string): Promise<string> {
@@ -231,19 +243,18 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     step = null;
   } else if (shown === 'paper') {
     step = <PaperStep paper={paper} paperText={data?.paperText ?? null} parseStatus={parseStatus} busy={busy}
-      feedback={feedbackFor('paper', facts, progress)}
       next={{ label: '下一步', disabled: disabledNext(progress.done.paper ? '' : !paper ? '请先上传论文 PDF 或粘贴正文' : '论文解析完成后才能继续'), onClick: () => setViewing('objective') }}
       onUploadPdf={uploadPdf} onSubmitText={submitText}
       parse={{ onRetry: () => parseAgain(), onChoose: mode => parseAgain(mode), onReopenChoice: () => setModeDialog(true), onRefresh: () => { reload().catch(e => setError(errorDetail(e))); } }} />;
   } else if (projectId && data && shown === 'objective') {
     step = <ObjectiveStep projectId={projectId} projectVersion={data.project.version} initial={progress.objective} hasConfig={!!data.saved}
-      api={api} papers={papers} busy={busy} act={act} feedback={feedbackFor('objective', facts, progress)} refresh={reload} onDone={advance('model')} />;
+      api={api} papers={papers} busy={busy} act={act} refresh={reload} onDone={advance('model')} />;
   } else if (projectId && data && shown === 'model') {
     step = <ModelStep projectId={projectId} config={facts.config} profiles={facts.profiles} connectionLost={progress.connectionLost} objective={progress.objective}
-      api={api} busy={busy} act={act} feedback={feedbackFor('model', facts, progress)} refresh={reload} onDone={advance('launch')} />;
+      api={api} busy={busy} act={act} refresh={reload} onDone={advance('launch')} />;
   } else if (projectId && data?.saved && shown === 'launch') {
     step = <LaunchStep projectId={projectId} paper={paper} paperText={data.paperText} saved={data.saved} profile={profile} profiles={facts.profiles} objective={progress.objective}
-      api={api} busy={busy} act={act} feedback={feedbackFor('launch', facts, progress)} onSaved={async () => { await reload(); }} />;
+      api={api} busy={busy} act={act} onSaved={async () => { await reload(); }} />;
   }
 
   return <div className="flow-page">
@@ -262,9 +273,11 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
       {loadFailed ? <div className="ui-callout tone-bad flow-error" role="alert"><Icon name="alert" />
         <span>{error || '正在重新读取…'}</span>
         <button type="button" className="btn btn-sm" disabled={busy} onClick={retryLoad}>重新读取</button>
-      </div> : error && <div className="ui-callout tone-bad flow-error" role="alert"><Icon name="alert" /><span>{error}</span></div>}
+      </div> : null}
       {loading ? <p role="status" className="ui-help">读取草稿…</p> : step}
     </Workbench>
+    <ToastStack items={[...notes, ...(error && !loadFailed ? [{ id: `error-${error}`, tone: 'bad' as const, text: error }] : [])]}
+      onClose={id => { if (id.startsWith('error-')) setError(''); else setNotes(list => list.filter(n => n.id !== id)); }} />
     {modeDialog && <ModeDialog status={parseStatus} busy={busy} onChoose={mode => parseAgain(mode)} onLater={() => setModeDialog(false)} />}
   </div>;
 }

@@ -10,7 +10,7 @@ export type { WbFile, WbTag } from './tree';
 // Three-column task workbench (shared by 新建任务 / 任务详情 / 自主实验):
 //   left   stage timeline — each stage collapses to a header, expands to its sub-steps
 //   centre viewer — a "实时" tab with the page's own live controls (children),
-//          plus closable tabs for opened files; fullscreen and download
+//          plus closable tabs for opened files; download
 //   right  file tree of the task's real files and records, searchable
 // The live content is passed as children on purpose: it stays a normal part of
 // the caller's React tree (forms, focus, tests that walk children).
@@ -81,7 +81,6 @@ export function Workbench(props: WorkbenchProps) {
   const { stages, files, loadFile } = props;
   const [tabs, setTabs] = useState<string[]>([]);
   const [active, setActive] = useState<string | null>(null); // null = 实时
-  const [full, setFull] = useState(false);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [openItems, setOpenItems] = useState<Set<string>>(() => new Set());
@@ -128,13 +127,6 @@ export function Workbench(props: WorkbenchProps) {
     for (const c of inflight.current.values()) c.abort();
     for (const item of Object.values(loadedRef.current)) release(item);
   }, []);
-
-  useEffect(() => {
-    if (!full) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFull(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [full]);
 
   function ensureLoaded(file: WbFile, force = false) {
     const current = loadedRef.current[file.path];
@@ -244,7 +236,7 @@ export function Workbench(props: WorkbenchProps) {
       {props.actions && <div className="wb-head-actions">{props.actions}</div>}
     </header>
 
-    <div className={`wb-grid${full ? ' is-full' : ''}`}>
+    <div className="wb-grid">
       <nav className="wb-rail" aria-label="阶段时间线">
         {props.railHead && <div className="wb-rail-head drag">{props.railHead}</div>}
         {!props.progressBar && props.progress && <p className="wb-progress">{props.progress}</p>}
@@ -284,8 +276,8 @@ export function Workbench(props: WorkbenchProps) {
             {bar
               ? <button type="button" role="tab" aria-selected={active === null} aria-label={`实时 · ${bar.label}`} className={`wb-tab wb-tab-live wb-tab-bar${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
                 <span className="wb-bar-label">{bar.label}</span>
-                <span className="wb-bar-track" role="progressbar" aria-valuenow={barDone} aria-valuemin={0} aria-valuemax={bar.total} aria-label={`进度 ${barDone} / ${bar.total}`}>
-                  <span className="wb-bar-fill" style={{ width: `${bar.total > 0 ? Math.round(barDone / bar.total * 100) : 0}%` }} />
+                <span className="wb-steps" role="progressbar" aria-valuenow={barDone} aria-valuemin={0} aria-valuemax={bar.total} aria-label={`进度 ${barDone} / ${bar.total}`}>
+                  {Array.from({ length: bar.total }, (_, i) => <span key={i} className={`wb-step ${i < barDone ? 'is-done' : i === barDone ? 'is-current' : 'is-todo'}`} />)}
                 </span>
                 <span className="wb-bar-count">{barDone} / {bar.total}</span>
                 {bar.extra}
@@ -302,7 +294,6 @@ export function Workbench(props: WorkbenchProps) {
           </div>
           <div className="wb-tools">
             {activeFile && <button type="button" className="btn btn-icon" aria-label="重新读取" title="重新读取" onClick={() => ensureLoaded(activeFile, true)}><Icon name="refresh" size={15} /></button>}
-            <button type="button" className="btn btn-icon" aria-label={full ? '退出全屏' : '全屏'} title={full ? '退出全屏（Esc）' : '全屏'} aria-pressed={full} onClick={() => setFull(x => !x)}><Icon name={full ? 'minimize' : 'maximize'} size={15} /></button>
             <button type="button" className="btn btn-icon" aria-label="下载当前文件" title={activeFile ? `下载 ${baseName(activeFile.path)}` : '打开文件后可下载'} disabled={!activeEntry || activeEntry.state !== 'ready'} onClick={download}><Icon name="download" size={15} /></button>
           </div>
         </div>

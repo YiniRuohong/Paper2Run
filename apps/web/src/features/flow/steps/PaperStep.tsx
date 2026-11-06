@@ -3,7 +3,7 @@ import type { DocParseMode, DocParseStatus, PaperText } from '../../../api-clien
 import { Disclosure } from '../../../ui/Disclosure';
 import ParseProgress from '../../docparse/ParseProgress';
 import type { DraftPaper } from '../draft';
-import StepFrame, { type StepFeedback, type StepNext } from '../StepFrame';
+import StepFrame, { type StepNext } from '../StepFrame';
 import { SETUP_TITLES } from '../timeline';
 
 export interface ParseControls {
@@ -16,12 +16,11 @@ export interface ParseControls {
 // 01 上传论文: a PDF, or pasted text. Upload, project creation and parsing are
 // the page's job (DraftPage); this step only collects the input and shows the
 // parse state of the current paper.
-export default function PaperStep({ paper, paperText, parseStatus, busy, feedback, next, onUploadPdf, onSubmitText, parse }: {
+export default function PaperStep({ paper, paperText, parseStatus, busy, next, onUploadPdf, onSubmitText, parse }: {
   paper: DraftPaper | null;
   paperText: PaperText | null;
   parseStatus: DocParseStatus | null;
   busy: boolean;
-  feedback: StepFeedback | null;
   next: StepNext;
   /** Resolve true when accepted, so the inputs can be cleared. */
   onUploadPdf(file: File): Promise<boolean>;
@@ -35,7 +34,7 @@ export default function PaperStep({ paper, paperText, parseStatus, busy, feedbac
   // A PDF that was uploaded but never parsed (e.g. the parse call failed) needs a way to start it.
   const unparsed = !!paper?.pdf && paperText?.status === 'none' && !!parseStatus?.mode;
 
-  return <StepFrame title={SETUP_TITLES.paper} guide="选择要复现的论文 PDF，或直接粘贴正文。" feedback={feedback} next={next}>
+  return <StepFrame title={SETUP_TITLES.paper} guide="选择要复现的论文 PDF，或直接粘贴正文。" next={next}>
     {paper && <p className="flow-current">当前论文：<b>{paper.title}</b>{paper.pageCount ? ` · ${paper.pageCount} 页` : ''}{paper.pdf ? '' : ' · 粘贴的正文'}</p>}
     {paper?.pdf && <ParseProgress
       docparse={{ pdf: true, needsChoice: parseStatus?.mode === null, status: parseStatus, text: paperText }}
