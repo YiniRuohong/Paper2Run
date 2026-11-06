@@ -169,3 +169,10 @@ test('rail runs read as the command, without the virtualenv path', async () => {
   assert.equal(commandName('后台 $ cd /work && /work/.venv/bin/python train.py'), 'python train.py');
   assert.equal(commandName('$ bash run.sh'), 'bash run.sh');
 });
+
+test('file tree rows carry no evidence/record/version labels; the opened file header still does', async () => {
+  const wb = await readFile(new URL('../src/ui/workbench/Workbench.tsx', import.meta.url), 'utf8');
+  const tree = wb.slice(wb.indexOf('function TreeLevel'), wb.indexOf('function Preview'));
+  assert.doesNotMatch(tree, /FileTag|\.badge|\.tags/);
+  assert.match(wb, /activeFile\.tags\?\.map/);
+});

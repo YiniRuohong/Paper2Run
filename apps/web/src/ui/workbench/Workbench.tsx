@@ -413,8 +413,6 @@ function TreeLevel({ node, depth, collapsed, active, onToggle, onOpen }: { node:
       <button type="button" className={`wb-node wb-node-file${active === child.path ? ' is-on' : ''}`} style={{ paddingLeft: 8 + depth * 14 + 16 }} title={child.path} onClick={() => onOpen(child.path)}>
         <FileGlyph file={child.file} />
         <span className="wb-node-name">{child.name}</span>
-        {child.file.badge && <span className="wb-badge">{child.file.badge}</span>}
-        {child.file.tags?.filter(tag => tag.inTree).map(tag => <FileTag key={tag.text} tag={tag} />)}
         <span className="wb-node-size">{formatBytes(child.file.bytes)}</span>
       </button>
     </div>)}</>;
