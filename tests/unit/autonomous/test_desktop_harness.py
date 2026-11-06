@@ -244,22 +244,82 @@ def test_desktop_build_validates_actual_bundle(monkeypatch, tmp_path):
         desktop.validate_packaged("darwin-arm64")
 
 
-def test_windows_launch_reports_unsupported_without_npm_or_docker(monkeypatch, tmp_path, capsys):
+def test_windows_launch_prepares_autonomous_mode(monkeypatch, tmp_path, capsys):
+    # Windows no longer skips the autonomous path: Node, Harness and Docker are checked.
     monkeypatch.setattr(launch, "ROOT", tmp_path)
     monkeypatch.setattr(launch, "WINDOWS", True)
-    monkeypatch.setattr(builder, "check_node", lambda *_: pytest.fail("unsupported platform must not install"))
-    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: pytest.fail("unsupported platform must not probe Docker"))
-    assert launch.ensure_harness()["P2R_HARNESS_DIR"]
-    assert "Windows 暂不可用" in capsys.readouterr().out
+    monkeypatch.setattr(builder, "host_target", lambda: "win32-x64")
+    for key in ("P2R_NODE_BINARY", "P2R_HARNESS_DIR", "P2R_SKILLS_DIR"):
+        monkeypatch.delenv(key, raising=False)
+    node, _ = builder.node_paths(tmp_path / "apps/desktop/.runtime/win32-x64/node", "win32-x64")
+    touch(node)
+    checked = []
+    monkeypatch.setattr(builder, "check_node", lambda path: checked.append(path) or (_ for _ in ()).throw(RuntimeError("stop")))
+    probes = []
+    monkeypatch.setattr(launch.subprocess, "run", lambda argv, **k: probes.append(argv) or SimpleNamespace(returncode=0, stdout=b"linux\n"))
+    env = launch.ensure_harness()
+    assert env["P2R_NODE_BINARY"] == str(node.resolve()) and checked == [node.resolve()]
+    assert probes == [["docker", "info", "--format", "{{.OSType}}"]]
+    out = capsys.readouterr().out
+    assert "Windows 暂不可用" not in out and "Docker" not in out
+
+
+@pytest.mark.parametrize("windows,result,expected", [
+    (True, SimpleNamespace(returncode=0, stdout=b"linux\n"), None),
+    (False, SimpleNamespace(returncode=0, stdout=b"linux"), None),
+    (True, SimpleNamespace(returncode=0, stdout=b"windows\n"), "OSType=windows"),
+    (True, SimpleNamespace(returncode=1, stdout=b""), "Docker Desktop（WSL2 后端）"),
+    (False, SimpleNamespace(returncode=1, stdout=b""), "启动 Docker 后可重试"),
+    (True, OSError("docker not found"), "Docker 未就绪"),
+])
+def test_launch_docker_status(monkeypatch, windows, result, expected):
+    monkeypatch.setattr(launch, "WINDOWS", windows)
+    def run(argv, **kwargs):
+        assert argv == ["docker", "info", "--format", "{{.OSType}}"]
+        if isinstance(result, Exception):
+            raise result
+        return result
+    monkeypatch.setattr(launch.subprocess, "run", run)
+    status = launch.docker_status()
+    assert status is None if expected is None else expected in status
+
+
+def run_desktop_check(is_win, docker, exists=True):
+    """Evaluate dockerMessage + checkAutonomousRuntime from main.cjs with stubbed IO."""
+    source = (ROOT / "apps/desktop/main.cjs").read_text()
+    functions = source[source.index("function dockerMessage("):source.index("function healthOk(")]
+    script = ("const path=require('node:path');const IS_WIN=" + json.dumps(is_win) + ";const messages=[];const calls=[];"
+              "const writeLog=x=>messages.push(x);const backendEnv=()=>({});const fs={existsSync:()=>" + json.dumps(exists) + "};"
+              "const docker=" + json.dumps(docker) + ";"
+              "const execFile=(cmd,args,opts,cb)=>{calls.push([cmd,args,opts.windowsHide]);"
+              "if(cmd==='docker') cb(docker.error?new Error(docker.error):null, docker.stdout); else cb(null,'22.22.2\\n');};"
+              + functions + ";checkAutonomousRuntime({node:'n',harness:'h',skills:'s'});console.log(JSON.stringify({messages,calls}));")
+    result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True, check=True)
+    return json.loads(result.stdout)
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="Node required for Electron function test")
-def test_windows_desktop_warning_does_not_start_probes():
-    source = (ROOT / "apps/desktop/main.cjs").read_text()
-    function = source[source.index("function checkAutonomousRuntime("):source.index("function healthOk(")]
-    script = "const IS_WIN=true;const messages=[];const writeLog=x=>messages.push(x);" + function + ";checkAutonomousRuntime({});console.log(JSON.stringify(messages));"
-    result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True, check=True)
-    assert "Windows 暂不可用" in json.loads(result.stdout)[0]
+@pytest.mark.parametrize("is_win", [True, False])
+def test_desktop_runtime_check_is_the_same_on_every_platform(is_win):
+    data = run_desktop_check(is_win, {"stdout": "linux\n"})
+    assert data["messages"] == []
+    assert ["docker", ["info", "--format", "{{.OSType}}"], True] in data["calls"]
+    assert ["n", ["-p", "process.versions.node"], True] in data["calls"]
+    assert not any("Windows 暂不可用" in m for m in data["messages"])
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="Node required for Electron function test")
+def test_desktop_docker_messages():
+    missing = run_desktop_check(True, {"error": "spawn docker ENOENT"})["messages"]
+    assert len(missing) == 1 and "未检测到可用的 Docker" in missing[0] and "WSL2" in missing[0]
+    windows_mode = run_desktop_check(True, {"stdout": "windows\n"})["messages"]
+    assert len(windows_mode) == 1 and "OSType=windows" in windows_mode[0] and "Linux 容器" in windows_mode[0]
+    unknown = run_desktop_check(False, {"stdout": ""})["messages"]
+    assert "OSType=未知" in unknown[0]
+    # Missing Harness files are reported, and Docker is still probed.
+    absent = run_desktop_check(True, {"stdout": "linux"}, exists=False)
+    assert absent["calls"] == [["docker", ["info", "--format", "{{.OSType}}"], True]]
+    assert "autonomous mode unavailable: missing" in absent["messages"][0]
 
 
 def test_electron_resource_maps_cover_three_targets():

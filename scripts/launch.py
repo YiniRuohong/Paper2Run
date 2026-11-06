@@ -114,9 +114,8 @@ def ensure_harness() -> dict[str, str]:
     # An explicit absent path stops the backend from silently finding an old Node.
     env = {"P2R_NODE_BINARY": str(Path(candidate).resolve()) if candidate else str(bundled_node),
            "P2R_HARNESS_DIR": str(harness), "P2R_SKILLS_DIR": str(skills)}
-    if WINDOWS:
-        message("[!] 自主模式在 Windows 暂不可用：技能注册表需要 POSIX flock/no-follow；旧流程继续启动。")
-        return env
+    # Same path on Windows (Docker Desktop, WSL2 backend): supported by
+    # construction and unit-tested, not verified on a real Windows machine.
     failure_hint = "找不到可运行的 Node >=22.19；请安装完整 Node/npm"
     try:
         if not candidate:
@@ -163,14 +162,26 @@ def ensure_harness() -> dict[str, str]:
         # Do not print exception output: npm/Node can echo user credentials.
         message(f"[!] 自主模式未就绪：{failure_hint}。")
         message("    可运行 python scripts/desktop/build_harness.py 修复桌面运行时；服务仍会启动，但无法开始实验。")
-    try:
-        probe = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, timeout=10)
-        docker_ready = probe.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        docker_ready = False
-    if not docker_ready:
-        message("[!] Docker 未就绪：本地自主实验暂不可用；启动 Docker 后可重试。")
+    docker_hint = docker_status()
+    if docker_hint:
+        message(docker_hint)
     return env
+
+
+def docker_status() -> str | None:
+    """None when Docker runs Linux containers; otherwise a Chinese hint. Never blocks startup."""
+    try:
+        probe = subprocess.run(["docker", "info", "--format", "{{.OSType}}"], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        probe = None
+    if probe is None or probe.returncode != 0:
+        hint = "请安装并启动 Docker Desktop（WSL2 后端）" if WINDOWS else "启动 Docker 后可重试"
+        return f"[!] Docker 未就绪：本地自主实验暂不可用；{hint}。新建实验页会显示执行位置探测结果。"
+    os_type = (getattr(probe, "stdout", None) or b"").decode("utf-8", "replace").strip()
+    if os_type != "linux":
+        return (f"[!] Docker 当前不是 Linux 容器模式（OSType={os_type or '未知'}）：自主实验需要 Linux 容器；"
+                "Windows 上请在 Docker Desktop 托盘菜单选择 Switch to Linux containers。")
+    return None
 
 
 def free_port(base: int) -> int:

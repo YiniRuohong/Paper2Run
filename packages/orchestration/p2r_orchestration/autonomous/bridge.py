@@ -9,6 +9,32 @@ import subprocess
 import threading
 import time
 
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+_PASSED = ("PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "LANG")
+# Node on Windows needs a temp dir (TEMP/TMP) and reads its home from USERPROFILE.
+_PASSED_WINDOWS = ("TEMP", "TMP")
+
+
+def _windows() -> bool:
+    return os.name == "nt"
+
+
+def harness_environment(host: dict, session_dir, *, windows: bool) -> dict:
+    """No provider credentials, NODE_OPTIONS, SSH_AUTH_SOCK, or global SDK settings.
+
+    The home directory is per session. On Windows USERPROFILE/APPDATA/LOCALAPPDATA
+    point into it too, so the SDK never reads the user's real profile.
+    """
+    names = _PASSED + (_PASSED_WINDOWS if windows else ())
+    environment = {k: host[k] for k in names if k in host}
+    home = Path(session_dir) / ".home"
+    environment["HOME"] = str(home)
+    if windows:
+        environment.update(USERPROFILE=str(home), APPDATA=str(home / "AppData" / "Roaming"),
+                           LOCALAPPDATA=str(home / "AppData" / "Local"))
+    home.mkdir(parents=True, exist_ok=True)
+    return environment
+
 
 class HarnessBridge:
     def __init__(self):
@@ -36,13 +62,14 @@ class HarnessBridge:
         if self.aborted.is_set():
             return
         root = Path(os.environ.get("P2R_HARNESS_DIR", Path(__file__).resolve().parents[4] / "apps" / "harness"))
+        # An absolute P2R_NODE_BINARY (node.exe on Windows) is used as given.
         node = os.environ.get("P2R_NODE_BINARY", "node")
-        # No provider credentials, NODE_OPTIONS, SSH_AUTH_SOCK, or global SDK settings.
-        environment = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "LANG") if k in os.environ}
-        environment["HOME"] = str(Path(config["session_dir"]) / ".home")
-        Path(environment["HOME"]).mkdir(parents=True, exist_ok=True)
+        windows = _windows()
+        environment = harness_environment(os.environ, config["session_dir"], windows=windows)
+        # Node writes UTF-8; never decode JSONL with a Windows ANSI code page.
+        options = {"creationflags": CREATE_NO_WINDOW} if windows else {}
         self.process = subprocess.Popen([node, str(root / "bridge.mjs")], stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1, env=environment)
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8", bufsize=1, env=environment, **options)
         messages = queue.Queue(maxsize=128)
         def reader():
             try:
