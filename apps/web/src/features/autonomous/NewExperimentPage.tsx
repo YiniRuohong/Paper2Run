@@ -14,7 +14,7 @@ import { DEFAULT_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS, defaultConfig, modelReference
 import { launchBlockReason, paperIsPdf } from './launch';
 import { parseProbe, probeMissingNotice, probeStale } from './probe';
 import TargetProbeView, { type ProbeState } from './TargetProbeView';
-import { errorDetail } from './TaskPage';
+import { errorDetail } from './errors';
 import './autonomous.css';
 
 const autonomous = createAutonomousApi();

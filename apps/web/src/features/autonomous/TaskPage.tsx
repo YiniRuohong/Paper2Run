@@ -9,6 +9,7 @@ import { Icon } from '../../ui/Icon';
 import { buildStages, currentProtocolSha, safetyBlock, toWbFiles } from './stages';
 import { ProgressNotes, SpecialistCalls } from './ActivityViews';
 import { decisionSuperseded, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
+import { errorDetail } from './errors';
 import { ApprovalCard } from './ApprovalCard';
 import { CandidateCard } from './CandidateCard';
 import { ReportView } from './ReportView';
@@ -17,11 +18,7 @@ import './autonomous.css';
 
 const defaultApi = createAutonomousApi();
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
-// 已知错误码在后端消息之后附中文说明（保留 missing: … 等细节）；code 与 request_id 始终保留。
-export const errorDetail = (error: unknown) =>
-  error instanceof ApiError
-    ? `${error.message}${errorExplanation(error.code) ? `；${errorExplanation(error.code)}` : ''} (${error.code}${error.requestId ? ` · ${error.requestId}` : ''})`
-    : error instanceof Error ? error.message : String(error);
+export { errorDetail };
 
 type Recovery = { needed: boolean; retainedJobs: string[] };
 

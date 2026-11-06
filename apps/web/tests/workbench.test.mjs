@@ -85,3 +85,25 @@ test('the task page keeps live controls as workbench children and releases blob 
   assert.match(wb, /URL\.revokeObjectURL/, 'blob previews are released');
   assert.doesNotMatch(wb, /dangerouslySetInnerHTML|localStorage/);
 });
+
+test('workbench supports an app layout with rail head, group separators and expandable items', async () => {
+  const wb = await readFile(new URL('../src/ui/workbench/Workbench.tsx', import.meta.url), 'utf8');
+  assert.match(wb, /railHead\?: ReactNode/);
+  assert.match(wb, /wb-rail-head/);
+  assert.match(wb, /is-app/);
+  assert.match(wb, /className="wb-group"[^>]*role="presentation"|role="presentation"[^>]*className="wb-group"/);
+  assert.match(wb, /aria-expanded=\{childOpen\}/, 'items with children expand via aria-expanded');
+  const css = await readFile(new URL('../src/ui/workbench/workbench.css', import.meta.url), 'utf8');
+  assert.match(css, /\.wb\.is-app\s*\{[^}]*"rail head head"\s*"rail viewer files"/);
+  assert.match(css, /\[data-shell="darwin"\] \.wb\.is-app \.wb-rail-head/);
+  assert.match(css, /82px/);
+});
+
+test('errorDetail lives in errors.ts and the test helper re-exports it', async () => {
+  const errors = await readFile(new URL('../src/features/autonomous/errors.ts', import.meta.url), 'utf8');
+  assert.match(errors, /export const errorDetail/);
+  const helper = await import('./helpers/error-detail.mjs');
+  assert.equal(typeof helper.errorDetail, 'function');
+  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /from '\.\/errors'/);
+});

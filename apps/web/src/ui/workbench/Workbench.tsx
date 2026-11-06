@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from '../Icon';
 import type { Tone } from '../Card';
 import { CopyButton } from '../Controls';
@@ -49,6 +49,8 @@ export interface WorkbenchProps {
   meta?: ReactNode;
   actions?: ReactNode;
   progress?: ReactNode;
+  /** App layout: the rail runs full height and starts with this (brand, back link); the header moves above the centre and right columns. */
+  railHead?: ReactNode;
   stages: WbStage[];
   activeStageId?: string | null;
   onSelectStage?: (id: string) => void;
@@ -79,6 +81,7 @@ export function Workbench(props: WorkbenchProps) {
   const [full, setFull] = useState(false);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [openItems, setOpenItems] = useState<Set<string>>(() => new Set());
   const [openStages, setOpenStages] = useState<Set<string>>(() => new Set(props.activeStageId ? [props.activeStageId] : []));
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const loadedRef = useRef(loaded); loadedRef.current = loaded;
@@ -190,12 +193,40 @@ export function Workbench(props: WorkbenchProps) {
     setOpenStages(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   }
 
+  function toggleItem(key: string) {
+    setOpenItems(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  }
+  function renderItem(key: string, item: WbStageItem) {
+    const target = item.openPath && byPath.has(item.openPath) ? item.openPath : null;
+    const kids = item.children ?? [];
+    const childOpen = openItems.has(key);
+    const inner = <>
+      <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
+      <span className="wb-sub-text"><span className="wb-sub-label">{item.label}</span>{(item.detail || item.time) && <small>{item.detail}{item.detail && item.time ? ' · ' : ''}{item.time && <time>{item.time}</time>}</small>}</span>
+      {target && <Icon name="chevron-right" size={12} className="wb-sub-go" />}
+    </>;
+    const row = target
+      ? <button type="button" className={`wb-sub${active === target ? ' is-on' : ''}`} onClick={() => open(target)} title={`打开 ${baseName(target)}`}>{inner}</button>
+      : kids.length > 0
+        ? <button type="button" className="wb-sub" onClick={() => toggleItem(key)}>{inner}</button>
+        : <div className="wb-sub">{inner}</div>;
+    if (kids.length === 0) return <li key={item.id}>{row}</li>;
+    return <li key={item.id} className="wb-item-parent">
+      <div className="wb-item-row">
+        {row}
+        <button type="button" className={`wb-stage-toggle wb-item-toggle${childOpen ? ' is-open' : ''}`} aria-expanded={childOpen}
+          aria-label={`${childOpen ? '收起' : '展开'}「${item.label}」的 ${kids.length} 个子步骤`} onClick={() => toggleItem(key)}><Icon name="chevron-down" size={13} /></button>
+      </div>
+      {childOpen && <ul className="wb-substeps wb-children">{kids.map(kid => renderItem(`${key}/${kid.id}`, kid))}</ul>}
+    </li>;
+  }
+
   const activeFile = active !== null ? byPath.get(active) ?? null : null;
   const activeEntry = active !== null ? loaded[active] : undefined;
   const fileCount = files?.length ?? 0;
   const folderCount = countFolders(allTree);
 
-  return <div className="wb">
+  return <div className={`wb${props.railHead ? ' is-app' : ''}`}>
     <header className="wb-head">
       <div className="wb-head-main">
         {props.eyebrow && <p className="wb-eyebrow">{props.eyebrow}</p>}
@@ -210,13 +241,17 @@ export function Workbench(props: WorkbenchProps) {
 
     <div className={`wb-grid${full ? ' is-full' : ''}`}>
       <nav className="wb-rail" aria-label="阶段时间线">
+        {props.railHead && <div className="wb-rail-head drag">{props.railHead}</div>}
         {props.progress && <p className="wb-progress">{props.progress}</p>}
         <ol className="wb-stages">
           {stages.map((stage, i) => {
             const isActive = stage.id === props.activeStageId;
             const expanded = openStages.has(stage.id) && (stage.items?.length ?? 0) > 0;
             const hasItems = (stage.items?.length ?? 0) > 0;
-            return <li key={stage.id} className={`wb-stage is-${stage.mark}${isActive ? ' is-active' : ''}`}>
+            const newGroup = stage.group && stage.group !== stages[i - 1]?.group ? stage.group : null;
+            return <Fragment key={stage.id}>
+              {newGroup && <li className="wb-group" role="presentation">{newGroup}</li>}
+              <li className={`wb-stage is-${stage.mark}${isActive ? ' is-active' : ''}`}>
               <div className="wb-stage-row">
                 <button type="button" className="wb-stage-head" aria-current={isActive ? 'step' : undefined}
                   disabled={stage.disabled || props.stagesBusy || (!props.onSelectStage && !hasItems)}
@@ -230,21 +265,10 @@ export function Workbench(props: WorkbenchProps) {
                 {hasItems && <button type="button" className={`wb-stage-toggle${expanded ? ' is-open' : ''}`} aria-expanded={expanded} aria-label={`${expanded ? '收起' : '展开'}「${stage.title}」的子步骤`} onClick={() => toggleStage(stage.id)}><Icon name="chevron-down" size={13} /></button>}
               </div>
               {expanded && <ul className="wb-substeps">
-                {stage.items!.map(item => {
-                  const target = item.openPath && byPath.has(item.openPath) ? item.openPath : null;
-                  const inner = <>
-                    <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
-                    <span className="wb-sub-text"><span className="wb-sub-label">{item.label}</span>{(item.detail || item.time) && <small>{item.detail}{item.detail && item.time ? ' · ' : ''}{item.time && <time>{item.time}</time>}</small>}</span>
-                    {target && <Icon name="chevron-right" size={12} className="wb-sub-go" />}
-                  </>;
-                  return <li key={item.id}>
-                    {target
-                      ? <button type="button" className={`wb-sub${active === target ? ' is-on' : ''}`} onClick={() => open(target)} title={`打开 ${baseName(target)}`}>{inner}</button>
-                      : <div className="wb-sub">{inner}</div>}
-                  </li>;
-                })}
+                {stage.items!.map(item => renderItem(`${stage.id}/${item.id}`, item))}
               </ul>}
-            </li>;
+              </li>
+            </Fragment>;
           })}
         </ol>
       </nav>

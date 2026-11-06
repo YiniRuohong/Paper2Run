@@ -5,6 +5,7 @@ import ts from 'typescript';
 import vm from 'node:vm';
 import * as helpers from '../src/features/autonomous/config.ts';
 import * as stages from '../src/features/autonomous/stages.ts';
+import * as errors from '../src/features/autonomous/errors.ts';
 import { ApiError } from '../src/api-client/client.ts';
 
 // Shallow-render TaskPage in a VM: React hooks and every child component are
@@ -52,6 +53,7 @@ async function harness(options = {}) {
     react,
     './config': helpers,
     './stages': stages,
+    './errors': errors,
     '../../api-client/autonomous': { createAutonomousApi: () => api, ApiError },
     '../../ui/workbench/Workbench': { Workbench: box('Workbench') },
     '../../ui/Card': { Badge: box('Badge'), Card: box('Card'), CardHeader: box('CardHeader') },
