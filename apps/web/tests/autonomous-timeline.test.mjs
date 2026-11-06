@@ -361,3 +361,19 @@ test('a second note ends the previous group and a phase change ends the group', 
   assert.equal(plan[2].children.length, 1);
   assert.equal(byId(stages).execute.items[0].children, undefined, 'execute is a new phase, not nested under the plan note');
 });
+
+test('the truncation note counts only capped top-level items, not nested children', () => {
+  const reads = (from, n) => Array.from({ length: n }, (_, i) => tool(from + i, `r${from + i}`, 'read', { path: `f${i}.md` }));
+  const leave = seq => tool(seq, 'w', 'write', { path: 'x.py' }); // move on so plan is no longer the active phase
+  const nested = [ev(0, 'protocol_approved', { protocol_version: 'v1' }), ev(0, 'progress_noted', { phase: 'a', summary: 'one' }), ...reads(1, 20), leave(30)];
+  const nestedPlan = byId(buildStages({ id: 't', state: 'running' }, nested).stages).plan;
+  assert.equal(nestedPlan.items.length, 2);
+  assert.equal(nestedPlan.items[1].children.length, 20);
+  assert.match(nestedPlan.summary, /22 条记录/);
+  assert.doesNotMatch(nestedPlan.summary, /显示最近 14 条/, 'nothing was cut, so no truncation claim');
+  const flat = [...reads(1, 15), leave(30)];
+  const flatPlan = byId(buildStages({ id: 't', state: 'running' }, flat).stages).plan;
+  assert.equal(flatPlan.items.length, 14);
+  assert.match(flatPlan.summary, /15 条记录/);
+  assert.match(flatPlan.summary, /显示最近 14 条/);
+});

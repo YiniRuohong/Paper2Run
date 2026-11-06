@@ -244,7 +244,8 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
   };
   const stages = PHASES.map(phase => {
     const idx = order.indexOf(phase.id);
-    const list = items.get(phase.id)!.slice(-14);
+    const all = items.get(phase.id)!;
+    const list = all.slice(-14);
     const isStarted = started.has(phase.id);
     const liveActive = idx === activeIdx && !finished;
     let mark: StageMark;
@@ -256,10 +257,10 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
     else if (!finished) mark = task?.pending_decision != null || task?.state === 'paused' || task?.state === 'blocked' ? 'attention' : running ? 'running' : 'current';
     else if (failed.has(phase.id) || task?.state === 'failed' || task?.outcome === 'blocked_by_safety') mark = 'failed';
     else mark = hasOutcome || task?.state === 'completed' || task?.state === 'succeeded' ? 'done' : 'attention';
-    const count = items.get(phase.id)!.reduce((n, item) => n + 1 + (item.children?.length ?? 0), 0);
+    const count = all.reduce((n, item) => n + 1 + (item.children?.length ?? 0), 0);
     const note = phase.id === active ? notes.get(active) : undefined;
     const summary = note ? `Pi 自报 · ${short(note.phase, 24)}：${short(note.summary, 80)}`
-      : isStarted ? `${count} 条记录${count > 14 ? '（显示最近 14 条）' : ''}` : phase.idle;
+      : isStarted ? `${count} 条记录${all.length > list.length ? '（显示最近 14 条）' : ''}` : phase.idle;
     return { id: phase.id, title: phase.title, mark, summary, items: list, disabled: list.length === 0 };
   });
   return { stages, active, started };
