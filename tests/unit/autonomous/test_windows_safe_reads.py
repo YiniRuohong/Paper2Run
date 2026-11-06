@@ -50,6 +50,23 @@ def swap_before_open(monkeypatch, path, tmp_path, content):
     monkeypatch.setattr(os, "open", swapping_open)
 
 
+def posix_final_path_of_fd(fd):
+    """POSIX stand-in for GetFinalPathNameByHandleW: the path the kernel holds for this open fd."""
+    import sys
+    if sys.platform == "darwin":
+        import fcntl
+        return fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0].decode()
+    return os.readlink(f"/proc/self/fd/{fd}")
+
+
+@pytest.fixture(autouse=True)
+def final_path_seams(monkeypatch):
+    # The real seams call kernel32 through ctypes; on POSIX they are replaced by
+    # handle-bound equivalents so the forced Windows branch runs end to end.
+    monkeypatch.setattr(safe_read, "_final_path_of_fd", posix_final_path_of_fd)
+    monkeypatch.setattr(safe_read, "_final_path_of_dir", lambda path: os.path.realpath(path))
+
+
 @pytest.fixture
 def windows_evaluation(monkeypatch):
     monkeypatch.setattr(evaluation, "_read_mode", lambda: "windows")
@@ -116,13 +133,51 @@ def test_windows_refuses_file_swapped_after_check(tmp_path, monkeypatch, windows
         evaluation.evaluate_artifacts(frozen(), tmp_path)
 
 
-def test_windows_refuses_final_path_outside_root(tmp_path, monkeypatch, windows_evaluation):
+def test_windows_refuses_handle_final_path_outside_root(tmp_path, monkeypatch, windows_evaluation):
+    # The identity check passes (same file was opened), but the open handle's
+    # final path is outside the root: containment is bound to the handle.
     artifacts(tmp_path)
-    real_realpath = os.path.realpath
     outside = str(tmp_path.parent / "elsewhere" / "labels.json")
-    monkeypatch.setattr(os.path, "realpath", lambda value, **kw: outside if os.fspath(value).endswith("labels.json") else real_realpath(value, **kw))
+    seen = []
+
+    def final(fd):
+        path = posix_final_path_of_fd(fd)
+        seen.append(path)
+        return outside if path.endswith("labels.json") else path
+    monkeypatch.setattr(safe_read, "_final_path_of_fd", final)
+    # A name-based realpath check alone would pass here.
+    assert os.path.realpath(tmp_path / "labels.json").startswith(os.path.realpath(tmp_path))
     with pytest.raises(ValueError, match="outside"):
         evaluation.evaluate_artifacts(frozen(), tmp_path)
+    assert any(path.endswith("labels.json") for path in seen)
+
+
+def test_windows_final_path_failure_fails_closed(tmp_path, monkeypatch, windows_evaluation):
+    artifacts(tmp_path)
+
+    def broken(fd):
+        raise OSError(6, "GetFinalPathNameByHandleW failed")
+    monkeypatch.setattr(safe_read, "_final_path_of_fd", broken)
+    with pytest.raises(ValueError, match="unsafe"):
+        evaluation.evaluate_artifacts(frozen(), tmp_path)
+
+
+def test_windows_root_final_path_is_resolved_once_per_open(tmp_path, monkeypatch):
+    (tmp_path / "a.json").write_text("{}")
+    calls = []
+    monkeypatch.setattr(safe_read, "_final_path_of_dir", lambda path: calls.append(path) or os.path.realpath(path))
+    fd = safe_read.open_below_root_windows(tmp_path, ["a.json"])
+    os.close(fd)
+    assert calls == [tmp_path]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("\\\\?\\C:\\Users\\me\\p2r\\a.json", "C:\\Users\\me\\p2r\\a.json"),
+    ("\\\\?\\UNC\\server\\share\\a.json", "\\\\server\\share\\a.json"),
+    ("C:\\plain\\a.json", "C:\\plain\\a.json"),
+])
+def test_extended_length_prefix_is_removed(raw, expected):
+    assert safe_read.strip_extended_prefix(raw) == expected
 
 
 def test_windows_refuses_relative_or_traversing_root(windows_evaluation):

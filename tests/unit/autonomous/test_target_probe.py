@@ -176,6 +176,31 @@ def test_requested_gpu_not_observed_is_missing_and_observed_gpu_is_listed():
     assert result["gpu"] == observed and result["missing"] == [] and result["isolation"]["verified"] is True
 
 
+def test_programming_errors_are_not_reported_as_missing_docker():
+    class Broken(FakeTarget):
+        def probe(self, timeout):
+            raise KeyError("docker_os_type")
+    with pytest.raises(KeyError):
+        run_probe(Broken())
+    with pytest.raises(KeyError):
+        run_probe(KeyError("target"))
+
+
+def test_host_os_error_is_reported_without_blaming_docker():
+    result, _ = run_probe(PermissionError(13, "state dir not writable"))
+    assert result["docker"]["available"] is False and result["isolation"]["verified"] is False
+    assert result["missing"] and not any("Docker" in item for item in result["missing"])
+    assert "state dir" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_gpu_missing_only_when_the_gpu_probe_ran():
+    config = project_config(gpus=["0"])
+    windows_mode = FakeTarget(ready_report(docker_os_type="windows"))
+    result, _ = run_probe(windows_mode, config)
+    assert not any("GPU" in item for item in result["missing"])
+    assert [name for name, _ in windows_mode.calls] == ["probe"]
+
+
 def test_invalid_target_config_is_reported():
     result, _ = run_probe(ExecutionError("workspace must be ...", "invalid_config"))
     assert result["isolation"]["verified"] is False and result["docker"]["available"] is False

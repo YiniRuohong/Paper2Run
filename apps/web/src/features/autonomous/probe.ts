@@ -1,4 +1,4 @@
-import type { TargetProbe } from '../../api-client/autonomous.ts';
+import type { ProjectConfig, TargetProbe } from '../../api-client/autonomous.ts';
 import type { Tone } from '../../ui/Card.tsx';
 
 // 执行位置能力（契约 C6）的纯映射。只呈现后端实际观测到的能力；
@@ -38,12 +38,14 @@ export function parseProbe(value: unknown): TargetProbe | null {
   };
 }
 
-export function probeRows(probe: TargetProbe): ProbeRow[] {
+/** requestedGpus：被探测的那份已保存配置里的 limits.gpu_devices。 */
+export function probeRows(probe: TargetProbe, requestedGpus: readonly string[] = []): ProbeRow[] {
   const { docker, image, isolation, network_policy: network, gpu } = probe;
   const linux = docker.available && docker.os_type === 'linux';
   const rows: ProbeRow[] = [];
+  // 「可用」只说明后端存在且就绪；容器隔离本身在任务准备阶段才验证。
   rows.push(isolation.verified
-    ? { key: 'isolation', label: '隔离后端 Docker', status: '已验证', tone: 'ok', reason: isolation.detail || null }
+    ? { key: 'isolation', label: '隔离后端 Docker', status: '可用', tone: 'ok', reason: isolation.detail || null }
     : { key: 'isolation', label: '隔离后端 Docker', status: '未验证', tone: docker.available ? 'warn' : 'bad', reason: isolation.detail || '探测未给出原因' });
   rows.push(!docker.available
     ? { key: 'docker', label: 'Docker', status: '未检测到', tone: 'bad', reason: 'Docker 未响应探测' }
@@ -59,12 +61,25 @@ export function probeRows(probe: TargetProbe): ProbeRow[] {
       : { key: 'image', label: '实验镜像', status: '缺失', tone: 'warn', reason: `${image.name} 不在执行目标上` });
   rows.push({ key: 'network', label: '网络边界', status: '未验证', tone: 'idle',
     reason: `${network.public_internet ? '配置允许公网访问' : '配置禁止公网访问'}，禁止访问宿主与元数据；${network.detail}` });
+  // 宿主可见不等于容器内可用：不配绿。配置请求了却没观测到，与 missing 一致用 warn。
   rows.push(gpu.length
-    ? { key: 'gpu', label: 'GPU', status: `宿主可见 ${gpu.length} 块`, tone: 'ok', reason: `${[...new Set(gpu.map(item => item.name))].join('、')}；容器内可用性未验证` }
+    ? { key: 'gpu', label: 'GPU', status: `宿主可见 ${gpu.length} 块`, tone: 'idle', reason: `${[...new Set(gpu.map(item => item.name))].join('、')}；容器内可用性未验证` }
     : !linux
       ? { key: 'gpu', label: 'GPU', status: '未验证', tone: 'idle', reason: '执行目标未就绪，未进行 GPU 探测' }
-      : { key: 'gpu', label: 'GPU', status: '未观测到', tone: 'idle', reason: '执行目标上没有可见的 NVIDIA GPU' });
+      : requestedGpus.length
+        ? { key: 'gpu', label: 'GPU', status: '未观测到', tone: 'warn', reason: `配置请求了 GPU 设备 ${requestedGpus.join(',')}，执行目标上没有可见的 NVIDIA GPU` }
+        : { key: 'gpu', label: 'GPU', status: '未观测到', tone: 'idle', reason: '执行目标上没有可见的 NVIDIA GPU' });
   return rows;
+}
+
+/** 探测读取的是已保存配置；表单中任一探测相关字段与之不同，结果就过期了。 */
+export function probeStale(probed: ProjectConfig, current: ProjectConfig): boolean {
+  const key = (config: ProjectConfig) => JSON.stringify([
+    config.target.kind, config.project.workspace, config.target.image,
+    config.target.ssh_config_alias ?? '', config.target.remote_workspace ?? '',
+    config.limits.gpu_devices ?? [], config.network.public_internet,
+  ]);
+  return key(probed) !== key(current);
 }
 
 /** 启动按钮旁的说明。探测只是提示，准备阶段才是真正的关卡，所以不禁用启动。 */

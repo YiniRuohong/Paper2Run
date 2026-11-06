@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseProbe, probeRows, probeMissingNotice, probeMeta, SSH_EXPERIMENTAL } from '../src/features/autonomous/probe.ts';
+import { parseProbe, probeRows, probeMissingNotice, probeMeta, probeStale, SSH_EXPERIMENTAL } from '../src/features/autonomous/probe.ts';
+import { defaultConfig } from '../src/features/autonomous/config.ts';
 
 // C6 probe display: each capability shows only what the backend observed.
 // Unknown or unobserved values say 未验证 with a reason, never a green state.
@@ -17,7 +18,8 @@ const byKey = rows => Object.fromEntries(rows.map(row => [row.key, row]));
 
 test('a ready target: isolation, Docker and image are ok; network is never verified here', () => {
   const rows = byKey(probeRows(parseProbe(ready())));
-  assert.deepEqual([rows.isolation.status, rows.isolation.tone], ['已验证', 'ok']);
+  // 后端存在且就绪：写「可用」，不写「已验证」（隔离本身在 prepare 时才验证）。
+  assert.deepEqual([rows.isolation.status, rows.isolation.tone], ['可用', 'ok']);
   assert.deepEqual([rows.docker.status, rows.docker.tone], ['Linux 容器 · 27.3.1', 'ok']);
   assert.deepEqual([rows.image.status, rows.image.tone], ['已就绪', 'ok']);
   assert.deepEqual([rows.network.status, rows.network.tone], ['未验证', 'idle']);
@@ -55,11 +57,46 @@ test('Windows-container mode and missing image are warnings; unknown OSType stay
   assert.equal(probeMissingNotice(parseProbe({ ...ready(), missing: ['a', 'b'] })), '启动后会在准备阶段失败：a；b');
 });
 
-test('observed GPUs are host visibility only', () => {
-  const rows = byKey(probeRows(parseProbe({ ...ready(), gpu: [{ index: '0', name: 'NVIDIA L4' }, { index: '1', name: 'NVIDIA L4' }] })));
-  assert.equal(rows.gpu.status, '宿主可见 2 块');
+test('observed GPUs are host visibility only and never green', () => {
+  const rows = byKey(probeRows(parseProbe({ ...ready(), gpu: [{ index: '0', name: 'NVIDIA L4' }, { index: '1', name: 'NVIDIA L4' }] }), ['0']));
+  assert.deepEqual([rows.gpu.status, rows.gpu.tone], ['宿主可见 2 块', 'idle']);
   assert.match(rows.gpu.reason, /NVIDIA L4/);
   assert.match(rows.gpu.reason, /容器内可用性未验证/);
+});
+
+test('GPUs requested but not observed are a warning, matching the missing list', () => {
+  const rows = byKey(probeRows(parseProbe(ready()), ['0', '1']));
+  assert.deepEqual([rows.gpu.status, rows.gpu.tone], ['未观测到', 'warn']);
+  assert.match(rows.gpu.reason, /0,1/);
+  // Nothing requested: not observed is just a fact, not a warning.
+  assert.equal(byKey(probeRows(parseProbe(ready()), [])).gpu.tone, 'idle');
+  // The GPU probe did not run without Linux containers: unknown, not a warning.
+  const down = parseProbe({ ...ready(), docker: { available: false, os_type: null, server_version: null } });
+  assert.deepEqual([byKey(probeRows(down, ['0'])).gpu.status, byKey(probeRows(down, ['0'])).gpu.tone], ['未验证', 'idle']);
+});
+
+test('the probe is stale when any probe-relevant field differs from the probed config', () => {
+  const probed = { ...defaultConfig('p1'), project: { id: 'p1', workspace: '/data/ws' } };
+  assert.equal(probeStale(probed, structuredClone(probed)), false);
+  // Fields the probe does not read never make it stale.
+  assert.equal(probeStale(probed, { ...probed, experiment: { ...probed.experiment, objective: 'other' }, limits: { ...probed.limits, max_model_calls: 99 } }), false);
+  const changes = [
+    c => { c.target.kind = 'ssh'; },
+    c => { c.project.workspace = '/data/other'; },
+    c => { c.target.image = 'other:1'; },
+    c => { c.target.ssh_config_alias = 'gpu-box'; },
+    c => { c.target.remote_workspace = '/srv/x'; },
+    c => { c.limits.gpu_devices = ['0']; },
+    c => { c.network.public_internet = false; },
+  ];
+  for (const change of changes) {
+    const current = structuredClone(probed);
+    change(current);
+    assert.equal(probeStale(probed, current), true, String(change));
+  }
+  // Same GPU list in the same order is not a change; an empty SSH field equals an absent one.
+  assert.equal(probeStale({ ...probed, limits: { ...probed.limits, gpu_devices: ['0', '1'] } },
+    { ...probed, limits: { ...probed.limits, gpu_devices: ['0', '1'] }, target: { ...probed.target, ssh_config_alias: '' } }), false);
 });
 
 test('no green for anything the probe could not observe, and copy has no em-dash or emoji', () => {

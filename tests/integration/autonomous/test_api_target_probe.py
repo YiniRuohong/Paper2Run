@@ -1,6 +1,8 @@
 """HTTP wiring of the C6 target probe with a fake execution target (no Docker)."""
 from __future__ import annotations
 
+import pytest
+
 from .test_api import BASE, client, config, write  # noqa: F401  (client is a fixture)
 
 
@@ -36,16 +38,26 @@ def test_probe_requires_saved_config_then_reports_observations(client):
     assert cfg["workspace"].endswith("workspace") and "target-probes" in str(state_dir)
 
 
-def test_probe_refuses_cross_site_requests(client):
-    # The probe runs host commands (docker, ssh); a foreign page must not trigger it blind.
+@pytest.mark.parametrize("site", ["cross-site", "same-site", "Cross-Site", "SAME-SITE"])
+def test_probe_refuses_cross_and_same_site_requests(client, site):
+    # The probe runs host commands (docker, ssh); another site, including a
+    # sibling subdomain or another loopback port, must not trigger it blind.
     service = client.app.state.runtime["autonomous_service"]
     service.target_factory = FakeTarget
     assert write(client, "PUT", "/projects/project/config", {"config": config()}).status_code == 200
     FakeTarget.built.clear()
-    refused = client.get(BASE + "/projects/project/target/probe", headers={"Sec-Fetch-Site": "cross-site"})
+    refused = client.get(BASE + "/projects/project/target/probe", headers={"Sec-Fetch-Site": site})
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "CSRF_FAILED"
     assert FakeTarget.built == []
-    assert client.get(BASE + "/projects/project/target/probe", headers={"Sec-Fetch-Site": "same-origin"}).status_code == 200
+
+
+@pytest.mark.parametrize("site", ["same-origin", "none", None])
+def test_probe_allows_same_origin_and_direct_requests(client, site):
+    service = client.app.state.runtime["autonomous_service"]
+    service.target_factory = FakeTarget
+    assert write(client, "PUT", "/projects/project/config", {"config": config()}).status_code == 200
+    headers = {} if site is None else {"Sec-Fetch-Site": site}
+    assert client.get(BASE + "/projects/project/target/probe", headers=headers).status_code == 200
 
 
 def test_probe_needs_membership_and_strict_query(client):

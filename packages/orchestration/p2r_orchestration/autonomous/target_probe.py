@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import sys
 
+from p2r_sandbox.autonomous import ExecutionError
+
 PROBE_TIMEOUT_SECONDS = 5  # per Docker call; three calls plus the GPU query stay under ~20 s
 GPU_TIMEOUT_SECONDS = 4
 NETWORK_DETAIL = "隔离规则在任务启动时由容器内探针验证"
@@ -54,17 +56,22 @@ def probe_target(config: dict, factory, state_dir, *, platform: str | None = Non
     docker = {"available": False, "os_type": None, "server_version": None}
     present, gpus, missing = False, [], []
     detail = ""
+    target_cfg = target_config(config)
     try:
-        target = factory(target_config(config), state_dir)
+        target = factory(target_cfg, state_dir)
         report = target.probe(timeout=PROBE_TIMEOUT_SECONDS)
-    except Exception as exc:  # ExecutionError from the target, or a factory failure
-        code = getattr(exc, "code", "probe_failed")
-        if code == "invalid_config":
+    except ExecutionError as exc:
+        # _host already turns OSError and subprocess.TimeoutExpired into ExecutionError.
+        if exc.code == "invalid_config":
             detail = "执行目标配置无效"
             missing.append("执行目标配置无效：请检查工作区路径与 SSH 别名后保存配置")
         else:
-            detail = f"未检测到可用的 Docker（{code}）"
-            missing.append(_docker_missing(kind, code))
+            detail = f"未检测到可用的 Docker（{exc.code}）"
+            missing.append(_docker_missing(kind, exc.code))
+    except OSError:
+        # Host-side failure before any Docker call (e.g. the probe state dir); not a Docker verdict.
+        detail = "本机无法运行探测"
+        missing.append("本机无法运行执行目标探测：请检查数据目录是否可写")
     else:
         docker.update(available=True, os_type=report.get("docker_os_type"),
                       server_version=report.get("docker_server_version"))
@@ -80,7 +87,8 @@ def probe_target(config: dict, factory, state_dir, *, platform: str | None = Non
             missing.append(f"缺少实验镜像 {image}：请在执行目标上运行 bash scripts/autonomous/build-image.sh")
         if docker["os_type"] == "linux":
             gpus = target.observe_gpus(timeout=GPU_TIMEOUT_SECONDS)
-    if requested_gpus and not gpus and docker["available"]:
+    # Only a GPU probe that actually ran can say the requested GPUs are absent.
+    if requested_gpus and not gpus and docker["os_type"] == "linux":
         missing.append("配置请求了 GPU 设备，但执行目标上未观测到 NVIDIA GPU")
     verified = docker["available"] and docker["os_type"] == "linux" and present
     if verified:

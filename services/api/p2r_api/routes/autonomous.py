@@ -202,8 +202,9 @@ def get_config(project_id: str, request: Request):
 def probe_target(project_id: str, request: Request):
     """C6: capabilities of the latest saved target. Observed facts only; never creates a container."""
     _strict_query(request, ())
-    # It runs host commands (docker, ssh): a cross-site page must not trigger it blind.
-    if request.headers.get("sec-fetch-site") == "cross-site":
+    # It runs host commands (docker, ssh): another site, including another
+    # loopback port or a sibling subdomain (same-site), must not trigger it blind.
+    if request.headers.get("sec-fetch-site", "").lower() in ("cross-site", "same-site"):
         _error("CSRF_FAILED", "cross-site target probe refused", status=403)
     actor, svc = actor_id(request), service(request)
     with svc.lock, svc.sessions() as db:

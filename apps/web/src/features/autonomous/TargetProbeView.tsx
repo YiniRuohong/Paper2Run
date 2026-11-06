@@ -1,4 +1,4 @@
-import type { TargetProbe } from '../../api-client/autonomous';
+import type { ProjectConfig, TargetProbe } from '../../api-client/autonomous';
 import { Badge, Dot, StatusWord } from '../../ui/Card';
 import { Icon } from '../../ui/Icon';
 import { probeMeta, probeRows, SSH_EXPERIMENTAL } from './probe';
@@ -6,7 +6,7 @@ import { probeMeta, probeRows, SSH_EXPERIMENTAL } from './probe';
 export type ProbeState =
   | { phase: 'idle' }
   | { phase: 'loading' }
-  | { phase: 'ready'; probe: TargetProbe; version: number | undefined }
+  | { phase: 'ready'; probe: TargetProbe; version: number; config: ProjectConfig }
   | { phase: 'error'; error: string };
 
 // 执行位置能力（P1-4 / 契约 C6）：只显示探测确认过的能力，其余写「未验证」并说明原因。
@@ -38,7 +38,7 @@ export default function TargetProbeView({ state, ssh, disabledReason, onProbe }:
     </div>}
     {state.phase === 'ready' && <>
       <ul className="ui-list" aria-label="执行位置能力">
-        {probeRows(state.probe).map(row => <li key={row.key} className="ui-row">
+        {probeRows(state.probe, state.config.limits.gpu_devices ?? []).map(row => <li key={row.key} className="ui-row">
           <span className="ui-row-main">
             <span className="ui-row-title">{row.label}</span>
             {row.reason && <span className="ui-row-sub">{row.reason}</span>}
@@ -46,7 +46,7 @@ export default function TargetProbeView({ state, ssh, disabledReason, onProbe }:
           <span className="ui-row-end"><Dot tone={row.tone} /><StatusWord tone={row.tone}>{row.status}</StatusWord></span>
         </li>)}
       </ul>
-      <p className="ui-help auto-probe-meta">{probeMeta(state.probe)}{state.version !== undefined ? `，基于已保存配置 v${state.version}` : ''}</p>
+      <p className="ui-help auto-probe-meta">{probeMeta(state.probe)}，基于已保存配置 v{state.version}</p>
     </>}
   </div>;
 }

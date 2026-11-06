@@ -197,7 +197,7 @@
 **实现状态（2026-11-06）：Windows 按构造支持，未在真实 Windows 机器上验证。** 实现时没有 Windows 机器。下面每一项都在 macOS 上用单元测试强制走 win32 分支来验证（替身 `msvcrt`、伪造的 `st_file_attributes`、写入 ctypes 缓冲区的伪造 `GetAdaptersAddresses` 链表、强制 `_host_is_windows`）。Docker Desktop 的 WSL2 绑定挂载、`msvcrt.locking`、`GetAdaptersAddresses`、Windows OpenSSH 和打包后的 Windows 桌面应用的真实行为都没有经过实机确认。
 
 - 锁：`p2r_orchestration/locks.py`。POSIX 仍是 `O_NOFOLLOW` 加 `fcntl.flock`；Windows 用 `msvcrt.locking` 锁第 0 个字节，阻塞模式轮询 `LK_NBLCK`，释放时先显式解锁再关闭，打开锁文件时拒绝链接、重解析点和被替换的文件。技能注册表锁和运行时租约都改用它。
-- 防链接读取：`p2r_evaluation/safe_read.py`。只要有 `O_NOFOLLOW` 和 `dir_fd` 就走原来的 POSIX 路径，不做任何放宽。Windows 上逐级 `lstat`，拒绝符号链接和重解析点（目录联接也算）；打开后要求 `fstat` 与检查时的 `st_dev`/`st_ino` 一致且非零，并要求 `realpath` 仍在根目录内。评测读取、工作台文件读取与列表、技能注册表的链接检查都用这套规则。两种机制都没有的平台直接拒绝。
+- 防链接读取：`p2r_evaluation/safe_read.py`。只要有 `O_NOFOLLOW` 和 `dir_fd` 就走原来的 POSIX 路径，不做任何放宽。Windows 上逐级 `lstat`，拒绝符号链接和重解析点（目录联接也算）；打开后要求 `fstat` 与检查时的 `st_dev`/`st_ino` 一致且非零，并用 `GetFinalPathNameByHandleW`（`FILE_NAME_NORMALIZED`）取已打开句柄的最终路径，要求它在根目录的最终路径（同样经句柄解析）之内；任一路径解析失败都拒绝。评测读取、工作台文件读取与列表、技能注册表的链接检查都用这套规则。两种机制都没有的平台直接拒绝。
 - 网卡枚举：`_interfaces.py` 在 win32 上调用 `GetAdaptersAddresses`，只取 IPv4 单播地址；缓冲区不够时重试，其他错误或没有地址都拒绝执行。
 - 本地宿主命令：本地目标用 `sys.executable` 运行宿主脚本，SSH 目标仍用 `python3`。Windows 本地工作区必须是盘符绝对路径（拒绝 UNC 共享、相对盘符路径和逗号），`prepare` 的路径检查按 `normcase` 比较 `realpath` 与原路径。绑定挂载仍是单个 argv 元素，不经过 shell。宿主子进程按 UTF-8 解码，Windows 上不弹控制台窗口。
 - 启动器：`main.cjs` 和 `scripts/launch.py` 不再拒绝 Windows，并在所有平台检查 `docker info` 的 OSType。Docker 缺失或处于 Windows 容器模式时只写中文提示，不阻止启动。
@@ -208,7 +208,9 @@
 
 已知限制：
 - 本地工作区只接受盘符路径，UNC 网络共享路径会被拒绝。
+- 路径中的链接如何处理：数据目录在服务启动时、工作区在保存配置时各解析一次真实路径（`Path.resolve()`，按 CPython 文档在 Windows 上会解析符号链接和目录联接，并把 `subst` 盘符换成真实盘符）。因此数据目录前缀里的目录联接或 `subst` 盘符会被换成目标路径，而不是被拒绝；映射的网络驱动器会被解析成 UNC 路径，本地工作区不接受 UNC，所以会被拒绝。解析之后，程序打开的路径（工作区内容、冻结产物、评测目录、锁文件、技能目录）上任何一级出现符号链接、目录联接、挂载点或云文件占位符（都是重解析点）都会被拒绝。没有盘符、以文件夹方式挂载的卷能否被解析掉未经实机确认；未解析时同样按重解析点拒绝。
 - 数据目录或工作区放在 OneDrive 等云同步目录时，文件可能是云文件占位符（重解析点），安全读取会拒绝它们。
+- 安全读取的剩余风险：硬链接不被拒绝（与 POSIX 的 `O_NOFOLLOW` 相同）。根目录内指向外部文件的硬链接，按句柄取到的最终路径仍在根目录内。实验容器只看得到绑定挂载的工作区，无法为宿主上工作区以外的文件创建硬链接。`GetFinalPathNameByHandleW` 在某些卷或网络重定向器上可能失败，此时读取被拒绝。以上都未在真实 NTFS 或 ReFS 上验证。
 - 从 Windows 主机连接 SSH 目标依赖 Windows OpenSSH（`ssh.exe`），未验证；SSH 目标本身必须是 POSIX。
 - 不在 Windows 上验证 GPU（第 2 节）；SSH 远端 GPU 仍是实验性。
 
@@ -253,6 +255,6 @@
 12. 已提交的复核结论在任务停止、暂停或预算耗尽时仍会写入，不会被丢弃后重新付费复核；`facts_message` 在预算耗尽时不抛错（5.5 第 8 步）。
 13. 协议变更的审批有显式决策接口 `POST /api/v1/autonomous/tasks/{task_id}/decisions/{decision_id}`，请求体为 `{action: "approve" | "reject", note?}`（`note` 最长 4000 字符），返回公开任务（5.3）。`decision_id` 必须等于当前 `pending_decision.id`，否则返回 409 `DECISION_MISMATCH`；任务必须处于 `paused`，否则返回 409 `INVALID_STATE`；旧任务、已有结局的任务以及恢复的其余前置条件与恢复共用同一段代码。`approve` 应用提议的协议并写入 `protocol_approved`。`reject` 保留当前协议，写入 `protocol_rejected`（`decision_id`、`proposed_sha256`、`changed`、`note`），并按用户消息的同一条路径把拒绝告知 Pi，然后同样恢复任务。原来的 `control(resume, "approve:<id>")` 仍然有效；存在待审批决策时不带消息的恢复返回 409 `DECISION_PENDING`。
 
-5.10 到 5.12（前端、删除传统模式、Windows）仍是后续工作，本次未改动。
+提交 `d645fe2` 时 5.10 到 5.12（前端、删除传统模式、Windows）尚未开始；之后已在 `feat/v3-integration` 分支完成。其中 Windows 只按构造实现，未实机验证，见 5.11 与下面第 14 条。
 
 14. Windows 移植（5.11）已按构造实现，但没有在真实 Windows 机器上验证；实现状态、单元测试覆盖与限制见 5.11。能力探测（C6）的路径是 `GET /api/v1/autonomous/projects/{project_id}/target/probe`，按项目最近保存的配置探测，而不是 `前端设计/03` 建议的 `/targets/{profile}/probe`。探测从不创建容器，所以网络隔离从不在探测里标为已验证，仍由每个任务的 `prepare` 在容器内验证。

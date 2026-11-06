@@ -100,6 +100,8 @@ class ExecutionTarget:
                      '-o', 'ForwardAgent=no', '-o', 'ClearAllForwardings=yes',
                      '-o', 'ConnectTimeout=10', '--', self.config['ssh_alias'], shlex.join(args)]
         # Docker and SSH speak UTF-8; never decode with a Windows ANSI code page.
+        # errors='replace' is safe only because controller output is ASCII JSON (file
+        # bytes travel base64 and are hash-checked); nothing binary may rely on this text.
         options = {'encoding': 'utf-8', 'errors': 'replace'}
         if _host_is_windows():
             options['creationflags'] = CREATE_NO_WINDOW  # no console window per docker/ssh call
