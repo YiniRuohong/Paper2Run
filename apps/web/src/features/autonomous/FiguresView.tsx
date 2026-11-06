@@ -47,7 +47,7 @@ export function FiguresView({ items, load, compact, onOpen }: {
         const entry = loaded.find(l => l.key === keyOf(file));
         const url = entry && 'url' in entry ? entry.url : null;
         const name = baseName(file.path);
-        return <button type="button" key={keyOf(file)} className="auto-figure-tile" disabled={!url || !onOpen} title={`放大查看 ${name}`} onClick={() => { if (url && onOpen) onOpen(file, url); }}>
+        return <button type="button" key={keyOf(file)} className="auto-figure-tile" disabled={!url || !onOpen} title={`点击放大 ${name}`} onClick={() => { if (url && onOpen) onOpen(file, url); }}>
           <span className="auto-figure-img">
             {!entry && <span className="ui-help">读取中…</span>}
             {entry && 'error' in entry && <span className="ui-help">读取失败，可在右侧文件树打开</span>}

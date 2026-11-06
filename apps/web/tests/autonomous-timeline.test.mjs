@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  PHASES, artifactPath, artifactRound, buildStages, currentProtocolSha, flattenItems, isKeyRun, progressNotes, railItems, specialistCalls, toolLabel, toWbFiles,
+  PHASES, artifactPath, artifactRound, buildStages, currentProtocolSha, flattenItems, isKeyRun, progressNotes, railItems, recentActivity, specialistCalls, toolLabel, toWbFiles,
 } from '../src/features/autonomous/stages.ts';
 
 // The timeline groups the real event journal into phases. It is presentation
@@ -424,4 +424,16 @@ test('the rail keeps nodes only: notes, milestones and script runs; other tool c
   assert.ok(!isKeyRun('execute', { command: '/work/.venv/bin/python -m py_compile /work/run.py' }));
   assert.ok(!isKeyRun('execute', { command: 'ls -la' }));
   assert.ok(stages.length > 0);
+});
+
+test('recent activity lists the newest operations across steps, newest first, with their step', () => {
+  const events = [
+    tool(1, 'a', 'read', { path: 'paper.md' }), done(2, 'a', 'read'),
+    tool(3, 'b', 'execute', { command: 'python train.py' }), done(4, 'b', 'execute'),
+    ev(5, 'artifact_frozen', { name: 'm.json', kind: 'result', protocol_sha256: 'abcdef0123456789', round: 0 }),
+  ];
+  const { operations } = buildStages({ id: 't', state: 'running' }, events);
+  const recent = recentActivity(operations, 2);
+  assert.deepEqual(recent.map(r => r.item.id), ['e5', 't3']);
+  assert.deepEqual(recent.map(r => r.phase), ['evidence', 'execute']);
 });

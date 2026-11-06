@@ -225,3 +225,25 @@ button.ui-row { width: 100%; border: 0; background: transparent; text-align: lef
   .ico.spin, .ui-skel { animation: none; }
   .ui-toast { animation: none; }
 }
+
+/* ---------- lightbox: click an image to zoom it into the middle of the window ---------- */
+.ui-lightbox {
+  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 48px;
+  background: color-mix(in srgb, #000 62%, transparent); cursor: zoom-out; animation: ui-lightbox-fade 180ms var(--ease) both;
+}
+.ui-lightbox-figure { display: grid; justify-items: center; gap: 10px; margin: 0; max-width: 100%; max-height: 100%; min-height: 0; }
+.ui-lightbox-figure img {
+  max-width: min(1400px, calc(100vw - 96px)); max-height: calc(100dvh - 140px); object-fit: contain;
+  border-radius: 12px; background: #fff; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+  animation: ui-lightbox-zoom 240ms var(--ease-expo) both;
+}
+.ui-lightbox-figure figcaption { color: rgba(255, 255, 255, 0.86); font-size: 13px; }
+.ui-lightbox-close {
+  position: fixed; top: 20px; right: 20px; display: grid; place-items: center; width: 38px; height: 38px; padding: 0;
+  border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.14); color: #fff; cursor: pointer;
+}
+.ui-lightbox-close:hover { background: rgba(255, 255, 255, 0.24); }
+.ui-lightbox-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@keyframes ui-lightbox-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ui-lightbox-zoom { from { transform: scale(0.92); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ui-lightbox, .ui-lightbox-figure img { animation: none; } }

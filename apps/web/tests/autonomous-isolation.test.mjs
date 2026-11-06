@@ -88,6 +88,8 @@ async function harness(options = {}) {
     './stepDetail': stepDetail,
     './FiguresView': { FiguresView: box('FiguresView'), pickFigures: items => items.filter(f => /\.png$/.test(f.path)) },
     '../../ui/Toast': { ToastStack: box('ToastStack') },
+    '../../ui/Lightbox': { Lightbox: box('Lightbox') },
+    '../../ui/workbench/tree': { commandName: label => label.replace(/^\$ /, '') },
     './UsageView': { UsageView: box('UsageView') },
     './autonomous.css': {},
   };
@@ -451,4 +453,35 @@ test('the instruction box is folded at the top; send sits to the right of the fi
   const kids = within(row.children).filter(n => n.type === 'input' || n.type === 'button');
   assert.deepEqual(kids.map(n => n.type), ['input', 'button'], 'field then the send button on its right');
   assert.match(JSON.stringify(h.nodes().find(n => n.type === 'ul' && n.props.className === 'auto-sent')), /先跑小数据集/);
+});
+
+test('before the report the left half is a live feed of the newest steps; a figure click zooms it', async () => {
+  const at = (n, t) => ({ ...t, created_at: `2026-11-06T11:0${n}:00Z` });
+  const events = [
+    at(1, { sequence: 1, type: 'tool_started', payload: { id: 'c1', name: 'execute', arguments: { command: 'pip install numpy' } } }),
+    at(2, { sequence: 2, type: 'tool_completed', payload: { id: 'c1', name: 'execute', result: { exit_code: 0 }, is_error: false } }),
+    at(3, { sequence: 3, type: 'tool_started', payload: { id: 'c2', name: 'execute', arguments: { command: 'python train.py' } } }),
+  ];
+  const h = await harness({ events, taskOver: { state: 'running' } });
+  assert.doesNotMatch(h.text(), /报告生成后，结局、结论与指标显示在这里。/, 'no empty placeholder');
+  const feed = h.nodes().find(n => n.type === 'section' && n.props['aria-label'] === '最近动态');
+  assert.ok(feed, 'the live feed is shown');
+  const rows = within(feed.children).filter(n => n.type === 'button' && /auto-feed-row/.test(n.props.className));
+  assert.equal(rows.length, 2);
+  assert.match(JSON.stringify(rows[0].children), /python train\.py/, 'newest first');
+  rows[0].props.onClick(); h.render();
+  assert.equal(drawerOf(h).title, 'title:command', 'a feed row opens its detail');
+  drawerOf(h).onClose(); h.render();
+
+  const figures = h.nodes().find(n => n.type === 'FiguresView');
+  assert.equal(figures.props.compact, true);
+  figures.props.onOpen({ path: 'outputs/curve.png', source: 'workspace' }, 'blob:x'); h.render();
+  const zoom = h.nodes().find(n => n.type === 'Lightbox');
+  assert.deepEqual([zoom.props.url, zoom.props.name], ['blob:x', 'curve.png'], 'the figure zooms in the middle of the page');
+  zoom.props.onClose(); h.render();
+  assert.equal(h.nodes().find(n => n.type === 'Lightbox'), undefined);
+
+  const withReport = await harness({ events, taskOver: { state: 'stopped', report: { status: 'incomplete' } } });
+  assert.ok(withReport.nodes().some(n => n.type === 'ReportBrief'));
+  assert.ok(!withReport.nodes().some(n => n.type === 'section' && n.props['aria-label'] === '最近动态'), 'the report replaces the feed');
 });

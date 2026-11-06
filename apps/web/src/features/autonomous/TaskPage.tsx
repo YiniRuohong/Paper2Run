@@ -5,11 +5,13 @@ import {
 import { createPapersApi, type PapersApi } from '../../api-client/papers';
 import { Workbench, type WbContent, type WbDrawer, type WbFile, type WbStage, type WbStageItem } from '../../ui/workbench/Workbench';
 import { ToastStack, type ToastItem } from '../../ui/Toast';
+import { Lightbox } from '../../ui/Lightbox';
+import { commandName } from '../../ui/workbench/tree';
 import type { ToastTone } from '../../ui/toastTiming';
 import { Badge, Card, CardHeader } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { PHASES, buildStages, currentProtocolSha, flattenItems, progressNotes, railItems, safetyBlock, toWbFiles, type PhaseId } from './stages';
+import { PHASES, buildStages, currentProtocolSha, flattenItems, progressNotes, railItems, recentActivity, safetyBlock, toWbFiles, type PhaseId } from './stages';
 import { ProgressNotes, SpecialistCalls } from './ActivityViews';
 import { decisionSuperseded, decisionVisible, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { errorDetail } from './errors';
@@ -48,8 +50,7 @@ type DrawerState =
   | { kind: 'item'; stageId: string; itemId: string; back?: DrawerState }
   | { kind: 'group'; stageId: string; noteId?: string }
   | { kind: 'stage'; stageId: 'review' | 'report' }
-  | { kind: 'details' } | { kind: 'approval' } | { kind: 'error' }
-  | { kind: 'figure'; path: string; url: string; name: string };
+  | { kind: 'details' } | { kind: 'approval' } | { kind: 'error' };
 
 // 状态说明进入该状态时在右下角弹一次。
 const STATE_HINTS = {
@@ -84,10 +85,12 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const pollError = useRef('');
   const [loadFailed, setLoadFailed] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
+  // 点图表放大：页面正中的大图，Esc 或点击任意处关闭。
+  const [zoom, setZoom] = useState<{ url: string; name: string } | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [keysInjected, setKeysInjected] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState<DrawerState | null>(null);
-  useEffect(() => { setDrawerOpen(null); setToasts([]); setLoadFailed(false); pollError.current = ''; }, [taskId]);
+  useEffect(() => { setDrawerOpen(null); setZoom(null); setToasts([]); setLoadFailed(false); pollError.current = ''; }, [taskId]);
   // 最近一次操作失败的错误码：CREDENTIAL_REQUIRED 时显示「需要恢复」。
   const [lastControlError, setLastControlError] = useState<string | null>(null);
   const [paperTitle, setPaperTitle] = useState<{ projectId: string; name: string } | null>(null);
@@ -280,6 +283,9 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     return { sequence: e.sequence, text: typeof payload.message === 'string' ? payload.message : '', time: e.created_at.slice(11, 16) };
   }).filter(m => m.text);
   const figureFiles = pickFigures(files?.items ?? []);
+  // 报告出来之前，左半边放「最近动态」：最新的操作与进度，随轮询更新，点开看详情。
+  const recent = recentActivity(operations, 8);
+  const stageOfPhase = (phase: PhaseId) => phase === 'setup' ? 'launch' : phase;
 
   const budgetExhausted = [...events].reverse().find(e => e.type === 'budget_exhausted');
   // reason 是 {code, message}（worker.record_budget_cancel）；旧事件可能是字符串。
@@ -362,8 +368,6 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
       <p className="auto-drawer-text">{errorSummary(task.error)}</p>
       <section className="auto-drawer-block"><span className="auto-drawer-label">原始错误</span><pre className="ui-code is-wrap">{pretty(task.error)}</pre></section>
     </> };
-  } else if (drawerOpen?.kind === 'figure') {
-    drawer = { label: '图表', title: drawerOpen.name, onClose: closeDrawer, openPath: drawerOpen.path, body: <img className="auto-drawer-figure" src={drawerOpen.url} alt={drawerOpen.name} /> };
   } else if (task && drawerOpen?.kind === 'stage' && drawerOpen.stageId === 'review') {
     drawer = { label: stepLabel('review'), title: '证据与独立复核', onClose: closeDrawer, body: <>
       {task.report != null && <ReportEvidence report={task.report} />}
@@ -513,11 +517,30 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
         <div className={`auto-results${figureFiles.length > 0 ? ' has-figures' : ''}`}>
           {task.report != null
             ? <ReportBrief report={task.report} onOpen={() => setDrawerOpen({ kind: 'stage', stageId: 'report' })} />
-            : <div className="auto-results-empty"><Icon name="chart" size={22} /><p>报告生成后，结局、结论与指标显示在这里{figureFiles.length > 0 ? '' : '；实验产出的图片也会显示在这里'}。</p></div>}
+            : <section className="auto-feed" aria-label="最近动态">
+              <header className="auto-feed-head">
+                {running && <span className="wb-live-dot" aria-hidden="true" />}<b>最近动态</b>
+                <span className="ui-help">报告生成后这里换成结局、结论与指标</span>
+              </header>
+              {recent.length === 0
+                ? <p className="ui-help auto-feed-empty">智能体开始操作后，这里实时显示最新的进展。</p>
+                : <ul className="auto-feed-list">{recent.map(({ phase, item }) => {
+                  const stageId = stageOfPhase(phase);
+                  const label = item.variant === 'command' ? commandName(item.label) : item.label;
+                  return <li key={item.id}><button type="button" className={`auto-feed-row${item.variant ? ` is-${item.variant}` : ''}`}
+                    onClick={() => setDrawerOpen(item.variant === 'note' ? { kind: 'group', stageId, noteId: item.id } : { kind: 'item', stageId, itemId: item.id })}>
+                    <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
+                    <span className="auto-feed-label" title={label}>{item.variant === 'note' ? <><span className="auto-feed-tag">进度</span>{label}</> : label}</span>
+                    {item.time && <time>{item.time}</time>}
+                  </button></li>;
+                })}</ul>}
+            </section>}
           <FiguresView compact items={files?.items ?? []} load={(file, signal) => api.fileBlob(task.id, { source: file.source, path: file.path }, signal)}
-            onOpen={(file, url) => setDrawerOpen({ kind: 'figure', path: file.path, url, name: file.path.slice(file.path.lastIndexOf('/') + 1) })} />
+            onOpen={(file, url) => setZoom({ url, name: file.path.slice(file.path.lastIndexOf('/') + 1) })} />
         </div>
       </div>}
     </StepFrame>
-  </Workbench><ToastStack items={toasts} onClose={closeToast} /></div>;
+  </Workbench>
+    {zoom && <Lightbox url={zoom.url} name={zoom.name} onClose={() => setZoom(null)} />}
+    <ToastStack items={toasts} onClose={closeToast} /></div>;
 }

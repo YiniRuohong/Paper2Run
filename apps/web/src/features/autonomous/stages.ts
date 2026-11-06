@@ -96,6 +96,16 @@ export function railItems(items: WbStageItem[]): WbStageItem[] {
   return out;
 }
 
+/** 中间栏「最近动态」：全部阶段里最新的操作与节点，新的在前，带上所属阶段（点开时抽屉要用）。 */
+export function recentActivity(operations: Map<PhaseId, WbStageItem[]>, limit = 8): Array<{ phase: PhaseId; item: WbStageItem }> {
+  const sequence = (id: string) => Number(/^[ten](\d+)$/.exec(id)?.[1] ?? -1);
+  return [...operations]
+    .flatMap(([phase, items]) => flattenItems(items).map(item => ({ phase, item })))
+    .filter(entry => sequence(entry.item.id) >= 0)
+    .sort((a, b) => sequence(b.item.id) - sequence(a.item.id))
+    .slice(0, limit);
+}
+
 /** 一组操作（含进度下嵌套的）按时间顺序摊平，供抽屉列出。 */
 export function flattenItems(items: WbStageItem[]): WbStageItem[] {
   return items.flatMap(item => [item, ...flattenItems(item.children ?? [])]);
