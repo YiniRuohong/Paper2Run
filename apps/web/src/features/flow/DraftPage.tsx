@@ -9,6 +9,7 @@ import ModeDialog from '../docparse/ModeDialog';
 import { canParseNow } from '../docparse/docparse';
 import { SETUP_ORDER, draftProgress, newestTaskId, type DraftFacts, type DraftPaper, type DraftProgress, type SetupStepId } from './draft';
 import { loadDraft, type DraftData } from './draftData';
+import { carryNotice, clearNotice, finishUpload, peekNotice } from './draftUpload';
 import RailHead from './RailHead';
 import type { StepFeedback } from './StepFrame';
 import { flowStages, type SetupView } from './timeline';
@@ -50,7 +51,7 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
   const [loading, setLoading] = useState(projectId !== null);
   const [viewing, setViewing] = useState<SetupStepId | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() => peekNotice(projectId));
   const [parseStatus, setParseStatus] = useState<DocParseStatus | null>(null);
   const [modeDialog, setModeDialog] = useState(false);
   const [polling, setPolling] = useState<string | null>(null);
@@ -84,6 +85,8 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
       throw e;
     }
   }, [api, papers, projectId]);
+
+  useEffect(() => { clearNotice(projectId); }, [projectId]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -159,8 +162,17 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     const name = file.name.replace(/\.pdf$/i, '');
     const id = await ensureProject(name);
     const upload = await papers.uploadPaperPdf(id, file, name.trim() ? { titleHint: projectName(name) } : undefined);
-    await startParse(upload.paper_id);
-    await accepted(id);
+    await finishUpload({
+      startParse: () => startParse(upload.paper_id),
+      accepted: async failure => {
+        // On #/new the route change remounts the page, so hand the notice over first.
+        if (failure !== undefined) {
+          const text = `论文已上传，但解析没有开始：${errorDetail(failure)}。可在第 1 步点“开始解析”重试。`;
+          if (projectId) setError(text); else carryNotice(id, text);
+        }
+        await accepted(id);
+      },
+    });
   });
   const submitText = (input: { text: string; titleHint?: string }) => act(async () => {
     const id = await ensureProject(input.titleHint ?? '');
