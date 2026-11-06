@@ -121,3 +121,16 @@ test('app layout keeps the rail spanning every row and its head pinned', async (
   assert.match(head, /background:/);
   assert.doesNotMatch(css.replace(/\.wb\.is-app \.wb-rail-head\s*\{[^}]*\}/, ''), /^\.wb-rail-head\s*\{[^}]*sticky/m, 'plain layout stays unchanged');
 });
+
+test('task page continues the nine-step timeline in the full-bleed layout', async () => {
+  const page = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /flowStages\(/);
+  assert.match(page, /railHead=/);
+  assert.match(page, /<RailHead\b/);
+  assert.doesNotMatch(page, /auto-taskbar/);
+  assert.doesNotMatch(page, /项目任务/);
+  assert.doesNotMatch(page, /export \{ errorDetail \}/);
+  assert.match(page, /auto-live-status/);
+  assert.match(page, /title="详细记录"/);
+  assert.match(page, /进度 · \$\{doneCount\} \/ 9/);
+});

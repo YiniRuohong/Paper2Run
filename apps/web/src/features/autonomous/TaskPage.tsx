@@ -6,19 +6,21 @@ import { Workbench, type WbContent, type WbFile } from '../../ui/workbench/Workb
 import { Badge, Card, CardHeader } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { buildStages, currentProtocolSha, safetyBlock, toWbFiles } from './stages';
+import { currentProtocolSha, progressNotes, safetyBlock, toWbFiles } from './stages';
 import { ProgressNotes, SpecialistCalls } from './ActivityViews';
 import { decisionSuperseded, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { errorDetail } from './errors';
+import RailHead from '../flow/RailHead';
+import { flowStages, type SetupView } from '../flow/timeline';
 import { ApprovalCard } from './ApprovalCard';
 import { CandidateCard } from './CandidateCard';
 import { ReportView } from './ReportView';
 import { UsageView } from './UsageView';
+import '../flow/flow.css';
 import './autonomous.css';
 
 const defaultApi = createAutonomousApi();
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
-export { errorDetail };
 
 type Recovery = { needed: boolean; retainedJobs: string[] };
 
@@ -26,7 +28,6 @@ type Recovery = { needed: boolean; retainedJobs: string[] };
 // 审批、继续、暂停、停止是四个独立动作；报告的程序判定与模型叙述分区。
 export default function TaskPage({ taskId, api = defaultApi }: { taskId: string; api?: AutonomousApi }) {
   const [task, setTask] = useState<AutonomousTask | null>(null);
-  const [tasks, setTasks] = useState<AutonomousTask[]>([]);
   const [events, setEvents] = useState<AutonomousEvent[]>([]);
   const [files, setFiles] = useState<AutonomousFiles | null>(null);
   const [filesError, setFilesError] = useState('');
@@ -39,8 +40,8 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   const [notice, setNotice] = useState('');
   const [keyInput, setKeyInput] = useState('');
   const [keysInjected, setKeysInjected] = useState(false);
-  const taskScope = useRef({ id: taskId, projectId: '' });
-  if (taskScope.current.id !== taskId) taskScope.current = { id: taskId, projectId: '' };
+  const taskScope = useRef({ id: taskId });
+  if (taskScope.current.id !== taskId) taskScope.current = { id: taskId };
   useEffect(() => { setKeysInjected(false); setKeyInput(''); }, [taskId]);
 
   async function act(work: () => Promise<void>) {
@@ -57,7 +58,6 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   function applyTask(scope: typeof taskScope.current, id: string, result: AutonomousTask) {
     if (taskScope.current !== scope || taskScope.current.id !== id || result.id !== id) return false;
     setTask(result);
-    setTasks(old => old.map(item => (item.id === result.id ? result : item)));
     return true;
   }
 
@@ -88,10 +88,6 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
         const [current, stream] = await Promise.all([api.task(taskId, controller.signal), api.events(taskId, cursor, controller.signal)]);
         if (controller.signal.aborted || taskScope.current !== scope || current.id !== scope.id) return;
         setTask(current);
-        setTasks(old => {
-          if (old.some(item => item.id === current.id)) return old.map(item => (item.id === current.id ? current : item));
-          return old;
-        });
         setEvents(old => mergeEvents(old, stream.events));
         cursor = stream.next_cursor;
       } catch (e) {
@@ -103,16 +99,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
     return () => { controller.abort(); clearTimeout(timer); };
   }, [taskId, api]);
 
-  // 同项目的任务列表（切换器用）与 Skills / 模型配置（快照展示与密钥重注入用）。
-  const projectId = task?.project_id ?? '';
-  useEffect(() => {
-    if (!projectId) return;
-    const controller = new AbortController();
-    api.tasks(projectId).then(list => {
-      if (!controller.signal.aborted && (taskScope.current.projectId === '' || taskScope.current.projectId === projectId)) setTasks(list);
-    }).catch(() => { /* 切换器降级为只显示当前任务 */ });
-    return () => controller.abort();
-  }, [projectId, api]);
+  // Skills / 模型配置（快照展示与密钥重注入用）。
   useEffect(() => {
     let alive = true;
     Promise.all([api.capabilities(), api.profiles()]).then(([caps, list]) => {
@@ -138,7 +125,19 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
     return () => controller.abort();
   }, [taskId, filesTick, fileSignal, api]);
 
-  const timeline = buildStages(task, events);
+  // 九步时间线：前四步是已完成的用户步骤（摘要只来自任务快照），后五步由事件归纳。
+  const snapshot = task?.config_snapshot;
+  const setup: SetupView[] = [
+    { id: 'paper', done: !!task, summary: null },
+    { id: 'objective', done: !!task, summary: task?.objective ? task.objective.slice(0, 60) : null },
+    { id: 'model', done: !!task, summary: snapshot?.model?.provider_profile || null },
+    { id: 'launch', done: !!task, summary: !snapshot ? null : snapshot.target?.kind === 'ssh' ? `SSH · ${snapshot.target.ssh_config_alias ?? ''}` : '本地隔离环境' },
+  ];
+  const { stages, activeId, doneCount } = flowStages({ setup, current: null, task, events });
+  const stepNumber = stages.findIndex(st => st.id === activeId) + 1;
+  const activeTitle = stages[stepNumber - 1]?.title ?? '';
+  const latestNote = progressNotes(events)[0]?.summary ?? null;
+  const toolSteps = events.filter(e => e.type === 'tool_started').length;
   const eventsLog = events.map(e => `#${e.sequence}  ${e.created_at}  ${e.type}  ${JSON.stringify(e.payload)}`).join('\n');
   const records = new Map<string, string>();
   if (task && events.length) records.set('logs/events.log', eventsLog);
@@ -200,7 +199,8 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   const taskSkills = task?.config_snapshot?.harness?.skills ?? [];
   const skillSnapshot = taskSkills.map(id => skills.find(s => s.id === id) ?? null);
 
-  return <Workbench
+  return <div className="flow-page"><Workbench
+    railHead={<RailHead />}
     eyebrow={<>自主实验{task ? <> · <span className="ui-mono">{task.id}</span></> : null}</>}
     title={task?.objective ?? '正在读取任务…'}
     status={task && display ? {
@@ -212,9 +212,9 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
       {display.caption && <span>{display.caption}</span>}
       <span>更新于 {task.updated_at || '—'}</span><span>{events.length} 条事件</span>
     </> : <span>任务的阶段、命令输出和产物会在这里持续更新。</span>}
-    progress={<span className="auto-progress">进度 · {timeline.stages.filter(st => st.mark === 'done').length} / {timeline.stages.length}<Badge tone="idle" title="阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定">按事件归纳</Badge></span>}
-    stages={timeline.stages}
-    activeStageId={task ? timeline.active : null}
+    progress={<span className="auto-progress">{`进度 · ${doneCount} / 9`}<Badge tone="idle" title="阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定">按事件归纳</Badge></span>}
+    stages={stages}
+    activeStageId={task ? activeId : null}
     files={wbFiles}
     filesError={filesError || null}
     filesEmpty="还没有文件。实验写入工作区或冻结证据后会出现在这里。"
@@ -223,26 +223,19 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
     loadFile={loadFile}
   >
     <div className="auto-live">
-      <div className="auto-taskbar">
-        <label className="ui-field auto-taskbar-field"><span className="ui-field-label">项目任务</span>
-          <select value={taskId} disabled={busy} onChange={e => { if (e.target.value) window.location.hash = `#/task/${encodeURIComponent(e.target.value)}`; }}>
-            {!tasks.some(t => t.id === taskId) && <option value={taskId}>{taskId}</option>}
-            {tasks.map(t => <option key={t.id} value={t.id}>{t.objective}（{taskDisplay(t).text}）</option>)}
-          </select>
-        </label>
-        <a className="btn btn-secondary" href="#/new">新建实验</a>
-      </div>
-
       {error && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" /><span>{error}</span><button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>重新读取</button></div>}
       {notice && <p role="status" className="ui-callout tone-idle"><Icon name="info" /><span>{notice}</span></p>}
 
       {!task && !error && <div className="wb-empty-live"><span>正在读取任务…</span></div>}
 
       {task && <>
-        <p className="wb-live-head">
-          {running && <span className="wb-live-dot" aria-hidden="true" />}
-          <b>{display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {timeline.stages.findIndex(st => st.id === timeline.active) + 1}/{timeline.stages.length} 阶段 · {events.length} 条事件 · 断线重连会从事件游标继续读取
-        </p>
+        <div className="auto-live-status" role="status">
+          <p className="wb-live-head">
+            {running && <span className="wb-live-dot" aria-hidden="true" />}
+            <b>{running ? '运行中' : display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {stepNumber} / 9 步 · {activeTitle} · {toolSteps} 步操作
+          </p>
+          {latestNote && <p className="ui-help">正在：{latestNote}</p>}
+        </div>
 
         {safety && <div className="ui-callout tone-bad" role="alert"><Icon name="shield" />
           <span>容器隔离校验失败，任务已安全终止，不能恢复。代码：<code className="ui-mono">{safety.code ?? '未知'}</code>。仍可导出 ZIP 保留证据。</span>
@@ -311,31 +304,31 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
           </div>
         </div>
 
-        <ProgressNotes events={events} />
-
         <CandidateCard task={task} events={events} />
 
         {task.report != null && <ReportView report={task.report} />}
 
-        <UsageView usage={(task.usage ?? {}) as Record<string, unknown>} limits={task.config_snapshot?.limits as unknown as Record<string, unknown> | undefined} budgetExhausted={budgetReason} />
+        <Disclosure variant="card" title="详细记录">
+          <ProgressNotes events={events} />
+          <UsageView usage={(task.usage ?? {}) as Record<string, unknown>} limits={task.config_snapshot?.limits as unknown as Record<string, unknown> | undefined} budgetExhausted={budgetReason} />
 
-        <SpecialistCalls events={events} task={task} configured={task.config_snapshot?.specialists?.length ?? 0} />
+          <SpecialistCalls events={events} task={task} configured={task.config_snapshot?.specialists?.length ?? 0} />
 
-        {taskSkills.length > 0 && <Card>
-          <CardHeader icon="spark" title="本任务固定的 Skills 快照" subtitle="运行期间固定使用以下版本，不随后续更新变化。" />
-          <div className="ui-card-section">
-            <ul className="ui-list">
-              {taskSkills.map((id, i) => {
-                const skill = skillSnapshot[i];
-                return <li key={id} className="ui-row">
-                  <span className="ui-row-main"><span className="ui-row-title">{skill?.name ?? id}</span>
-                    <span className="ui-row-sub ui-mono">{id}</span></span>
-                  <span className="ui-row-end">{skill ? <Badge>{skill.version}</Badge> : <Badge tone="idle">版本未知</Badge>}</span>
-                </li>;
-              })}
-            </ul>
-          </div>
-        </Card>}
+          {taskSkills.length > 0 && <Card>
+            <CardHeader icon="spark" title="本任务固定的 Skills 快照" subtitle="运行期间固定使用以下版本，不随后续更新变化。" />
+            <div className="ui-card-section">
+              <ul className="ui-list">
+                {taskSkills.map((id, i) => {
+                  const skill = skillSnapshot[i];
+                  return <li key={id} className="ui-row">
+                    <span className="ui-row-main"><span className="ui-row-title">{skill?.name ?? id}</span>
+                      <span className="ui-row-sub ui-mono">{id}</span></span>
+                    <span className="ui-row-end">{skill ? <Badge>{skill.version}</Badge> : <Badge tone="idle">版本未知</Badge>}</span>
+                  </li>;
+                })}
+              </ul>
+            </div>
+          </Card>}
 
         <Disclosure variant="card" title="任务配置快照">
           <pre className="ui-code">{pretty(task.config_snapshot)}</pre>
@@ -352,7 +345,8 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
             </li>)}
           </ul>}
         </Disclosure>
+        </Disclosure>
       </>}
     </div>
-  </Workbench>;
+  </Workbench></div>;
 }
