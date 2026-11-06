@@ -37,16 +37,21 @@ export interface RecentTask {
   updatedAt: string;
 }
 
+/** 草稿：读取成功但还没有任何自主任务的项目。 */
+export interface RecentDraft { projectId: string; name: string; updatedAt: string }
+
 // 读取全部项目的自主任务，按更新时间倒序。单个项目失败不拖垮整页：
-// 失败的项目跳过，并在返回值里计数。
-export async function loadAutonomousTasks(api: AutonomousApi, papers: PapersApi, signal?: AbortSignal): Promise<{ tasks: RecentTask[]; failedProjects: number }> {
+// 失败的项目跳过，并在返回值里计数。任务数为 0 的项目作为草稿返回。
+export async function loadAutonomousTasks(api: AutonomousApi, papers: PapersApi, signal?: AbortSignal): Promise<{ tasks: RecentTask[]; drafts: RecentDraft[]; failedProjects: number }> {
   const projects = await papers.listProjects(signal);
   const tasks: RecentTask[] = [];
+  const drafts: RecentDraft[] = [];
   let failedProjects = 0;
   await Promise.all(projects.map(async project => {
     try {
       const list = await api.tasks(project.id);
       if (signal?.aborted) return;
+      if (list.length === 0) drafts.push({ projectId: project.id, name: project.name, updatedAt: project.updated_at ?? '' });
       for (const task of list) {
         tasks.push({ id: task.id, projectId: task.project_id || project.id, objective: task.objective, state: task.state, outcome: task.outcome ?? null, updatedAt: task.updated_at ?? task.created_at ?? '' });
       }
@@ -55,7 +60,8 @@ export async function loadAutonomousTasks(api: AutonomousApi, papers: PapersApi,
     }
   }));
   tasks.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-  return { tasks, failedProjects };
+  drafts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return { tasks, drafts, failedProjects };
 }
 
 // Most recent tasks for the sidebar. Read-only; reloads when `signal` changes

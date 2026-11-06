@@ -5,16 +5,22 @@ import { Badge, Card, CardHeader, SectionHead, StatusWord } from '../../ui/Card'
 import { Segmented } from '../../ui/Controls';
 import { Icon } from '../../ui/Icon';
 import { taskBucket, taskDisplay } from '../autonomous/config';
-import { loadAutonomousTasks, type RecentTask } from '../../shell/hooks';
+import { errorDetail } from '../autonomous/errors';
+import { loadDraftFacts } from '../flow/draftData';
+import { draftProgress, SETUP_ORDER, type SetupStepId } from '../flow/draft';
+import { SETUP_TITLES } from '../flow/timeline';
+import { loadAutonomousTasks, type RecentDraft, type RecentTask } from '../../shell/hooks';
+import { draftHref } from '../../shell/routes';
 import { taskHref } from '../../shell/Sidebar';
 
 const defaultApi = createAutonomousApi();
 const defaultPapers = createPapersApi('demo-user');
 
 type Phase = 'loading' | 'ready' | 'error';
-type Filter = 'all' | 'active' | 'done' | 'failed';
+type Filter = 'all' | 'draft' | 'active' | 'done' | 'failed';
 const FILTERS = [
   { value: 'all', label: '全部' },
+  { value: 'draft', label: '草稿' },
   { value: 'active', label: '进行中' },
   { value: 'done', label: '已结束' },
   { value: 'failed', label: '失败' },
@@ -31,10 +37,17 @@ const when = (iso: string) => {
 // 有结局的任务一律算已结束（安全终止归入失败），即使生命周期状态是 paused / stopped。
 const bucket = (task: RecentTask): Filter => taskBucket(task);
 
-// 总览（#/）：全部项目的自主任务列表。只读；新建任务在「新建实验」里完成。
+const DRAFT_LOAD_CONCURRENCY = 3;
+
+// 总览（#/）：全部项目的草稿与自主任务列表。新建任务在「新建实验」里完成；草稿可继续或删除。
 export default function OverviewPage({ api = defaultApi, papers = defaultPapers }: { api?: AutonomousApi; papers?: PapersApi }) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [tasks, setTasks] = useState<RecentTask[]>([]);
+  const [drafts, setDrafts] = useState<RecentDraft[]>([]);
+  // 草稿当前所在步骤；未读到（或读取失败）时只显示「草稿」。
+  const [steps, setSteps] = useState<Record<string, SetupStepId>>({});
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [failedProjects, setFailedProjects] = useState(0);
   const [rev, setRev] = useState(0);
   const [filter, setFilter] = useState<Filter>('all');
@@ -45,6 +58,7 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
     loadAutonomousTasks(api, papers, ctl.signal).then(result => {
       if (ctl.signal.aborted) return;
       setTasks(result.tasks);
+      setDrafts(result.drafts);
       setFailedProjects(result.failedProjects);
       setPhase('ready');
     }).catch(() => {
@@ -52,6 +66,41 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
     });
     return () => ctl.abort();
   }, [api, papers, rev]);
+
+  // 草稿步骤在列表渲染后再逐个读取：模型配置只取一次，并发有上限，刷新或卸载时中止。
+  useEffect(() => {
+    if (drafts.length === 0) return;
+    const ctl = new AbortController();
+    void (async () => {
+      const profiles = await api.profiles().catch(() => []);
+      if (ctl.signal.aborted) return;
+      const queue = [...drafts];
+      const worker = async () => {
+        for (let d = queue.shift(); d && !ctl.signal.aborted; d = queue.shift()) {
+          try {
+            const current = draftProgress(await loadDraftFacts(api, papers, d.projectId, profiles, ctl.signal)).current;
+            if (!ctl.signal.aborted) setSteps(prev => ({ ...prev, [d.projectId]: current }));
+          } catch { /* 读不到步骤时保持「草稿」 */ }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(DRAFT_LOAD_CONCURRENCY, queue.length) }, worker));
+    })();
+    return () => ctl.abort();
+  }, [api, papers, drafts]);
+
+  const removeDraft = async (draft: RecentDraft) => {
+    if (deleting || !window.confirm(`删除草稿「${draft.name || draft.projectId}」？论文和配置将不再显示。`)) return;
+    setDeleting(draft.projectId);
+    setActionError(null);
+    try {
+      await papers.deleteProject(draft.projectId);
+      refresh();
+    } catch (error) {
+      setActionError(errorDetail(error));
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   // 有进行中的任务时每 10 秒自动刷新。
   const hasActive = tasks.some(t => bucket(t) === 'active');
@@ -61,7 +110,8 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
     return () => window.clearInterval(id);
   }, [hasActive, refresh]);
 
-  const visible = tasks.filter(t => filter === 'all' || bucket(t) === filter);
+  const visible = filter === 'draft' ? [] : tasks.filter(t => filter === 'all' || bucket(t) === filter);
+  const visibleDrafts = filter === 'all' || filter === 'draft' ? drafts : [];
   const counts = {
     active: tasks.filter(t => bucket(t) === 'active').length,
     done: tasks.filter(t => bucket(t) === 'done').length,
@@ -73,7 +123,7 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
     <Card aria-busy={loading}>
       <CardHeader as="h1" icon="layers" title="工作区"
         status={loading ? { text: '读取中', tone: 'idle' } : phase === 'error' ? { text: '读取失败', tone: 'bad' } : counts.active > 0 ? { text: `${counts.active} 个任务进行中`, tone: 'run' } : { text: '就绪', tone: 'ok' }}
-        subtitle={loading ? '正在读取任务…' : phase === 'error' ? '暂时无法读取任务。' : `${tasks.length} 个自主实验任务 · ${counts.done} 个已结束 · ${counts.failed} 个失败`}
+        subtitle={loading ? '正在读取任务…' : phase === 'error' ? '暂时无法读取任务。' : `${tasks.length} 个自主实验任务 · ${counts.done} 个已结束 · ${counts.failed} 个失败${drafts.length > 0 ? ` · ${drafts.length} 个草稿` : ''}`}
         actions={<a className="btn btn-primary" href="#/new"><Icon name="plus" size={15} />新建实验</a>} />
     </Card>
 
@@ -87,17 +137,41 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
       <Icon name="alert" /><span>{failedProjects} 个项目的任务未能读取，已显示其余内容。</span>
     </div>}
 
+    {actionError && <div className="ui-callout tone-bad" role="alert">
+      <Icon name="alert" /><span>{actionError}</span>
+    </div>}
+
     {phase !== 'error' && <section aria-labelledby="overview-tasks-h" aria-busy={loading}>
-      <SectionHead id="overview-tasks-h" title="任务" count={loading ? undefined : visible.length}
+      <SectionHead id="overview-tasks-h" title="任务" count={loading ? undefined : visible.length + visibleDrafts.length}
         action={<Segmented label="状态筛选" value={filter} options={FILTERS} onChange={setFilter} />} />
       {loading && <ul className="ui-list" aria-hidden="true">{[0, 1, 2].map(i => <li key={i} className="ui-row"><span className="ui-skel w40" /><span className="ui-skel w20" /></li>)}</ul>}
-      {phase === 'ready' && tasks.length === 0 && <div className="ui-card ui-empty">
+      {visibleDrafts.length > 0 && <ul className="ui-list">
+        {visibleDrafts.map(d => {
+          const step = steps[d.projectId];
+          return <li key={`draft-${d.projectId}`}>
+            <a className="ui-row" href={draftHref(d.projectId)}>
+              <span className="ui-tile" aria-hidden="true"><Icon name="doc" /></span>
+              <span className="ui-row-main">
+                <span className="ui-row-title" title={d.name}>{d.name || '（未命名草稿）'}</span>
+                <span className="ui-row-sub">{step ? `草稿 · 第 ${SETUP_ORDER.indexOf(step) + 1} 步 · ${SETUP_TITLES[step]}` : '草稿'}</span>
+              </span>
+              <span className="ui-row-end">
+                <time>{when(d.updatedAt)}</time>
+                <button type="button" className="btn btn-secondary" disabled={deleting === d.projectId}
+                  onClick={event => { event.preventDefault(); event.stopPropagation(); void removeDraft(d); }}>删除</button>
+                <Icon name="chevron-right" size={14} />
+              </span>
+            </a>
+          </li>;
+        })}
+      </ul>}
+      {phase === 'ready' && tasks.length === 0 && drafts.length === 0 && <div className="ui-card ui-empty">
         <span className="ui-tile"><Icon name="flask" size={18} /></span>
         <h3>还没有自主实验任务</h3>
         <p>上传一篇论文，配置模型与预算后授权启动；AI 会规划、执行并冻结证据，最后给出程序判定的报告。</p>
         <a className="btn btn-primary" href="#/new"><Icon name="plus" size={15} />开始第一个实验</a>
       </div>}
-      {phase === 'ready' && tasks.length > 0 && visible.length === 0 && <div className="ui-card ui-empty">
+      {phase === 'ready' && visible.length + visibleDrafts.length === 0 && (tasks.length > 0 || drafts.length > 0) && <div className="ui-card ui-empty">
         <h3>没有匹配的任务</h3><p>换个筛选条件试试。</p>
         <button type="button" className="btn btn-secondary" onClick={() => setFilter('all')}>显示全部</button>
       </div>}
