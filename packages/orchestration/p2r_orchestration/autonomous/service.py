@@ -258,6 +258,17 @@ class AutonomousService(ControlMixin):
             self.workers[task_id] = {"thread": thread, "bridge": bridge, "target": None}
             thread.start()
 
+    def probe_target(self, project_id, config):
+        """C6: observe the saved target without creating a container. Call outside ``self.lock``."""
+        from .target_probe import probe_target
+        if self.target_factory is None:
+            from p2r_sandbox.autonomous import ExecutionTarget
+            factory = ExecutionTarget
+        else:
+            factory = self.target_factory
+        result = probe_target(config, factory, self.root / "target-probes" / digest(project_id)[:24])
+        return self.profiles.clean(result, bounded=False)
+
     def make_target(self, row):
         if self.target_factory is None:
             from p2r_sandbox.autonomous import ExecutionTarget

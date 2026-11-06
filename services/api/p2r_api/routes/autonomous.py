@@ -198,6 +198,21 @@ def get_config(project_id: str, request: Request):
         return _envelope(request, {"version": row.version, "config": row.config_json})
 
 
+@router.get("/projects/{project_id}/target/probe")
+def probe_target(project_id: str, request: Request):
+    """C6: capabilities of the latest saved target. Observed facts only; never creates a container."""
+    _strict_query(request, ())
+    actor, svc = actor_id(request), service(request)
+    with svc.lock, svc.sessions() as db:
+        require_project_access(db, actor, project_id)
+        row = svc.latest_config(db, project_id)
+        if row is None:
+            _error("RESOURCE_NOT_FOUND", "project configuration not found", status=404)
+        config = json.loads(json.dumps(row.config_json))
+    # Docker/SSH calls run outside the service lock (bounded to about 20 s).
+    return _envelope(request, svc.probe_target(project_id, config))
+
+
 @router.put("/projects/{project_id}/config")
 async def put_config(project_id: str, request: Request):
     return await mutate(request, Configuration,

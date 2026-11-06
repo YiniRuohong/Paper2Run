@@ -107,6 +107,7 @@ KEPT_ROUTES = {
     ("GET", "/api/v1/autonomous/profiles"), ("POST", "/api/v1/autonomous/profiles"),
     ("GET", "/api/v1/autonomous/projects/{project_id}/config"),
     ("PUT", "/api/v1/autonomous/projects/{project_id}/config"),
+    ("GET", "/api/v1/autonomous/projects/{project_id}/target/probe"),
     ("GET", "/api/v1/autonomous/projects/{project_id}/tasks"),
     ("POST", "/api/v1/autonomous/projects/{project_id}/tasks"),
     ("GET", "/api/v1/autonomous/tasks/{task_id}"), ("GET", "/api/v1/autonomous/tasks/{task_id}/events"),

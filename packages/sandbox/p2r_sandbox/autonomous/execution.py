@@ -143,17 +143,32 @@ class ExecutionTarget:
             raise ExecutionError(result.stderr[-16000:], 'execution_error')
         return value
 
-    def probe(self) -> dict:
-        self._docker('info', '--format', '{{.ServerVersion}}')
-        image = self._docker('image', 'inspect', self.image, check=False)
+    def _docker_identity(self, timeout: int) -> dict:
+        # OSType must be linux: Docker Desktop in Windows-container mode cannot run the image.
+        raw = self._docker('info', '--format', '{"os_type":{{json .OSType}},"server_version":{{json .ServerVersion}}}',
+                           timeout=timeout).stdout
+        try:
+            value = json.loads(raw.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        os_type = value.get('os_type') if value.get('os_type') in ('linux', 'windows') else None
+        version = value.get('server_version')
+        return {'docker_os_type': os_type,
+                'docker_server_version': version if isinstance(version, str) and version else None}
+
+    def probe(self, timeout: int = 45) -> dict:
+        identity = self._docker_identity(timeout)
+        image = self._docker('image', 'inspect', self.image, check=False, timeout=timeout)
         report = {'kind': self.kind, 'container': self.container, 'image': self.image,
                   'image_available': image.returncode == 0, 'ready': False,
                   'network_verified': False, 'storage_enforcement': 'observed',
-                  'gpu_devices_requested': self.config.get('gpu_devices', [])}
+                  'gpu_devices_requested': self.config.get('gpu_devices', []), **identity}
         if image.returncode:
             report['blocker'] = 'Image missing. Run: bash scripts/autonomous/build-image.sh (on the Docker target); never auto-pull arbitrary images.'
             return report
-        inspect = self._docker('inspect', self.container, check=False)
+        inspect = self._docker('inspect', self.container, check=False, timeout=timeout)
         if inspect.returncode == 0:
             obj = json.loads(inspect.stdout)[0]
             report['container_running'] = obj['State']['Running']
@@ -164,6 +179,25 @@ class ExecutionTarget:
                 report.update(network=verified, network_verified=self._network_ok(verified))
                 report['ready'] = report['network_verified']
         return report
+
+    def observe_gpus(self, timeout: int = 10) -> list[dict]:
+        """NVIDIA GPUs visible on the target host; [] when none can be observed.
+
+        Host visibility only: this does not prove a container can use them.
+        """
+        try:
+            result = self._host(['nvidia-smi', '--query-gpu=index,name', '--format=csv,noheader'],
+                                check=False, timeout=timeout)
+        except ExecutionError:
+            return []
+        if result.returncode:
+            return []
+        gpus = []
+        for line in result.stdout.splitlines()[:64]:
+            index, _, name = line.partition(',')
+            if index.strip().isdigit() and name.strip():
+                gpus.append({'index': index.strip(), 'name': name.strip()[:128]})
+        return gpus
 
     def _host_addresses(self):
         # getifaddrs covers aliases and additional public management interfaces,
