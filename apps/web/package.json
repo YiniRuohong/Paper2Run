@@ -12,9 +12,12 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
+    "pdfjs-dist": "4.4.168",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-router-dom": "^7.1.0"
+    "react-rnd": "^10.5.3",
+    "react-router-dom": "^7.1.0",
+    "ts-debounce": "^4.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.0",

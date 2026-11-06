@@ -25,8 +25,8 @@ interface PaperOption { id: string; version: string; title: string }
 // 新建实验（#/new）：论文上传与解析、实验配置、授权启动在同一个流程里。
 // 布局（P0-3）：首屏只放论文、实验目标、主模型、执行位置与「授权并启动」；
 // 预算、专家、Skills、协议对象收进 Disclosure。解析失败不允许启动。
-export default function NewExperimentPage({ api = autonomous, papers = papersApi, initialProject = '' }: {
-  api?: AutonomousApi; papers?: PapersApi; initialProject?: string;
+export default function NewExperimentPage({ api = autonomous, papers = papersApi, initialProject = '', initialPaper = '' }: {
+  api?: AutonomousApi; papers?: PapersApi; initialProject?: string; initialPaper?: string;
 }) {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [projectId, setProjectId] = useState(initialProject);
@@ -140,6 +140,29 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
       setPaperOptions(resolved);
     }).catch(e => { if (generation.current === run) setError(errorDetail(e)); });
   }, [projectId, api, papers, runProbe]);
+
+  // 从论文阅读器「复现」跳来（#/new?project=…&paper=…）：切到该项目，论文列表读到后选中它。
+  // 本页打开后保持挂载，所以每次链接变化都要处理，而不只是首次挂载。
+  const pendingPaper = useRef('');
+  useEffect(() => {
+    if (!initialProject || !initialPaper) return;
+    // 已在该项目且列表已读到：直接选中（setProjectId 相同值不会触发重新读取）。
+    if (initialProject === projectId && paperOptions.some(p => p.id === initialPaper)) {
+      pendingPaper.current = '';
+      void selectExistingPaper(initialPaper);
+      return;
+    }
+    pendingPaper.current = initialPaper;
+    setProjectId(initialProject);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialProject, initialPaper]);
+  useEffect(() => {
+    const wanted = pendingPaper.current;
+    if (!wanted || !paperOptions.some(p => p.id === wanted)) return;
+    pendingPaper.current = '';
+    void selectExistingPaper(wanted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paperOptions]);
 
   const update = <K extends keyof ProjectConfig>(name: K, value: ProjectConfig[K]) => setConfig(old => ({ ...old, [name]: value }));
 

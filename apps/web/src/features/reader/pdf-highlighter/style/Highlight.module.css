@@ -1,0 +1,25 @@
+.highlight {
+  position: absolute;
+}
+
+.emoji {
+  position: absolute;
+  color: black;
+  opacity: 1;
+  font-size: 28px;
+}
+
+.parts {
+  opacity: 1;
+}
+
+.part {
+  cursor: pointer;
+  position: absolute;
+  background: var(--hl-soft, rgba(124, 121, 255, 0.28));
+  transition: background 0.3s;
+}
+
+.scrolledTo .part {
+  background: var(--hl-strong, rgba(91, 91, 214, 0.55));
+}

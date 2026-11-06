@@ -12,6 +12,7 @@ import './shell.css';
 //   #/            总览（全部项目的自主任务，只读）
 //   #/new         新建实验（论文上传解析 + 分层配置 + 授权启动，同一流程）
 //   #/task/<id>   任务工作台（阶段时间线 + 实时页签 + 报告 + 用量）
+//   #/reader[/<paperId>]  论文阅读器（PDF 预览 + 批注，书架 = 已上传的 PDF 论文）
 //   #/settings    设置（主题、本地服务、解析模式）
 // 旧链接 #/autonomous 重定向：带 ?task=<id> 去任务页，否则去新建实验。
 const api = createAutonomousApi();
@@ -20,17 +21,25 @@ const OverviewPage = lazy(() => import('../features/overview/OverviewPage'));
 const NewExperimentPage = lazy(() => import('../features/autonomous/NewExperimentPage'));
 const TaskPage = lazy(() => import('../features/autonomous/TaskPage'));
 const Settings = lazy(() => import('../features/settings/Settings'));
+const ReaderPage = lazy(() => import('../features/reader/ReaderPage'));
 
-interface Route { view: View | 'legacy'; taskId: string | null; project: string }
+interface Route { view: View | 'legacy'; taskId: string | null; project: string; paper: string }
 
 const queryOf = (hash: string) => new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '');
 const routeFromHash = (): Route => {
   const h = window.location.hash;
-  if (h.startsWith('#/autonomous')) return { view: 'legacy', taskId: queryOf(h).get('task'), project: '' };
-  if (h.startsWith('#/new')) return { view: 'new', taskId: null, project: queryOf(h).get('project') ?? '' };
-  if (h.startsWith('#/task/')) return { view: 'task', taskId: decodeURIComponent(h.slice('#/task/'.length).split('?')[0]), project: '' };
-  if (h.startsWith('#/settings')) return { view: 'settings', taskId: null, project: '' };
-  return { view: 'overview', taskId: null, project: '' };
+  const none = { taskId: null, project: '', paper: '' };
+  if (h.startsWith('#/autonomous')) return { ...none, view: 'legacy', taskId: queryOf(h).get('task') };
+  if (h.startsWith('#/new')) return { ...none, view: 'new', project: queryOf(h).get('project') ?? '', paper: queryOf(h).get('paper') ?? '' };
+  if (h.startsWith('#/task/')) return { ...none, view: 'task', taskId: decodeURIComponent(h.slice('#/task/'.length).split('?')[0]) };
+  if (h.startsWith('#/reader')) {
+    const rest = h.slice('#/reader'.length).split('?')[0].replace(/^\//, '');
+    let paper = '';
+    try { paper = decodeURIComponent(rest); } catch { paper = ''; }
+    return { ...none, view: 'reader', paper };
+  }
+  if (h.startsWith('#/settings')) return { ...none, view: 'settings' };
+  return { ...none, view: 'overview' };
 };
 const narrow = () => window.matchMedia?.('(max-width: 760px)').matches ?? false;
 
@@ -74,11 +83,14 @@ export default function AppShell() {
   const crumbs: [string, string] = view === 'overview' ? ['工作区', '总览']
     : view === 'new' ? ['工作区', '新建实验']
     : view === 'task' ? ['任务', taskTitle]
+    : view === 'reader' ? ['工作区', '论文阅读']
     : ['Paper2Run', '设置'];
   // 工作台视图（多栏）用更宽的版面。
   const wide = view === 'new' || view === 'task';
+  // 阅读器铺满主区域：不走居中版面和页内滚动，PDF 自己滚。
+  const full = view === 'reader';
 
-  return <div className={`shell${sideOpen ? '' : ' side-closed'}${wide ? ' wide' : ''}`}>
+  return <div className={`shell${sideOpen ? '' : ' side-closed'}${wide ? ' wide' : ''}${full ? ' full' : ''}`}>
     {sideOpen && <Sidebar view={view} taskId={route.taskId} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />}
     {sideOpen && <button type="button" className="side-scrim" aria-label="关闭侧栏" tabIndex={-1} onClick={() => setSideOpen(false)} />}
     <main className="main" id="main">
@@ -92,14 +104,19 @@ export default function AppShell() {
           {(view === 'overview' || view === 'task') && <button type="button" className="btn btn-icon" aria-label="刷新" title="刷新" onClick={refresh}><Icon name="refresh" /></button>}
         </div>
       </header>
-      <div className="main-body">
+      {view === 'reader' && <div className="main-full">
+        <Suspense fallback={<p role="status" className="page-loading">加载阅读器…</p>}>
+          <ReaderPage papers={papers} paperId={route.paper} />
+        </Suspense>
+      </div>}
+      <div className="main-body" hidden={full}>
         <div className={`page page-${view}`}>
           {view === 'overview' && <Suspense fallback={<p role="status" className="page-loading">加载总览…</p>}>
             <OverviewPage api={api} papers={papers} />
           </Suspense>}
           {newOpened && <div hidden={view !== 'new'}>
             <Suspense fallback={<p role="status" className="page-loading">加载新建实验…</p>}>
-              <NewExperimentPage api={api} papers={papers} initialProject={route.project} />
+              <NewExperimentPage api={api} papers={papers} initialProject={route.project} initialPaper={route.paper} />
             </Suspense>
           </div>}
           {openedTasks.map(id => <div key={id} hidden={view !== 'task' || route.taskId !== id}>

@@ -4,7 +4,7 @@ import { AppMark, Icon } from '../ui/Icon';
 import { taskDisplay } from '../features/autonomous/config';
 import type { Health, RecentTask } from './hooks';
 
-export type View = 'overview' | 'new' | 'task' | 'settings';
+export type View = 'overview' | 'new' | 'task' | 'reader' | 'settings';
 
 const HEALTH_TEXT: Record<Health, string> = { up: '后端已连接', down: '后端未连接', checking: '正在检查后端' };
 const HEALTH_TONE = { up: 'ok', down: 'bad', checking: 'idle' } as const;
@@ -28,6 +28,7 @@ export function Sidebar({ view, taskId, recent, recentFailed, health, host, onHi
         <span className="side-label">工作区</span>
         <a href="#/" {...item('overview')}><Icon name="home" />总览</a>
         <a href="#/new" {...item('new')}><Icon name="plus" />新建实验</a>
+        <a href="#/reader" {...item('reader')}><Icon name="doc" />论文阅读</a>
       </div>
       <div className="side-group">
         <span className="side-label">任务</span>
