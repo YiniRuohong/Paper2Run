@@ -17,6 +17,16 @@
 .auto-specialist-types { display: flex; gap: 8px 20px; flex-wrap: wrap; margin: 0; padding: 4px 0 0; border: 0; }
 .auto-check { display: flex; gap: 8px; align-items: baseline; font-size: 13px; line-height: 1.7; }
 
+/* 执行位置能力（C6 探测） */
+.auto-probe { display: grid; gap: 10px; min-width: 0; margin-top: 14px; }
+.auto-probe-head { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.auto-probe-head .ui-subhead { flex: 1; margin: 0; }
+.auto-probe .ui-empty { padding: 20px 12px; }
+.auto-probe .ui-row-title { white-space: normal; }
+.auto-probe .ui-callout .btn { margin-left: auto; flex: none; }
+.auto-probe-meta { margin-bottom: 0; }
+.auto-probe-missing { flex-basis: 100%; }
+
 /* ---------- 任务工作台（#/task/<id>） ---------- */
 .auto-live { display: grid; gap: 14px; min-width: 0; }
 .auto-progress { display: inline-flex; align-items: center; gap: 8px; }

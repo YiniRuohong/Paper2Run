@@ -11,6 +11,8 @@ import ParseProgress from '../docparse/ParseProgress';
 import ModeDialog from '../docparse/ModeDialog';
 import { canParseNow, isParsePending } from '../docparse/docparse';
 import { DEFAULT_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS, defaultConfig, modelReference, parseProtocol, profileRequest, researchTaskTypes, reusableProfiles, validateConfig } from './config';
+import { parseProbe, probeMissingNotice } from './probe';
+import TargetProbeView, { type ProbeState } from './TargetProbeView';
 import { errorDetail } from './TaskPage';
 import './autonomous.css';
 
@@ -56,6 +58,23 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
   const [parseBusy, setParseBusy] = useState(false);
   const generation = useRef(0);
   const parsePoll = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 执行位置能力探测（C6）：读取已保存配置，项目切换或重新探测时中止上一次请求。
+  const [probe, setProbe] = useState<ProbeState>({ phase: 'idle' });
+  const probeAbort = useRef<AbortController | null>(null);
+  const runProbe = useCallback(async (id: string, version: number | undefined) => {
+    probeAbort.current?.abort();
+    const controller = new AbortController();
+    probeAbort.current = controller;
+    setProbe({ phase: 'loading' });
+    try {
+      const parsed = parseProbe(await api.probeTarget(id, controller.signal));
+      if (controller.signal.aborted) return;
+      setProbe(parsed ? { phase: 'ready', probe: parsed, version } : { phase: 'error', error: '探测结果格式无法识别' });
+    } catch (e) {
+      if (!controller.signal.aborted) setProbe({ phase: 'error', error: errorDetail(e) });
+    }
+  }, [api]);
+  useEffect(() => () => probeAbort.current?.abort(), []);
 
   async function act(work: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
@@ -99,6 +118,7 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
     const run = ++generation.current;
     setPaperOptions([]); setPaperId(''); setPaperVersion(''); setPaperText(null); setIsPdf(false);
     setConfig(defaultConfig(projectId)); setConfigVersion(undefined);
+    probeAbort.current?.abort(); setProbe({ phase: 'idle' });
     if (!projectId) return;
     Promise.all([
       api.config(projectId).catch(e => { if (e instanceof Error && 'status' in e && (e as { status: number }).status === 404) return null; throw e; }),
@@ -113,10 +133,10 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
         }
       }));
       if (generation.current !== run) return;
-      if (saved) { setConfig(saved.config); setConfigVersion(saved.version); }
+      if (saved) { setConfig(saved.config); setConfigVersion(saved.version); void runProbe(projectId, saved.version); }
       setPaperOptions(resolved);
     }).catch(e => { if (generation.current === run) setError(errorDetail(e)); });
-  }, [projectId, api, papers]);
+  }, [projectId, api, papers, runProbe]);
 
   const update = <K extends keyof ProjectConfig>(name: K, value: ProjectConfig[K]) => setConfig(old => ({ ...old, [name]: value }));
 
@@ -193,6 +213,11 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
     : !config.model.provider_profile ? '请先选择主模型'
     : !config.experiment.objective.trim() ? '请填写实验目标'
     : '';
+
+  const probeDisabledReason = !projectId ? '请先选择或创建项目' : configVersion === undefined ? '保存项目配置后才能探测执行位置。' : '';
+  // 探测只是提示：缺项写在启动按钮旁，不禁用启动；准备阶段才是真正的关卡。
+  const probeNotice = probe.phase === 'ready' ? probeMissingNotice(probe.probe) : '';
+  const probeStale = probe.phase === 'ready' && probe.probe.target_kind !== config.target.kind;
 
   const credentialSources = reusableProfiles(profile, profiles);
   const specialists = config.specialists ?? [];
@@ -325,6 +350,9 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
           </>}
         </div>
         <p className="ui-help">密钥仅保存在当前内存中，保存后清空，不写入浏览器存储或 URL；重启应用后需重新输入。</p>
+        <TargetProbeView state={probe} ssh={config.target.kind === 'ssh'} disabledReason={probeDisabledReason}
+          onProbe={() => { if (projectId && configVersion !== undefined) void runProbe(projectId, configVersion); }} />
+        {probeStale && <p className="ui-help auto-probe-meta">表单中的执行位置尚未保存；上面的结果对应已保存的配置，保存后会重新探测。</p>}
       </div>
     </Card>
 
@@ -468,7 +496,11 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
         </Switch>
         <div className="auto-actions auto-launch">
           <button type="button" className="btn btn-secondary" disabled={busy || loading || !projectId} onClick={() => void act(async () => { validateConfig(config); setNotice('配置校验通过；实际连接与凭据权限仍由服务端检查。'); })}>校验配置</button>
-          <button type="button" className="btn btn-secondary" disabled={busy || loading || !projectId} onClick={() => void act(async () => { await saveConfig(); setNotice('项目配置已保存。'); })}>保存配置{configVersion !== undefined ? ` · v${configVersion}` : ''}</button>
+          <button type="button" className="btn btn-secondary" disabled={busy || loading || !projectId} onClick={() => void act(async () => {
+            const saved = await saveConfig();
+            setNotice('项目配置已保存，正在重新探测执行位置。');
+            void runProbe(projectId, saved.version);
+          })}>保存配置{configVersion !== undefined ? ` · v${configVersion}` : ''}</button>
           <button type="button" className="btn btn-primary" disabled={busy || loading || !!startBlockReason} title={startBlockReason || undefined} onClick={() => void act(async () => {
             const parsed = parseProtocol(protocol);
             await saveConfig();
@@ -481,6 +513,7 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
             window.location.hash = `#/task/${encodeURIComponent(created.id)}`;
           })}>{busy ? '处理中…' : '授权并启动'}</button>
           {startBlockReason && <span className="ui-help">{startBlockReason}</span>}
+          {probeNotice && <span className="ui-help auto-probe-missing" role="status">{probeNotice}</span>}
         </div>
       </div>
     </Card>

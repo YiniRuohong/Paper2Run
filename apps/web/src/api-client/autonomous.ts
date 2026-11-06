@@ -51,6 +51,18 @@ export interface AutonomousFile {
   sha256: string | null; kind: string | null; protocol_sha256: string | null;
 }
 export interface AutonomousFiles { items: AutonomousFile[]; truncated: boolean; workspace_available: boolean }
+/** 契约 C6：执行目标能力探测。字段只有在探测中实际观测到才为 true；网络边界从不在此验证。 */
+export interface TargetProbe {
+  platform: string;
+  target_kind: 'local' | 'ssh';
+  isolation: { backend: 'docker'; verified: boolean; detail: string };
+  docker: { available: boolean; os_type: 'linux' | 'windows' | null; server_version: string | null };
+  image: { name: string; present: boolean };
+  network_policy: { public_internet: boolean; host_and_metadata_blocked: null; verified: false; detail: string };
+  gpu: { index: string; name: string }[];
+  missing: string[];
+  probed_at: string;
+}
 const enc = encodeURIComponent;
 // 会话引导与 CSRF 由 client.ts 统一管理；保留这两个导出名供既有调用方使用。
 export const initializeAutonomousSession = initializeSession;
@@ -97,6 +109,8 @@ export function createAutonomousApi(actorId = 'demo-user', fetcher: Fetcher = fe
     },
     config: (id: string) => request<{ version: number; config: ProjectConfig }>(`/projects/${enc(id)}/config`),
     saveConfig: (id: string, config: ProjectConfig, version?: number) => request<{ version: number; config: ProjectConfig }>(`/projects/${enc(id)}/config`, 'PUT', { config }, version),
+    // 探测最近一次保存的执行目标；不创建容器，最长约 20 秒。
+    probeTarget: (id: string, signal?: AbortSignal) => request<unknown>(`/projects/${enc(id)}/target/probe`, 'GET', undefined, undefined, signal),
     tasks: (id: string) => request<AutonomousTask[]>(`/projects/${enc(id)}/tasks`),
     start: (id: string, input: { objective: string; paper_version_id?: string; protocol?: Record<string, unknown>; authorization: { confirmed: true } }) => request<AutonomousTask>(`/projects/${enc(id)}/tasks`, 'POST', input),
     task: (id: string, signal?: AbortSignal) => request<AutonomousTask>(`/tasks/${enc(id)}`, 'GET', undefined, undefined, signal),
