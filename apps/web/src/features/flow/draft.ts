@@ -13,18 +13,58 @@ export interface DraftPaper { paperId: string; versionId: string; title: string;
 export interface DraftFacts { paper: DraftPaper | null; description: string; config: ProjectConfig | null; profiles: ModelProfile[]; taskCount: number }
 export interface DraftProgress { done: Record<SetupStepId, boolean>; current: SetupStepId; connectionLost: boolean; objective: string }
 
+/** Descriptions older clients wrote when creating a project (v3 and the first guided flow); they are not an objective. */
+export const LEGACY_PLACEHOLDER_DESCRIPTIONS: readonly string[] = ['Autonomous experiment flow', 'Guided real article flow'];
+/** The project description as the user's own text: trimmed, and empty for a legacy placeholder. */
+export function userDescription(description: string): string {
+  const text = description.trim();
+  return LEGACY_PLACEHOLDER_DESCRIPTIONS.includes(text) ? '' : text;
+}
+
+/** A connection this server process can use right now (connections live only in its memory). */
+export const usableConnection = (p: ModelProfile) => p.secret_configured === true || p.auth_mode === 'none';
+export function hostOf(url: string): string {
+  try { return new URL(url).host || url; } catch { return url; }
+}
+export const connectionLabel = (p: ModelProfile) => `${hostOf(p.base_url)} · ${p.model}`;
+
 export function draftProgress(f: DraftFacts): DraftProgress {
-  const objective = f.config?.experiment.objective.trim() || f.description.trim();
+  const objective = f.config?.experiment.objective.trim() || userDescription(f.description);
   const profileId = f.config?.model.provider_profile || '';
   const profile = profileId ? f.profiles.find(p => p.id === profileId) : undefined;
   const done: Record<SetupStepId, boolean> = {
     paper: !!f.paper && !!f.paper.versionId && (!f.paper.pdf || f.paper.textStatus === 'ready'),
     objective: objective !== '',
-    model: !!profile && (profile.secret_configured === true || profile.auth_mode === 'none'),
+    model: !!profile && usableConnection(profile),
     launch: f.taskCount > 0,
   };
   const current = SETUP_ORDER.find(step => !done[step]) ?? 'launch';
   return { done, current, connectionLost: !!profileId && !profile, objective };
+}
+
+// Specialists and Skills from a v3 config are kept (mergeConfig preserves them)
+// but have no editing UI. Step 04 names them and refuses to start when a
+// specialist's connection is gone, since the server would fail with CREDENTIAL_REQUIRED.
+
+/** Profile ids of hidden v3 specialists whose connection this process cannot use, without repeats. */
+export function missingSpecialistConnections(config: ProjectConfig | null, profiles: ModelProfile[]): string[] {
+  const missing: string[] = [];
+  for (const specialist of config?.specialists ?? []) {
+    const id = specialist.model.provider_profile;
+    const profile = profiles.find(p => p.id === id);
+    if ((!profile || !usableConnection(profile)) && !missing.includes(id)) missing.push(id);
+  }
+  return missing;
+}
+export function legacyLaunchBlock(config: ProjectConfig | null, profiles: ModelProfile[]): string {
+  return missingSpecialistConnections(config, profiles).length ? '旧配置中的科研专家模型连接已失效，无法启动（应用重启后需重新配置）' : '';
+}
+/** Read-only line naming the hidden v3 parts; empty when there are none. */
+export function legacyConfigLine(config: ProjectConfig | null): string {
+  const specialists = config?.specialists?.length ?? 0;
+  const skills = config?.harness.skills.length ?? 0;
+  const parts = [specialists ? `${specialists} 位科研专家` : '', skills ? `${skills} 个 Skills` : ''].filter(Boolean);
+  return parts.length ? `沿用旧配置：${parts.join(' · ')}` : '';
 }
 
 export function mergeConfig(
@@ -90,5 +130,19 @@ export async function saveConfigWithRetry(
   } catch (error) {
     if (!isConflict(error)) throw error;
     return attempt();
+  }
+}
+
+/**
+ * Runs a save made of several requests. When any of them fails, the page reads
+ * the server again (project version, config, saved connections) so a retry
+ * starts from fresh state; the original error is rethrown for the page to show.
+ */
+export async function refreshOnFailure<T>(work: () => Promise<T>, refresh: () => Promise<unknown>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    await refresh().catch(() => undefined);
+    throw error;
   }
 }

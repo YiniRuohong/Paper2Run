@@ -10,6 +10,7 @@ import { currentProtocolSha, progressNotes, safetyBlock, toWbFiles } from './sta
 import { ProgressNotes, SpecialistCalls } from './ActivityViews';
 import { decisionSuperseded, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { errorDetail } from './errors';
+import { connectionLabel } from '../flow/draft';
 import RailHead from '../flow/RailHead';
 import { flowStages, type SetupView } from '../flow/timeline';
 import { ApprovalCard } from './ApprovalCard';
@@ -127,10 +128,12 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
 
   // 九步时间线：前四步是已完成的用户步骤（摘要只来自任务快照），后五步由事件归纳。
   const snapshot = task?.config_snapshot;
+  const snapshotProfileId = snapshot?.model?.provider_profile || '';
+  const snapshotProfile = snapshotProfileId ? profiles.find(p => p.id === snapshotProfileId) : undefined;
   const setup: SetupView[] = [
     { id: 'paper', done: !!task, summary: null },
     { id: 'objective', done: !!task, summary: task?.objective ? task.objective.slice(0, 60) : null },
-    { id: 'model', done: !!task, summary: snapshot?.model?.provider_profile || null },
+    { id: 'model', done: !!task, summary: snapshotProfile ? connectionLabel(snapshotProfile) : snapshotProfileId || null },
     { id: 'launch', done: !!task, summary: !snapshot ? null : snapshot.target?.kind === 'ssh' ? `SSH · ${snapshot.target.ssh_config_alias ?? ''}` : '本地隔离环境' },
   ];
   const { stages, activeId, doneCount } = flowStages({ setup, current: null, task, events });
@@ -175,7 +178,8 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   const display = task ? taskDisplay(task) : null;
   const safety = safetyBlock(task, events);
   const approval = protocolApproval(task?.pending_decision);
-  const running = task ? !terminalState(task.state) && task.state !== 'paused' && !hasOutcome : false;
+  // 只有真正在运行且没有结局时才说「运行中 / 正在」；排队、暂停、已有结局都用状态文字与「最近进度」。
+  const running = task?.state === 'running' && !hasOutcome;
   const terminal = task ? terminalState(task.state) : false;
   const paused = task?.state === 'paused';
   const stopped = task ? task.state === 'stopped' || task.state === 'cancelled' : false;
@@ -234,7 +238,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
             {running && <span className="wb-live-dot" aria-hidden="true" />}
             <b>{running ? '运行中' : display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {stepNumber} / 9 步 · {activeTitle} · {toolSteps} 步操作
           </p>
-          {latestNote && <p className="ui-help">正在：{latestNote}</p>}
+          {latestNote && <p className="ui-help">{running ? '正在：' : '最近进度：'}{latestNote}</p>}
         </div>
 
         {safety && <div className="ui-callout tone-bad" role="alert"><Icon name="shield" />

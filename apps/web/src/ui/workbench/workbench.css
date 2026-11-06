@@ -271,6 +271,8 @@ button.wb-tab { gap: 7px; padding: 0 13px; }
   .wb-grid { grid-template-columns: minmax(0, 1fr); }
   .wb-rail { grid-row: auto; position: static; max-height: 340px; }
   .wb.is-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "rail" "head" "viewer" "files"; }
+  /* Same specificity as the 1240 app-rail rule, so this later rule wins: cap the rail like the plain layout. */
+  .wb.is-app .wb-rail { max-height: 340px; overflow-y: auto; }
   [data-shell="darwin"] .wb.is-app .wb-rail-head { padding-left: 82px; }
   .wb-title { font-size: 21px; }
   .wb-head { flex-wrap: wrap; }

@@ -6,10 +6,9 @@ import { errorDetail } from '../../autonomous/errors';
 import { launchBlockReason } from '../../autonomous/launch';
 import { parseProbe, probeMissingNotice } from '../../autonomous/probe';
 import TargetProbeView, { type ProbeState } from '../../autonomous/TargetProbeView';
-import { budgetLine, mergeConfig, saveConfigWithRetry, type DraftPaper } from '../draft';
+import { budgetLine, connectionLabel, legacyConfigLine, legacyLaunchBlock, mergeConfig, saveConfigWithRetry, type DraftPaper } from '../draft';
 import { readConfig, type SavedConfig } from '../draftData';
 import StepFrame, { type Act, type StepFeedback } from '../StepFrame';
-import { connectionLabel } from './ModelStep';
 import '../../autonomous/autonomous.css';
 
 const clip = (text: string, n: number) => Array.from(text).length > n ? `${Array.from(text).slice(0, n).join('')}…` : text;
@@ -21,13 +20,15 @@ function withTarget(base: ProjectConfig['target'], ssh: boolean, alias: string, 
 
 // 04 确认并启动: read-only summary, execution location (local by default, SSH
 // on request), the saved budget, authorization and start. The target probe is
-// a hint only; it never blocks the start button.
-export default function LaunchStep({ projectId, paper, paperText, saved, profile, objective, api, busy, act, feedback, onSaved }: {
+// a hint only; it never blocks the start button. Hidden parts of a v3 config
+// are named read-only, and a lost specialist connection blocks the start.
+export default function LaunchStep({ projectId, paper, paperText, saved, profile, profiles, objective, api, busy, act, feedback, onSaved }: {
   projectId: string;
   paper: DraftPaper | null;
   paperText: PaperText | null;
   saved: SavedConfig;
   profile: ModelProfile | undefined;
+  profiles: ModelProfile[];
   objective: string;
   api: Pick<AutonomousApi, 'config' | 'saveConfig' | 'probeTarget' | 'start'>;
   busy: boolean;
@@ -73,7 +74,8 @@ export default function LaunchStep({ projectId, paper, paperText, saved, profile
     await onSaved();
   });
 
-  const startBlockReason = launchBlockReason({
+  const legacyLine = legacyConfigLine(saved.config);
+  const startBlockReason = legacyLaunchBlock(saved.config, profiles) || launchBlockReason({
     projectId, paperVersion: paper?.versionId ?? '', pdf: paper?.pdf ?? false, text: paperText, authorized,
     mainProfile: saved.config.model.provider_profile, objective,
   }) || (dirty ? '请先保存执行位置' : '') || (busy ? '处理中…' : '');
@@ -90,6 +92,7 @@ export default function LaunchStep({ projectId, paper, paperText, saved, profile
       <div><dt>目标</dt><dd>{clip(objective, 120)}</dd></div>
       <div><dt>模型</dt><dd>{profile ? connectionLabel(profile) : saved.config.model.provider_profile}</dd></div>
     </dl>
+    {legacyLine && <p className="ui-help">{legacyLine}</p>}
 
     <div className="flow-block">
       <div className="flow-row">

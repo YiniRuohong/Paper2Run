@@ -7,14 +7,14 @@ import { Workbench, type WbContent, type WbFile } from '../../ui/workbench/Workb
 import { errorDetail } from '../autonomous/errors';
 import ModeDialog from '../docparse/ModeDialog';
 import { canParseNow } from '../docparse/docparse';
-import { SETUP_ORDER, draftProgress, newestTaskId, type DraftFacts, type DraftPaper, type DraftProgress, type SetupStepId } from './draft';
+import { SETUP_ORDER, connectionLabel, draftProgress, newestTaskId, type DraftFacts, type DraftPaper, type DraftProgress, type SetupStepId } from './draft';
 import { loadDraft, type DraftData } from './draftData';
 import { carryNotice, clearNotice, finishUpload, peekNotice } from './draftUpload';
 import RailHead from './RailHead';
 import type { StepFeedback } from './StepFrame';
 import { flowStages, type SetupView } from './timeline';
 import LaunchStep from './steps/LaunchStep';
-import ModelStep, { connectionLabel } from './steps/ModelStep';
+import ModelStep from './steps/ModelStep';
 import ObjectiveStep from './steps/ObjectiveStep';
 import PaperStep from './steps/PaperStep';
 import './flow.css';
@@ -195,7 +195,7 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
 
   const removeDraft = () => {
     if (!projectId || !window.confirm('删除这个草稿？论文和配置将不再显示。')) return;
-    void act(async () => { await papers.deleteProject(projectId); window.location.hash = '#/'; });
+    void act(async () => { await papers.deleteProject(projectId); window.location.replace('#/'); });
   };
 
   // ---- timeline ----
@@ -215,14 +215,21 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     if (data?.saved) map.set('project/config.json', JSON.stringify(data.saved.config, null, 2));
     return map;
   }, [data]);
-  const files = useMemo<WbFile[] | null>(() => projectId && !data ? null : [...fileText].map(([path, text]) => ({
+  const files = useMemo<WbFile[] | null>(() => projectId && !data ? (loading ? null : []) : [...fileText].map(([path, text]) => ({
     path, bytes: utf8Bytes(text), mediaType: path.endsWith('.json') ? 'application/json' : 'text/markdown', badge: path.startsWith('paper/') ? '预览' : '记录',
-  })), [data, fileText, projectId]);
+  })), [data, fileText, loading, projectId]);
   const loadFile = useCallback(async (file: WbFile): Promise<WbContent> => ({ text: fileText.get(file.path) ?? '' }), [fileText]);
+
+  // An existing draft that could not be read (backend starting, network, deleted id)
+  // shows only the error and a retry: an empty upload form here would add a second paper.
+  const loadFailed = !!projectId && !data && !loading;
+  const retryLoad = () => void act(async () => { const next = await reload(); if (next) setViewing(v => v ?? draftProgress(next.facts).current); });
 
   const disabledNext = (reason: string) => busy ? '处理中…' : reason || undefined;
   let step: ReactNode = null;
-  if (shown === 'paper') {
+  if (loadFailed) {
+    step = null;
+  } else if (shown === 'paper') {
     step = <PaperStep paper={paper} paperText={data?.paperText ?? null} parseStatus={parseStatus} busy={busy}
       feedback={feedbackFor('paper', facts, progress)}
       next={{ label: '下一步', disabled: disabledNext(progress.done.paper ? '' : !paper ? '请先上传论文 PDF 或粘贴正文' : '论文解析完成后才能继续'), onClick: () => setViewing('objective') }}
@@ -230,12 +237,12 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
       parse={{ onRetry: () => parseAgain(), onChoose: mode => parseAgain(mode), onReopenChoice: () => setModeDialog(true), onRefresh: () => { reload().catch(e => setError(errorDetail(e))); } }} />;
   } else if (projectId && data && shown === 'objective') {
     step = <ObjectiveStep projectId={projectId} projectVersion={data.project.version} initial={progress.objective} hasConfig={!!data.saved}
-      api={api} papers={papers} busy={busy} act={act} feedback={feedbackFor('objective', facts, progress)} onDone={advance('model')} />;
+      api={api} papers={papers} busy={busy} act={act} feedback={feedbackFor('objective', facts, progress)} refresh={reload} onDone={advance('model')} />;
   } else if (projectId && data && shown === 'model') {
     step = <ModelStep projectId={projectId} config={facts.config} profiles={facts.profiles} connectionLost={progress.connectionLost} objective={progress.objective}
-      api={api} busy={busy} act={act} feedback={feedbackFor('model', facts, progress)} onDone={advance('launch')} />;
+      api={api} busy={busy} act={act} feedback={feedbackFor('model', facts, progress)} refresh={reload} onDone={advance('launch')} />;
   } else if (projectId && data?.saved && shown === 'launch') {
-    step = <LaunchStep projectId={projectId} paper={paper} paperText={data.paperText} saved={data.saved} profile={profile} objective={progress.objective}
+    step = <LaunchStep projectId={projectId} paper={paper} paperText={data.paperText} saved={data.saved} profile={profile} profiles={facts.profiles} objective={progress.objective}
       api={api} busy={busy} act={act} feedback={feedbackFor('launch', facts, progress)} onSaved={async () => { await reload(); }} />;
   }
 
@@ -253,7 +260,10 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
       loadFile={loadFile}
       filesEmpty="上传论文后，这里会出现解析预览与项目配置。"
     >
-      {error && <div className="ui-callout tone-bad flow-error" role="alert"><Icon name="alert" /><span>{error}</span></div>}
+      {loadFailed ? <div className="ui-callout tone-bad flow-error" role="alert"><Icon name="alert" />
+        <span>{error || '正在重新读取…'}</span>
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={retryLoad}>重新读取</button>
+      </div> : error && <div className="ui-callout tone-bad flow-error" role="alert"><Icon name="alert" /><span>{error}</span></div>}
       {loading ? <p role="status" className="ui-help">读取草稿…</p> : step}
     </Workbench>
     {modeDialog && <ModeDialog status={parseStatus} busy={busy} onChoose={mode => parseAgain(mode)} onLater={() => setModeDialog(false)} />}

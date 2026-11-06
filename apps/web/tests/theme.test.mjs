@@ -23,6 +23,17 @@ test('initial preference: URL override, then stored value, then system', () => {
   assert.equal(initialThemePref('?theme=nope', 'dark'), 'dark');
 });
 
+test('no file under features/flow or features/overview touches browser storage', async () => {
+  const { readdir } = await import('node:fs/promises');
+  const files = [];
+  for (const dir of ['flow', 'overview']) {
+    const root = new URL(`../src/features/${dir}/`, import.meta.url);
+    for (const entry of await readdir(root, { recursive: true })) if (/\.tsx?$/.test(entry)) files.push(new URL(entry, root));
+  }
+  assert.ok(files.some(f => f.pathname.endsWith('/flow/steps/ModelStep.tsx')) && files.some(f => f.pathname.endsWith('/overview/draftSteps.ts')), 'the scan reaches nested and .ts files');
+  for (const file of files) assert.doesNotMatch(await readFile(file, 'utf8'), /localStorage\.|sessionStorage\./, file.pathname);
+});
+
 test('the pre-paint boot script and the theme module agree on the storage key', async () => {
   const boot = await readFile(new URL('../public/theme-boot.js', import.meta.url), 'utf8');
   assert.equal(THEME_STORAGE_KEY, 'p2r.theme');

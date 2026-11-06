@@ -83,3 +83,10 @@ test('app shell mounts no page while a legacy route redirect is pending', async 
   assert.ok(guard > effect, 'the guard follows every hook (the redirect effect) so hook order stays stable');
   assert.ok(guard < flowBranch, 'the guard runs before the flow/shell page branches');
 });
+
+test('the target probe never blocks the start button', async () => {
+  const src = await flowSource('steps/LaunchStep.tsx');
+  const expr = src.match(/const startBlockReason = ([\s\S]*?);\n/);
+  assert.ok(expr, 'startBlockReason is one expression');
+  assert.doesNotMatch(expr[1], /probe/i);
+});

@@ -7,6 +7,7 @@ import * as helpers from '../src/features/autonomous/config.ts';
 import * as stages from '../src/features/autonomous/stages.ts';
 import * as errors from '../src/features/autonomous/errors.ts';
 import * as flowTimeline from '../src/features/flow/timeline.ts';
+import * as flowDraft from '../src/features/flow/draft.ts';
 import { ApiError } from '../src/api-client/client.ts';
 
 // Shallow-render TaskPage in a VM: React hooks and every child component are
@@ -56,6 +57,7 @@ async function harness(options = {}) {
     './stages': stages,
     './errors': errors,
     '../flow/timeline': flowTimeline,
+    '../flow/draft': flowDraft,
     '../flow/RailHead': { default: box('RailHead') },
     '../../api-client/autonomous': { createAutonomousApi: () => api, ApiError },
     '../../ui/workbench/Workbench': { Workbench: box('Workbench') },
@@ -253,4 +255,34 @@ test('stop stays available on a paused task with an outcome and says what it doe
   assert.ok(h.nodes().some(n => n.type === 'span' && n.props.className === 'ui-help' && (n.children ?? []).flat(Infinity).includes('结局已定；停止会终止仍保留的后台作业')));
   const running = await harness({ taskOver: { state: 'running' } });
   assert.equal(running.button('停止').props.title, '停止任务（不会停止远端实例计费）');
+});
+
+const note = summary => ({ sequence: 1, type: 'progress_noted', created_at: '2026-11-05T00:00:00Z', payload: { phase: 'execute', summary } });
+const flat = node => (node?.children ?? []).flat(Infinity).map(x => typeof x === 'string' ? x : x && typeof x === 'object' ? flat(x) : '').join('');
+
+test('the status card says 运行中 and 正在 only while the task is running without an outcome', async () => {
+  const cases = [
+    [{ state: 'running' }, '运行中', '正在：跑基线'],
+    [{ state: 'queued' }, helpers.stateLabel('queued'), '最近进度：跑基线'],
+    [{ state: 'paused' }, '已暂停', '最近进度：跑基线'],
+    [{ state: 'running', outcome: 'completed_with_issues' }, '完成，有未解决问题', '最近进度：跑基线'],
+  ];
+  for (const [over, head, line] of cases) {
+    const h = await harness({ taskOver: over, events: [note('跑基线')] });
+    const status = h.nodes().find(n => n.type === 'div' && n.props.className === 'auto-live-status');
+    const b = h.nodes().find(n => n.type === 'b');
+    assert.equal(flat(b), head, over.state);
+    assert.ok(flat(status).includes(line), `${over.state}/${over.outcome}: ${line} in ${flat(status)}`);
+    if (head !== '运行中') assert.ok(!flat(status).replace(/（生命周期：[^）]*）/, '').includes('运行中'), 'no 运行中 claim outside the running state (the lifecycle suffix may name it)');
+  }
+});
+
+test('the 连接模型 step names the connection, falling back to the profile id', async () => {
+  const config = { ...helpers.defaultConfig('A'), model: { provider_profile: 'model-3f2a', credential_ref: 'profile:model-3f2a' } };
+  const profile = { id: 'model-3f2a', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-max', api: 'openai-completions', secret_configured: true };
+  const named = await harness({ taskOver: { config_snapshot: config }, profiles: [profile] });
+  const stagesOf = h => h.nodes().find(n => n.type === 'Workbench').props.stages;
+  assert.equal(stagesOf(named).find(st => st.id === 'model').summary, 'dashscope.aliyuncs.com · qwen-max');
+  const unknown = await harness({ taskOver: { config_snapshot: config }, profiles: [] });
+  assert.equal(stagesOf(unknown).find(st => st.id === 'model').summary, 'model-3f2a');
 });

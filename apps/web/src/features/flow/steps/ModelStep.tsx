@@ -3,24 +3,18 @@ import type { AutonomousApi, ModelProfile, ProjectConfig } from '../../../api-cl
 import { Segmented } from '../../../ui/Controls';
 import { Icon } from '../../../ui/Icon';
 import { modelReference, profileRequest } from '../../autonomous/config';
-import { mergeConfig, profileIdFor, saveConfigWithRetry } from '../draft';
+import { connectionLabel, mergeConfig, profileIdFor, refreshOnFailure, saveConfigWithRetry, usableConnection } from '../draft';
 import { readConfig } from '../draftData';
 import StepFrame, { type Act, type StepFeedback } from '../StepFrame';
 
 const NEW = '';
 const API_OPTIONS = [{ value: 'openai-completions', label: 'OpenAI 兼容' }, { value: 'anthropic-messages', label: 'Anthropic' }] as const;
 
-/** A connection this server process can use right now (connections live only in its memory). */
-export const usableProfile = (p: ModelProfile) => p.secret_configured === true || p.auth_mode === 'none';
-export function hostOf(url: string): string {
-  try { return new URL(url).host || url; } catch { return url; }
-}
-export const connectionLabel = (p: ModelProfile) => `${hostOf(p.base_url)} · ${p.model}`;
-
 // 03 连接模型: reuse a saved connection, or enter address, model name, API key
 // and the API kind. The profile ID, auth mode and credential reuse are not shown.
 // Saving cannot prove the connection works; the server checks it at start.
-export default function ModelStep({ projectId, config, profiles, connectionLost, objective, api, busy, act, feedback, onDone }: {
+// A failed save re-reads the page, so a connection that was saved is offered on retry.
+export default function ModelStep({ projectId, config, profiles, connectionLost, objective, api, busy, act, feedback, refresh, onDone }: {
   projectId: string;
   config: ProjectConfig | null;
   profiles: ModelProfile[];
@@ -30,9 +24,11 @@ export default function ModelStep({ projectId, config, profiles, connectionLost,
   busy: boolean;
   act: Act;
   feedback: StepFeedback | null;
+  /** Reads the draft again (profiles, config, version) after a failed save. */
+  refresh(): Promise<unknown>;
   onDone(): Promise<void>;
 }) {
-  const saved = profiles.filter(usableProfile);
+  const saved = profiles.filter(usableConnection);
   const current = config?.model.provider_profile ?? '';
   const [choice, setChoice] = useState(() => connectionLost ? NEW : saved.some(p => p.id === current) ? current : saved[0]?.id ?? NEW);
   const [baseUrl, setBaseUrl] = useState('');
@@ -49,7 +45,7 @@ export default function ModelStep({ projectId, config, profiles, connectionLost,
     : !key.trim() ? '请填写 API Key'
     : '';
 
-  const save = () => void act(async () => {
+  const save = () => void act(() => refreshOnFailure(async () => {
     let chosen: ModelProfile | undefined;
     if (creating) {
       // After a restart the lost connection is re-created under its old ID, so the saved config stays valid.
@@ -57,6 +53,7 @@ export default function ModelStep({ projectId, config, profiles, connectionLost,
       const id = profileIdFor(projectId, connectionLost ? config : null);
       chosen = await api.saveProfile(profileRequest({ id, base_url: baseUrl, model, api: kind, auth_mode: 'api-key' }, key.trim(), '', profiles));
       setKey('');
+      setChoice(chosen.id); // if the config save below fails, the retry reuses this connection
     } else {
       chosen = saved.find(p => p.id === choice);
       if (!chosen) throw new Error('所选连接已不可用，请新建连接。');
@@ -66,8 +63,7 @@ export default function ModelStep({ projectId, config, profiles, connectionLost,
       await saveConfigWithRetry(() => readConfig(api, projectId), (next, version) => api.saveConfig(projectId, next, version),
         latest => mergeConfig(latest, projectId, { model: reference, objective }));
     }
-    await onDone();
-  });
+  }, refresh).then(onDone));
 
   return <StepFrame guide="AI 用这个模型阅读论文、写代码、推进实验。" feedback={feedback}
     next={{ label: creating ? '保存并继续' : unchanged ? '下一步' : '使用此连接并继续', disabled: reason || undefined, onClick: save }}>

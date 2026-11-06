@@ -134,3 +134,15 @@ test('task page continues the nine-step timeline in the full-bleed layout', asyn
   assert.match(page, /title="详细记录"/);
   assert.match(page, /进度 · \$\{doneCount\} \/ 9/);
 });
+
+test('at 860px and below the app rail is capped like the plain layout so the form stays on the first screen', async () => {
+  const css = await readFile(new URL('../src/ui/workbench/workbench.css', import.meta.url), 'utf8');
+  const media860 = css.match(/@media \(max-width: 860px\) \{[\s\S]*?\n\}/);
+  assert.ok(media860, '860 block exists');
+  const appRail = media860[0].match(/\.wb\.is-app \.wb-rail\s*\{[^}]*\}/);
+  assert.ok(appRail, 'the 860 block overrides the 1240 app-rail height (same specificity, later rule)');
+  assert.match(appRail[0], /max-height:\s*340px/);
+  assert.match(appRail[0], /overflow-y:\s*auto/);
+  assert.match(media860[0], /grid-template-areas:\s*"rail"\s*"head"\s*"viewer"\s*"files"/);
+  assert.doesNotMatch(media860[0], /\.wb-rail-head\s*\{[^}]*position:\s*static/, 'the rail head stays sticky inside the capped rail');
+});
