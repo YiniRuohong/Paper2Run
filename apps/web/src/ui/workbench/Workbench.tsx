@@ -24,6 +24,8 @@ export interface WbStageItem {
   tone?: Tone;
   /** Opens this file (by WbFile.path) in the viewer when clicked. */
   openPath?: string;
+  /** Sub-steps nested under this item (e.g. tool calls under a Pi progress note). */
+  children?: WbStageItem[];
 }
 export interface WbStage {
   id: string;
@@ -33,6 +35,8 @@ export interface WbStage {
   items?: WbStageItem[];
   /** Selecting a stage calls onSelectStage; locked stages are inert. */
   disabled?: boolean;
+  /** Group heading shown above this stage; consecutive stages with the same group share it. */
+  group?: string;
 }
 
 /** Content returned by a loader: text is rendered directly, a Blob is previewed by type. */

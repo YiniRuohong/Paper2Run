@@ -325,3 +325,39 @@ test('probe: an ending and a completion pair with the most recent open call, not
   const replied = specialistCalls([dStart(1), dStart(5), dDone(6), dEnd(7, 'stop')], { state: 'running' });
   assert.deepEqual(replied.map(c => [c.sequence, c.status, c.text]), [[1, 'running', null], [5, 'done', 'use k-fold']], 'an orphaned earlier call never takes the later reply');
 });
+
+test('Pi progress notes nest the following tool calls; earlier calls stay top-level', () => {
+  const events = [
+    tool(1, 'x', 'read', { path: 'before.md' }), done(2, 'x', 'read'),
+    ev(3, 'progress_noted', { phase: '读代码', summary: '先核对模型配置' }),
+    tool(4, 'a', 'read', { path: 'paper.md' }), done(5, 'a', 'read'),
+    tool(6, 'b', 'execute', { command: 'ls' }),
+  ];
+  const { stages } = buildStages({ id: 't', state: 'running' }, events);
+  const plan = byId(stages).plan;
+  assert.equal(plan.items[0].label, toolLabel('read', { path: 'before.md' }), 'calls before any note stay top-level');
+  assert.equal(plan.items[1].label, '先核对模型配置');
+  assert.equal(plan.items[1].tone, 'idle');
+  assert.match(plan.items[1].detail, /模型叙述/);
+  assert.match(plan.items[1].children[0].label, /^读取/);
+  assert.equal(plan.items[1].children[0].tone, 'ok', 'completion still colours the nested item');
+  assert.equal(plan.items.length, 2);
+  const execute = byId(stages).execute;
+  assert.equal(execute.items.length, 1, 'the next phase starts a fresh top-level list');
+  assert.equal(execute.items[0].tone, 'run');
+});
+
+test('a second note ends the previous group and a phase change ends the group', () => {
+  const events = [
+    ev(0, 'protocol_approved', { protocol_version: 'v1' }),
+    ev(1, 'progress_noted', { phase: 'a', summary: 'one' }), tool(2, 'a', 'read', { path: 'p.md' }),
+    ev(3, 'progress_noted', { phase: 'b', summary: 'two' }), tool(4, 'b', 'read', { path: 'q.md' }),
+    tool(5, 'c', 'write', { path: 'x.py' }),
+  ];
+  const { stages } = buildStages({ id: 't', state: 'running' }, events);
+  const plan = byId(stages).plan.items;
+  assert.deepEqual(plan.map(i => i.label), ['方案已批准', 'one', 'two']);
+  assert.equal(plan[1].children.length, 1);
+  assert.equal(plan[2].children.length, 1);
+  assert.equal(byId(stages).execute.items[0].children, undefined, 'execute is a new phase, not nested under the plan note');
+});

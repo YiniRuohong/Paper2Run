@@ -146,9 +146,19 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
   let reviewFailedCount = 0;
   const notes = new Map<PhaseId, { phase: string; summary: string }>();
   let current: PhaseId = 'setup';
+  // Pi 自报进度开一个分组：之后同阶段的工具调用与事件嵌进它的 children；换阶段或下一条自报时结束。
+  let group: WbStageItem | null = null;
+  // note_progress 工具步骤紧跟着 progress_noted 时，二者是同一次自报：把工具步骤升级成分组，不重复一条。
+  let noteTool: { item: WbStageItem; container: WbStageItem[] } | null = null;
   const enter = (phase: PhaseId) => {
-    if (phase !== current) notes.delete(phase); // 重新进入的阶段不沿用上一轮的自报
+    if (phase !== current) { notes.delete(phase); group = null; } // 重新进入的阶段不沿用上一轮的自报
     current = phase; started.add(phase);
+  };
+  const push = (item: WbStageItem): WbStageItem[] => {
+    const container = group ? group.children! : items.get(current)!;
+    container.push(item);
+    noteTool = null;
+    return container;
   };
   for (const e of events) {
     const p = rec(e.payload);
@@ -158,7 +168,8 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
       const phase = own(TOOL_PHASE, name);
       if (phase) enter(phase); else started.add(current);
       const item: WbStageItem = { ...base, id: `t${e.sequence}`, label: toolLabel(name, rec(p.arguments)), detail: `#${e.sequence} · ${name}`, tone: 'run' };
-      items.get(current)!.push(item);
+      const container = push(item);
+      if (name === 'note_progress') noteTool = { item, container };
       const id = str(p.id); if (id) toolItem.set(id, item);
       continue;
     }
@@ -175,13 +186,25 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
     if (e.type === 'progress_noted') {
       const phase = str(p.phase); const summary = str(p.summary);
       if (phase || summary) notes.set(current, { phase: phase ?? '未命名阶段', summary: summary ?? '' });
+      started.add(current);
+      const head: WbStageItem = noteTool?.item ?? { ...base, id: `n${e.sequence}`, label: summary || phase || 'Pi 自报进度', tone: 'idle' };
+      if (noteTool) {
+        const at = noteTool.container.indexOf(noteTool.item);
+        if (at >= 0) noteTool.container.splice(at, 1);
+        if (summary) head.label = `Pi 自报进度：${short(summary, 60)}`;
+        head.tone = 'idle';
+      }
+      head.detail = 'Pi 自报（模型叙述）';
+      head.children = [];
+      items.get(current)!.push(head);
+      group = head; noteTool = null;
       continue;
     }
     if (isDelegation(e)) {
       // 每次调用一条子步骤，放在调用开始时所在的阶段；状态取配对后的最终结果。
       started.add(current);
       const call = calls.get(e.sequence);
-      if (call) items.get(current)!.push({ ...base, label: DELEGATION_LABEL, tone: call.status === 'failed' ? 'bad' : 'idle',
+      if (call) push({ ...base, label: DELEGATION_LABEL, tone: call.status === 'failed' ? 'bad' : 'idle',
         detail: `${call.specialistId ?? '未知专家'} · ${call.taskTypeLabel}，${CALL_STATUS_TEXT[call.status]}` });
       continue;
     }
@@ -192,10 +215,10 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
     if (mapped) enter(mapped);
     if (FAILURE_EVENTS.has(e.type)) failed.add(current);
     if (e.type === 'artifact_frozen' && str(p.name)) {
-      items.get(current)!.push({ ...base, ...label!, openPath: artifactPath(str(p.name)!, str(p.protocol_sha256), int(p.round)) });
+      push({ ...base, ...label!, openPath: artifactPath(str(p.name)!, str(p.protocol_sha256), int(p.round)) });
       continue;
     }
-    if (label) items.get(current)!.push({ ...base, ...label });
+    if (label) push({ ...base, ...label });
   }
   if (task) started.add('setup');
   const hasOutcome = task?.outcome != null;
@@ -233,7 +256,7 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
     else if (!finished) mark = task?.pending_decision != null || task?.state === 'paused' || task?.state === 'blocked' ? 'attention' : running ? 'running' : 'current';
     else if (failed.has(phase.id) || task?.state === 'failed' || task?.outcome === 'blocked_by_safety') mark = 'failed';
     else mark = hasOutcome || task?.state === 'completed' || task?.state === 'succeeded' ? 'done' : 'attention';
-    const count = items.get(phase.id)!.length;
+    const count = items.get(phase.id)!.reduce((n, item) => n + 1 + (item.children?.length ?? 0), 0);
     const note = phase.id === active ? notes.get(active) : undefined;
     const summary = note ? `Pi 自报 · ${short(note.phase, 24)}：${short(note.summary, 80)}`
       : isStarted ? `${count} 条记录${count > 14 ? '（显示最近 14 条）' : ''}` : phase.idle;
