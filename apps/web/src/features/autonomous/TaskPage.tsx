@@ -23,6 +23,8 @@ import { ApprovalCard } from './ApprovalCard';
 import { CandidateCard } from './CandidateCard';
 import { FiguresView, pickFigures } from './FiguresView';
 import { ReportBrief, ReportDetails, ReportEvidence, ReportSummary } from './ReportView';
+import { ReportDocument } from './ReportDocument';
+import { parseReport } from './report';
 import { ItemDrawerBody, itemTitle } from './StepDrawer';
 import { itemDetail } from './stepDetail';
 import { UsageView } from './UsageView';
@@ -92,6 +94,7 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const [keyInput, setKeyInput] = useState('');
   const [keysInjected, setKeysInjected] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState<DrawerState | null>(null);
+  const [docOpen, setDocOpen] = useState(false);
   useEffect(() => { setDrawerOpen(null); setZoom(null); setToasts([]); setLoadFailed(false); pollError.current = ''; }, [taskId]);
   // 最近一次操作失败的错误码：CREDENTIAL_REQUIRED 时显示「需要恢复」。
   const [lastControlError, setLastControlError] = useState<string | null>(null);
@@ -296,6 +299,9 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     return { sequence: e.sequence, text: typeof payload.message === 'string' ? payload.message : '', time: e.created_at.slice(11, 16) };
   }).filter(m => m.text);
   const figureFiles = pickFigures(files?.items ?? []);
+  // 有图文正文的报告（新任务）；旧报告为 null，只显示卡片视图。
+  const parsedReport = task?.report != null ? parseReport(task.report) : null;
+  const reportDoc = parsedReport?.document ? parsedReport : null;
   // 报告出来之前，左半边放「最近动态」：最新的操作与进度，随轮询更新，点开看详情。
   const recent = recentActivity(operations, 8);
   const stageOfPhase = (phase: PhaseId) => phase === 'setup' ? 'launch' : phase;
@@ -388,7 +394,10 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     </> };
   } else if (task && drawerOpen?.kind === 'stage' && drawerOpen.stageId === 'report') {
     drawer = { label: stepLabel('report'), title: '实验报告', onClose: closeDrawer, body: task.report != null
-      ? <><ReportSummary report={task.report} /><ReportDetails report={task.report} /></>
+      ? <>
+        {reportDoc && <button type="button" className="btn btn-primary auto-doc-open" onClick={() => setDocOpen(true)}><Icon name="doc" size={14} />打开图文报告（可导出 PDF）</button>}
+        <ReportSummary report={task.report} /><ReportDetails report={task.report} />
+      </>
       : <p className="ui-help">报告尚未生成；生成后这里显示结局、结论、指标、完成门槛、执行观测、模型叙述与局限。</p> };
   } else if (task && drawerOpen?.kind === 'details') {
     drawer = { label: '任务', title: '任务详情', onClose: closeDrawer, body: <>
@@ -529,7 +538,8 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
 
         <div className={`auto-results${figureFiles.length > 0 ? ' has-figures' : ''}`}>
           {task.report != null
-            ? <ReportBrief report={task.report} onOpen={() => setDrawerOpen({ kind: 'stage', stageId: 'report' })} />
+            ? <ReportBrief report={task.report} onOpen={() => setDrawerOpen({ kind: 'stage', stageId: 'report' })}
+              onOpenDocument={reportDoc ? () => setDocOpen(true) : undefined} />
             : <section className="auto-feed" aria-label="最近动态">
               <header className="auto-feed-head">
                 {running && <span className="wb-live-dot" aria-hidden="true" />}<b>最近动态</b>
@@ -555,5 +565,7 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     </StepFrame>
   </Workbench>
     {zoom && <Lightbox url={zoom.url} name={zoom.name} onClose={() => setZoom(null)} />}
+    {docOpen && task && reportDoc && <ReportDocument report={reportDoc} task={task} files={files?.items ?? []}
+      load={(file, signal) => api.fileBlob(task.id, { source: file.source, path: file.path }, signal)} onClose={() => setDocOpen(false)} />}
     <ToastStack items={toasts} onClose={closeToast} /></div>;
 }

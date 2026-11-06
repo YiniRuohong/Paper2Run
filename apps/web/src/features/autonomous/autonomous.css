@@ -217,3 +217,5 @@
 .auto-feed-tag { margin-right: 6px; padding: 1px 6px; border-radius: 6px; background: var(--raised); color: var(--muted); font-size: 11.5px; }
 @keyframes auto-feed-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .auto-feed-list > li { animation: none; } }
+
+.auto-doc-open { width: 100%; justify-content: center; margin-bottom: 12px; gap: 6px; }

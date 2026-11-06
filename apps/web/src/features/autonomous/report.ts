@@ -96,7 +96,46 @@ export interface ReviewView {
   findings: Array<{ description: string; evidence: string[] }>;
 }
 
+export const REPORT_SECTIONS = ['title', 'abstract', 'background', 'setup', 'method', 'deviations',
+  'results', 'discussion', 'limitations', 'conclusion'] as const;
+export type ReportSection = typeof REPORT_SECTIONS[number];
+
+export interface ReportFigure {
+  name: string; number: number; caption: string; derivedFrom: string[]; sha256: string; bytes: number | null;
+}
+
+/** 智能体撰写的图文报告（模型解读）：十个固定章节 + 正文嵌入的冻结图表。旧报告没有。 */
+export interface ReportDocumentData {
+  sections: Record<ReportSection, string>;
+  figures: ReportFigure[];
+  sha256: string;
+}
+
+export function parseDocument(value: unknown): ReportDocumentData | null {
+  const item = rec(value);
+  const sections = rec(item?.sections);
+  if (!item || !sections || !Array.isArray(item.figures)) return null;
+  const parsed = {} as Record<ReportSection, string>;
+  for (const name of REPORT_SECTIONS) {
+    const text = str(sections[name]);
+    if (text === null) return null;
+    parsed[name] = text;
+  }
+  const figures: ReportFigure[] = [];
+  for (const raw of item.figures) {
+    const f = rec(raw);
+    const name = str(f?.name), sha256 = str(f?.sha256), number = num(f?.number);
+    const caption = strAllowEmpty(f?.caption), derivedFrom = strList(f?.derived_from);
+    if (!f || name === null || sha256 === null || number === null || caption === null || derivedFrom === null) return null;
+    figures.push({ name, number, caption, derivedFrom, sha256, bytes: num(f.bytes) });
+  }
+  const sha256 = str(item.sha256);
+  return sha256 === null ? null : { sections: parsed, figures, sha256 };
+}
+
 export interface ExperimentReport {
+  /** 智能体撰写的图文报告；旧报告或结构不符时为 null（页面退回卡片视图）。 */
+  document: ReportDocumentData | null;
   /** 结局字段为可选：旧报告没有它们。 */
   outcome: string | null;
   outcomeReason: string | null;
@@ -297,6 +336,7 @@ export function parseReport(value: unknown): ExperimentReport | null {
   const verification = item.verification === null || item.verification === undefined ? null : parseVerification(item.verification);
   if (item.verification != null && verification === null) return null;
   return {
+    document: parseDocument(item.document),
     outcome,
     outcomeReason,
     outcomeSnapshotSha256: outcomeSnapshot,

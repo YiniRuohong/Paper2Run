@@ -1,0 +1,95 @@
+/* 图文报告：屏幕上是居中的纸张，打印时只输出纸张（A4，页码，图表不跨页）。
+   纸张固定为浅底深字，不跟随应用主题，导出的 PDF 与屏幕一致。 */
+.rd-overlay {
+  position: fixed; inset: 0; z-index: 900; overflow: auto;
+  background: color-mix(in srgb, #1d2128 82%, transparent);
+  backdrop-filter: blur(3px);
+}
+.rd-toolbar {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px;
+  padding: 10px 18px; background: #14171c; color: #e8eaee; border-bottom: 1px solid #2a2f37;
+}
+.rd-toolbar-title { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; font-weight: 600; font-size: 14px; }
+.rd-toolbar .btn-icon { color: #e8eaee; }
+
+.rd-paper {
+  --rd-ink: #1b1e23; --rd-soft: #5b6270; --rd-line: #dde1e7; --rd-accent: #2f5d8a; --rd-tint: #f3f6fa;
+  box-sizing: border-box; width: min(860px, calc(100% - 32px)); margin: 28px auto 64px; padding: 64px 72px 56px;
+  background: #fff; color: var(--rd-ink); border-radius: 4px; box-shadow: 0 18px 48px rgb(0 0 0 / 28%);
+  font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", "STSong", Georgia, serif;
+  font-size: 15px; line-height: 1.8; text-align: justify;
+}
+.rd-paper h1, .rd-paper h2, .rd-paper h4, .rd-paper h5, .rd-toolbar-title,
+.rd-meta, .rd-verdict-grid, .rd-paper figcaption, .rd-paper table, .rd-kicker, .rd-note {
+  font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+.rd-mono, .rd-paper code, .rd-paper pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .86em; }
+
+.rd-head { border-bottom: 2px solid var(--rd-ink); padding-bottom: 18px; margin-bottom: 26px; }
+.rd-kicker { margin: 0 0 8px; color: var(--rd-accent); font-size: 12px; letter-spacing: .12em; font-weight: 600; }
+.rd-head h1 { margin: 0 0 18px; font-size: 26px; line-height: 1.35; font-weight: 700; text-align: left; }
+.rd-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 20px; margin: 0; font-size: 12.5px; }
+.rd-meta div { min-width: 0; }
+.rd-meta dt { color: var(--rd-soft); }
+.rd-meta dd { margin: 0; overflow-wrap: anywhere; }
+.rd-meta div:first-child { grid-column: 1 / -1; }
+
+.rd-verdict { border: 1px solid #c9d3df; border-left: 4px solid var(--rd-accent); background: var(--rd-tint); padding: 14px 18px; margin: 0 0 26px; }
+.rd-verdict h2 { margin: 0 0 10px; font-size: 14px; }
+.rd-verdict-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rd-verdict-grid span { display: block; color: var(--rd-soft); font-size: 12px; }
+.rd-verdict-grid b { font-size: 15px; }
+.rd-verdict-grid small { display: block; color: var(--rd-soft); font-size: 12px; }
+.rd-verdict ul { margin: 10px 0 6px; padding-left: 20px; font-size: 13px; }
+
+.rd-abstract { background: #fafbfc; border-top: 1px solid var(--rd-line); border-bottom: 1px solid var(--rd-line); padding: 6px 22px 2px; margin-bottom: 30px; }
+.rd-abstract h2 { text-align: center; font-size: 15px; letter-spacing: .4em; margin: 10px 0 2px; }
+.rd-section { margin: 0 0 26px; }
+.rd-section h2 { display: flex; align-items: baseline; gap: 10px; font-size: 18px; margin: 30px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--rd-line); text-align: left; }
+.rd-num { color: var(--rd-accent); font-variant-numeric: tabular-nums; min-width: 1.2em; }
+.rd-paper h4 { font-size: 15.5px; margin: 20px 0 6px; text-align: left; }
+.rd-paper h5 { font-size: 14.5px; margin: 16px 0 4px; color: var(--rd-soft); text-align: left; }
+.rd-paper p { margin: 8px 0; text-indent: 2em; }
+.rd-verdict p, .rd-note, .rd-appendix p, .rd-paper li p { text-indent: 0; }
+.rd-paper ul, .rd-paper ol { margin: 8px 0; padding-left: 2.2em; }
+.rd-paper li { margin: 3px 0; }
+.rd-paper blockquote { margin: 12px 0; padding: 6px 16px; border-left: 3px solid var(--rd-line); color: var(--rd-soft); }
+.rd-paper code { background: #f1f3f6; padding: 1px 5px; border-radius: 3px; }
+.rd-paper pre { background: #f6f8fa; border: 1px solid var(--rd-line); padding: 12px 14px; overflow-x: auto; line-height: 1.55; text-align: left; }
+.rd-paper pre code { background: none; padding: 0; }
+.rd-math { font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif; font-style: italic; white-space: nowrap; }
+.rd-figref { color: var(--rd-accent); font-weight: 600; }
+
+.rd-table-wrap { overflow-x: auto; margin: 14px 0; }
+.rd-paper table { border-collapse: collapse; margin: 0 auto; font-size: 13px; line-height: 1.5; min-width: 60%; }
+.rd-paper thead th { border-top: 2px solid var(--rd-ink); border-bottom: 1px solid var(--rd-ink); padding: 7px 12px; text-align: left; font-weight: 600; }
+.rd-paper tbody td { padding: 6px 12px; border-bottom: 1px solid #edf0f3; text-align: left; font-variant-numeric: tabular-nums; }
+.rd-paper tbody tr:last-child td { border-bottom: 2px solid var(--rd-ink); }
+
+.rd-figure { margin: 22px auto; text-align: center; }
+.rd-figure-img { display: flex; align-items: center; justify-content: center; min-height: 80px; }
+.rd-figure img { max-width: 100%; max-height: 520px; object-fit: contain; }
+.rd-figure figcaption { margin-top: 8px; font-size: 13px; line-height: 1.6; color: var(--rd-ink); text-align: center; }
+.rd-source { display: block; color: var(--rd-soft); font-size: 11.5px; }
+.rd-note { color: var(--rd-soft); font-size: 12.5px; }
+.rd-missing { color: #a33; text-indent: 0; }
+.rd-appendix h2 .rd-num { color: var(--rd-soft); }
+
+@media (max-width: 760px) {
+  .rd-paper { padding: 32px 22px; }
+  .rd-meta, .rd-verdict-grid { grid-template-columns: 1fr; }
+}
+
+/* 打印 / 导出 PDF：只留纸张。 */
+@media print {
+  @page { size: A4; margin: 18mm 16mm 20mm; @bottom-center { content: counter(page) " / " counter(pages); font-size: 9pt; color: #777; } }
+  html.rd-printing body > *:not(.rd-overlay) { display: none !important; }
+  html.rd-printing, html.rd-printing body { background: #fff !important; height: auto !important; overflow: visible !important; }
+  html.rd-printing .rd-overlay { position: static; overflow: visible; background: none; backdrop-filter: none; }
+  html.rd-printing .rd-toolbar { display: none; }
+  html.rd-printing .rd-paper { width: auto; margin: 0; padding: 0; box-shadow: none; border-radius: 0; font-size: 10.5pt; }
+  .rd-figure, .rd-verdict, .rd-paper table, .rd-paper pre { break-inside: avoid; }
+  .rd-section h2, .rd-paper h4 { break-after: avoid; }
+  .rd-figure img { max-height: 120mm; }
+  .rd-table-wrap { overflow: visible; }
+}

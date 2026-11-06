@@ -84,6 +84,8 @@ async function harness(options = {}) {
     './CandidateCard': { CandidateCard: box('CandidateCard') },
     './ActivityViews': { ProgressNotes: box('ProgressNotes'), SpecialistCalls: box('SpecialistCalls') },
     './ReportView': { ReportSummary: box('ReportSummary'), ReportDetails: box('ReportDetails'), ReportEvidence: box('ReportEvidence'), ReportBrief: box('ReportBrief') },
+    './ReportDocument': { ReportDocument: box('ReportDocument') },
+    './report': { parseReport: () => null },
     './StepDrawer': { ItemDrawerBody: box('ItemDrawerBody'), itemTitle: detail => `title:${detail.kind}` },
     './stepDetail': stepDetail,
     './FiguresView': { FiguresView: box('FiguresView'), pickFigures: items => items.filter(f => /\.png$/.test(f.path)) },

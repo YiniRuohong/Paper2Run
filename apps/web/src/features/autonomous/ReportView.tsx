@@ -40,7 +40,7 @@ export function ReportSummary({ report }: { report: unknown }) {
 }
 
 /** 中间栏的报告摘要：结局、比较结论、报告状态、前两条原因与指标；全文在「报告」抽屉里（onOpen）。 */
-export function ReportBrief({ report, onOpen }: { report: unknown; onOpen: () => void }) {
+export function ReportBrief({ report, onOpen, onOpenDocument }: { report: unknown; onOpen: () => void; onOpenDocument?: () => void }) {
   const parsed = parseReport(report);
   if (!parsed) return <div className="auto-brief">
     <p className="ui-help">报告结构与前端预期不一致。</p>
@@ -66,6 +66,7 @@ export function ReportBrief({ report, onOpen }: { report: unknown; onOpen: () =>
     </div>}
     <p className="auto-brief-note">
       <span>判定由程序给出，不来自模型自述{all.length > metrics.length ? `；另有 ${all.length - metrics.length} 项指标在完整报告里` : ''}。</span>
+      {onOpenDocument && <button type="button" className="btn btn-primary" onClick={onOpenDocument}>图文报告</button>}
       <button type="button" className="btn btn-secondary" onClick={onOpen}>查看完整报告</button>
     </p>
   </div>;
