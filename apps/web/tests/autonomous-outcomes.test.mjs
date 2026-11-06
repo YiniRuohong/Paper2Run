@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   defaultConfig, validateConfig, taskDisplay, taskBucket, outcomeLabel, outcomeTone, errorExplanation, maxRepairRounds, stateLabel, terminalState,
+  decisionVisible, taskTone,
 } from '../src/features/autonomous/config.ts';
 import { parseReport, parseCandidate, parseReviews } from '../src/features/autonomous/report.ts';
 
@@ -46,6 +47,41 @@ test('without an outcome the lifecycle state is the status; paused keeps its not
   assert.equal(stateLabel('incomplete'), '未完成');
   assert.equal(terminalState('incomplete'), true);
   assert.equal(taskDisplay({ state: 'incomplete' }).finished, true);
+});
+
+test('a pending decision is shown only on a live task; stopped or finished tasks drop it', () => {
+  const decision = { id: 'd' };
+  assert.equal(decisionVisible({ state: 'paused', outcome: null, pending_decision: decision }), true);
+  assert.equal(decisionVisible({ state: 'paused', outcome: null, pending_decision: null }), false);
+  for (const state of ['stopped', 'cancelled', 'completed', 'failed', 'incomplete', 'stopping']) {
+    assert.equal(decisionVisible({ state, outcome: null, pending_decision: decision }), false, state);
+  }
+  assert.equal(decisionVisible({ state: 'paused', outcome: 'completed_with_issues', pending_decision: decision }), false, 'an outcome ends the decision');
+  const stopped = taskDisplay({ state: 'stopped', outcome: null, pending_decision: decision });
+  assert.notEqual(stopped.tone, 'warn', 'a stale decision on a stopped task does not ask for a person');
+  assert.equal(taskDisplay({ state: 'paused', pending_decision: decision }).tone, 'warn');
+});
+
+test('stopped and cancelled tasks are idle, never green; only real completion is ok', () => {
+  assert.equal(taskTone('stopped'), 'idle');
+  assert.equal(taskTone('cancelled'), 'idle');
+  assert.equal(taskTone('incomplete'), 'idle');
+  assert.equal(taskTone('completed'), 'ok');
+  assert.equal(taskTone('succeeded'), 'ok');
+  assert.equal(taskTone('failed'), 'bad');
+  assert.deepEqual([taskDisplay({ state: 'stopped' }).tone, taskDisplay({ state: 'cancelled' }).tone], ['idle', 'idle']);
+  // An outcome still decides the tone of a stopped task.
+  assert.equal(taskDisplay({ state: 'stopped', outcome: 'verified' }).tone, 'ok');
+});
+
+test('control and write errors the backend raises have Chinese explanations', () => {
+  assert.equal(errorExplanation('CANCELLATION_PENDING'), '任务正在停止，等待后台作业结束');
+  assert.equal(errorExplanation('PAPER_CONTENT_REQUIRED'), '论文正文尚未就绪，请先完成解析');
+  assert.equal(errorExplanation('CSRF_FAILED'), '请求来源被拒绝；请从启动器打开的页面操作');
+  assert.match(errorExplanation('CREDENTIAL_REQUIRED'), /模型密钥只保存在内存中/);
+  for (const code of ['CANCELLATION_PENDING', 'PAPER_CONTENT_REQUIRED', 'CSRF_FAILED', 'CREDENTIAL_REQUIRED']) {
+    assert.doesNotMatch(errorExplanation(code), /—/, `${code}: no em-dash pauses in UI copy`);
+  }
 });
 
 test('an unknown outcome is shown as unknown, never guessed into a known one', () => {

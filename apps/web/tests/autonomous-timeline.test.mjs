@@ -293,6 +293,19 @@ test('probe: a task stopped during execute without an outcome never greens the l
   assert.equal(s.execute.mark, 'done');
 });
 
+test('a stopped or cancelled task_finished item is idle, not green; a withdrawn decision stays in 阅读与方案', () => {
+  for (const state of ['stopped', 'cancelled']) {
+    const s = byId(buildStages({ id: 't', state, outcome: null }, [
+      ev(1, 'task_created'), ev(2, 'protocol_approval_required', { reason: 'r' }), ev(3, 'stop_requested'),
+      ev(4, 'decision_withdrawn', { decision_id: 'd', reason: 'task_stopped' }), ev(5, 'task_finished', { state }),
+    ]).stages);
+    const finished = s.report.items.find(item => item.label === '任务结束');
+    assert.equal(finished.tone, 'idle', state);
+    const withdrawn = s.plan.items.find(item => item.label === '待决定已撤回');
+    assert.deepEqual([withdrawn.detail, withdrawn.tone], ['任务已停止', 'idle']);
+  }
+});
+
 test('冻结证据 is not done when it has no records', () => {
   const s = byId(buildStages({ id: 't', state: 'completed', outcome: null }, [
     ev(1, 'task_created'), tool(2, 'b', 'execute', { command: 'x' }), done(3, 'b', 'execute'), ev(4, 'task_finished', { state: 'completed' }),

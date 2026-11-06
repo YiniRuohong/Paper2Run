@@ -36,7 +36,7 @@ const TOOL_PHASE: Record<string, PhaseId> = {
 // protocol_rejected 与审批请求、批准放在同一阶段，一次决定不拆到两处。
 const EVENT_PHASE: Record<string, PhaseId> = {
   task_created: 'setup', worker_started: 'setup', session_ready: 'setup',
-  protocol_approval_required: 'plan', protocol_approved: 'plan', protocol_rejected: 'plan',
+  protocol_approval_required: 'plan', protocol_approved: 'plan', protocol_rejected: 'plan', decision_withdrawn: 'plan',
   job_reconciled: 'execute',
   artifact_frozen: 'evidence',
   candidate_frozen: 'review', review_recorded: 'review', review_failed: 'review',
@@ -84,6 +84,7 @@ function eventLabel(e: AutonomousEvent): Label | null {
     case 'protocol_approval_required': return { label: '等待方案审批', detail: str(p.reason), tone: 'warn' };
     case 'protocol_approved': return { label: '方案已批准', detail: str(p.protocol_version) ?? null, tone: 'ok' };
     case 'protocol_rejected': return { label: '方案变更已拒绝', detail: str(p.note) ? `理由：${short(str(p.note)!, 60)}` : '当前方案保持不变', tone: 'accent' };
+    case 'decision_withdrawn': return { label: '待决定已撤回', detail: p.reason === 'task_stopped' ? '任务已停止' : str(p.reason), tone: 'idle' };
     case 'artifact_frozen': return { label: `冻结 ${str(p.name) ?? '证据'}`, detail: [str(p.kind), typeof p.bytes === 'number' ? `${p.bytes} B` : null].filter(Boolean).join(' · ') || null, tone: 'ok' };
     case 'candidate_frozen': {
       const round = int(p.round); const snapshot = str(p.snapshot_sha256);

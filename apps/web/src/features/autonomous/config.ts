@@ -103,12 +103,12 @@ const STATE_LABELS: Record<string, string> = { created: '已创建', queued: '�
 export const stateLabel = (state: string) => own(STATE_LABELS, state) ?? state;
 export const taskStateLabel = stateLabel;
 // 任务状态到 tone 的唯一映射：进行中 run；需要人（暂停/阻塞/待决策）warn；
-// 失败 bad；正常结束 ok；其余 idle。不新造颜色。
+// 失败 bad；正常完成 ok；其余 idle。不新造颜色。
+// 停止、取消、无进展结束都不是「完成」：没有结局时用 idle，不配绿。
 export const taskTone = (state: string): 'ok' | 'run' | 'bad' | 'warn' | 'idle' =>
   state === 'failed' ? 'bad'
-    : state === 'incomplete' ? 'idle' // 无进展结束，没有候选结果：不配绿
     : state === 'paused' || state === 'blocked' || state === 'awaiting_decision' ? 'warn'
-    : terminalState(state) ? 'ok'
+    : state === 'completed' || state === 'succeeded' ? 'ok'
     : state === 'running' || state === 'starting' || state === 'queued' ? 'run'
     : 'idle';
 
@@ -145,13 +145,18 @@ export interface TaskDisplay {
   /** 是否显示「已暂停 / 后台作业可能仍在运行」类提示。 */
   pausedNotice: boolean;
 }
+/** 待决定是否仍需要人处理：任务已结束、正在停止或已有结局时，决定无法再回答，不显示。
+ * 后端停止时会撤回决定（decision_withdrawn）；这里兜住旧任务和竞争窗口。 */
+export function decisionVisible(task: { state: string; outcome?: string | null; pending_decision?: unknown }): boolean {
+  return task.pending_decision != null && !terminalState(task.state) && task.state !== 'stopping' && task.outcome == null;
+}
 export function taskDisplay(task: { state: string; outcome?: string | null; pending_decision?: unknown }): TaskDisplay {
   const outcome = task.outcome ?? null;
   if (outcome) {
     return { text: outcomeLabel(outcome)!, tone: outcomeTone(outcome)!, caption: knownOutcome(outcome) ? OUTCOMES[outcome].caption : null,
       lifecycle: stateLabel(task.state), finished: true, pausedNotice: false };
   }
-  const tone: Tone = task.pending_decision != null && task.state !== 'failed' ? 'warn' : taskTone(task.state);
+  const tone: Tone = decisionVisible(task) ? 'warn' : taskTone(task.state);
   return { text: stateLabel(task.state), tone, caption: null, lifecycle: null, finished: terminalState(task.state), pausedNotice: task.state === 'paused' };
 }
 /** 总览筛选：安全终止归入「失败」，其余有结局的任务归入「已结束」。 */
@@ -169,6 +174,10 @@ const ERROR_EXPLANATIONS: Record<string, string> = {
   CANDIDATE_UNDER_REVIEW: '候选结果正在独立复核，证据已冻结；复核结束后才能修改',
   CANDIDATE_INCOMPLETE: '候选结果不满足提交条件，详见事件日志',
   TASK_BUSY: '上一个执行进程仍在暂停，请稍后重试',
+  CREDENTIAL_REQUIRED: '模型密钥只保存在内存中，应用重启后需要重新输入；在本页「需要恢复」卡片中重新输入后继续',
+  CANCELLATION_PENDING: '任务正在停止，等待后台作业结束',
+  PAPER_CONTENT_REQUIRED: '论文正文尚未就绪，请先完成解析',
+  CSRF_FAILED: '请求来源被拒绝；请从启动器打开的页面操作',
 };
 export const errorExplanation = (code: string): string | null => own(ERROR_EXPLANATIONS, code) ?? null;
 /** 决定提交冲突：两次点击竞争或决定已被替换。刷新任务即可，不当作错误。 */
