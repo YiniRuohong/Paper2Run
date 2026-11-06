@@ -36,6 +36,18 @@ def test_probe_requires_saved_config_then_reports_observations(client):
     assert cfg["workspace"].endswith("workspace") and "target-probes" in str(state_dir)
 
 
+def test_probe_refuses_cross_site_requests(client):
+    # The probe runs host commands (docker, ssh); a foreign page must not trigger it blind.
+    service = client.app.state.runtime["autonomous_service"]
+    service.target_factory = FakeTarget
+    assert write(client, "PUT", "/projects/project/config", {"config": config()}).status_code == 200
+    FakeTarget.built.clear()
+    refused = client.get(BASE + "/projects/project/target/probe", headers={"Sec-Fetch-Site": "cross-site"})
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "CSRF_FAILED"
+    assert FakeTarget.built == []
+    assert client.get(BASE + "/projects/project/target/probe", headers={"Sec-Fetch-Site": "same-origin"}).status_code == 200
+
+
 def test_probe_needs_membership_and_strict_query(client):
     service = client.app.state.runtime["autonomous_service"]
     service.target_factory = FakeTarget
