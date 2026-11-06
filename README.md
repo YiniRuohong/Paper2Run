@@ -26,6 +26,20 @@ _把论文，变成可执行、可核查的实验。规划基线：2026-09-19。
 - **一键启动（推荐）：** macOS 双击 `启动Paper2Run.command`，Windows 双击 `启动Paper2Run.bat`。两者调用 `scripts/launch.py`：自动创建 `.venv`、必要时构建前端，然后从单一本地端口（8010 起）同时提供 API 与页面并打开浏览器；需要 Python 3.11+。
 - **开发模式：** 分别启动 API 与前端 dev server，命令见下文 [本地开发与测试](#本地开发与测试)。
 
+## 🪟 Windows
+
+Windows 与 macOS、Linux 使用同一种执行方式：Docker 里的 `paper2run-experiment:1` Linux 容器。**Windows 按构造支持，只有在 macOS 上强制走 win32 分支的单元测试覆盖，尚未在真实 Windows 机器上验证。** 覆盖范围与已知限制见[设计文档 5.11](docs/superpowers/specs/2026-11-05-autonomous-only-research-stages-design.md#511-windows)。
+
+前置条件：
+
+- **Docker Desktop**，启用 WSL2 后端，并处于 Linux 容器模式（托盘菜单显示 "Switch to Windows containers" 即为 Linux 模式）。实验镜像需在该 Docker 中构建：在仓库根目录运行 `docker build -t paper2run-experiment:1 -f scripts/autonomous/Dockerfile scripts/autonomous`（即 `scripts/autonomous/build-image.sh` 的内容，PowerShell 中也可直接执行）。
+- **Python 3.11+**（一键启动 `启动Paper2Run.bat`；安装时勾选 "Add python.exe to PATH"）。桌面安装包自带 Python，不需要单独安装。
+- **Node ≥ 22.19**，或使用桌面安装包内置的 Node 运行时。
+
+没有 Docker 或 Docker 处于 Windows 容器模式时，应用照常启动，启动日志给出中文提示；新建实验页的"执行位置能力"会显示缺什么。启动按钮不会因此被禁用，任务在准备阶段失败并说明原因。
+
+限制：本地工作区只接受盘符路径（不支持 UNC 网络共享）；数据目录不要放在 OneDrive 等云同步目录（云文件占位符是重解析点，会被安全读取拒绝）；从 Windows 连接 SSH 目标依赖 Windows OpenSSH，未验证；不在 Windows 上验证 GPU。
+
 ## 🖥️ 桌面应用（macOS / Windows）
 
 `apps/desktop/` 是 Electron 桌面壳：内置一份独立的 CPython 3.12（python-build-standalone，按 SHA-256 固定），启动时在本机回环随机端口拉起后端，并在原生窗口中加载界面；用户无需安装 Python 或 Node。之所以内置真实解释器而不是 PyInstaller，是因为 Electron 以解释器参数启动 `serve.py`，离线解析组件 MinerU 也要用 `sys.executable -m pip` 按需安装。

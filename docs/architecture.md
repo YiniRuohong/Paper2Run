@@ -72,7 +72,7 @@ Pi 自己决定科研步骤，程序不设阶段关卡，`note_progress` 只用�
 
 详见 [components/sandbox.md](components/sandbox.md)。自主模式要求本地或 SSH 目标上的 Docker 与 `paper2run-experiment:1` 镜像。可信控制器配置实际网络规则，实验进程使用无能力的非 root 用户，禁止宿主、私网与元数据访问；隔离探针失败时阻塞，不降级到宿主 shell。后台 supervisor 保存状态、限制日志、独立实施时限，并支持断线查询和取消。SSH 使用严格 known_hosts 校验且不转发认证 agent。存储限额属于观测值，token 根据服务商用量限制后续请求，不宣称单次在途响应的硬上限。
 
-实际本地 Docker 与本机 sshd 测试不等于远端 GPU 验收；用户尚未提供远程 GPU 目标。POSIX 安全文件读取与锁不可用的平台会明确拒绝自主操作，跨平台实机支持以 13 号验收记录为准。
+实际本地 Docker 与本机 sshd 测试不等于远端 GPU 验收；用户尚未提供远程 GPU 目标。文件锁（`p2r_orchestration/locks.py`）在 POSIX 上用 `fcntl.flock`，在 Windows 上用 `msvcrt.locking`；防链接读取（`p2r_evaluation/safe_read.py`）在有 `O_NOFOLLOW` 与 `dir_fd` 的平台走 POSIX 路径，在 Windows 上逐级拒绝链接与重解析点并核对打开后的文件身份，两种机制都没有的平台明确拒绝。Windows 分支只有单元测试覆盖，未实机验证；跨平台实机支持以 13 号验收记录为准。执行位置能力探测（C6，`GET /api/v1/autonomous/projects/{project_id}/target/probe`）只报告观测到的 Docker、OSType、镜像与宿主可见 GPU，从不创建容器，也不声称网络隔离已验证。
 
 ## 5. 启动方式
 
