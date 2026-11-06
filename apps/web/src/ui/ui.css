@@ -247,3 +247,7 @@ button.ui-row { width: 100%; border: 0; background: transparent; text-align: lef
 @keyframes ui-lightbox-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ui-lightbox-zoom { from { transform: scale(0.92); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .ui-lightbox, .ui-lightbox-figure img { animation: none; } }
+
+/* Project logo (logo-mark.png) masked to the current text colour; see AppMark in Icon.tsx. */
+.app-mark { display: inline-block; flex: none; background-color: currentColor;
+  -webkit-mask: url("./logo-mark.png") center / contain no-repeat; mask: url("./logo-mark.png") center / contain no-repeat; }

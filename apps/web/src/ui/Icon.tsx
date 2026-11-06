@@ -52,9 +52,7 @@ export function Icon({ name, size = 16, spin = false, className }: { name: IconN
 // App mark derived from apps/desktop/resources/icon.svg: paper sheet with a
 // folded corner and an indigo "run" triangle, simplified for 18-20px.
 export function AppMark({ size = 18 }: { size?: number }) {
-  return <svg className="app-mark" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-    <path d="M8 2.75h7.25l4 4V19a2.25 2.25 0 0 1-2.25 2.25H8A2.25 2.25 0 0 1 5.75 19V5A2.25 2.25 0 0 1 8 2.75z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-    <path d="M15.25 2.75v2.75a1.25 1.25 0 0 0 1.25 1.25h2.75" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
-    <path d="M10.4 10.6v5.8l5-2.9z" fill="var(--accent)" stroke="var(--accent)" strokeWidth="1.2" strokeLinejoin="round" />
-  </svg>;
+  // The project logo (ui/logo-mark.png, from scripts/desktop/make_logo_assets.py) as a CSS mask: it takes the text colour,
+  // so it reads in light and dark themes alike.
+  return <span className="app-mark" style={{ width: size, height: size }} aria-hidden="true" />;
 }
