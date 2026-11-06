@@ -1,0 +1,19 @@
+.mouseSelection {
+  position: absolute;
+  border: 1px dashed var(--hl-border, rgba(91, 91, 214, 0.9));
+  background: var(--hl-fill, rgba(124, 121, 255, 0.14));
+}
+/* Internet Explorer support method */
+/* biome-ignore lint/correctness/noUnknownMediaFeatureName: update this */
+@media all and (-ms-high-contrast: none), (-ms-high-contrast: active) {
+  .mouseSelection {
+    opacity: 0.5;
+  }
+}
+
+/* Microsoft Edge Browser 12~18 (All) - @supports method */
+@supports (-ms-ime-align: auto) {
+  .mouseSelection {
+    opacity: 0.5;
+  }
+}

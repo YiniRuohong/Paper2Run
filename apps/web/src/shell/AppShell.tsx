@@ -14,6 +14,7 @@ import './shell.css';
 //   #/new         新建实验（全幅草稿页，第 01 步；首次上传前不创建服务端对象）
 //   #/draft/<id>  草稿工作台（全幅；从当前步继续）
 //   #/task/<id>   任务工作台（全幅）
+//   #/reader[/<paperId>]  论文阅读器（PDF 预览 + 批注，书架 = 已上传的 PDF 论文）
 //   #/settings    设置（主题、本地服务、解析模式）
 // 路由解析与旧链接重定向见 routes.ts。new/draft/task 不渲染侧栏与面包屑栏。
 const api = createAutonomousApi();
@@ -22,6 +23,7 @@ const OverviewPage = lazy(() => import('../features/overview/OverviewPage'));
 const DraftPage = lazy(() => import('../features/flow/DraftPage'));
 const TaskPage = lazy(() => import('../features/autonomous/TaskPage'));
 const Settings = lazy(() => import('../features/settings/Settings'));
+const ReaderPage = lazy(() => import('../features/reader/ReaderPage'));
 
 const hashRoute = () => parseRoute(window.location.hash);
 const narrow = () => window.matchMedia?.('(max-width: 760px)').matches ?? false;
@@ -58,9 +60,13 @@ export default function AppShell() {
   }
 
   const view: View = route.view;
-  const crumbs: [string, string] = view === 'overview' ? ['工作区', '总览'] : ['Paper2Run', '设置'];
+  const crumbs: [string, string] = view === 'overview' ? ['工作区', '总览']
+    : view === 'reader' ? ['工作区', '论文阅读']
+    : ['Paper2Run', '设置'];
+  // 阅读器铺满主区域：不走居中版面和页内滚动，PDF 自己滚。
+  const full = view === 'reader';
 
-  return <div className={`shell${sideOpen ? '' : ' side-closed'}`}>
+  return <div className={`shell${sideOpen ? '' : ' side-closed'}${full ? ' full' : ''}`}>
     <Sidebar open={sideOpen} view={view} taskId={null} recent={recent.tasks} recentFailed={recent.failed} health={health} host={host} onHide={() => setSideOpen(false)} />
     {sideOpen && <button type="button" className="side-scrim" aria-label="关闭侧栏" tabIndex={-1} onClick={() => setSideOpen(false)} />}
     <main className="main" id="main">
@@ -70,7 +76,12 @@ export default function AppShell() {
           <span>{crumbs[0]}</span><i aria-hidden="true">/</i><b aria-current="page" title={crumbs[1]}>{crumbs[1]}</b>
         </nav>
       </header>
-      <div className="main-body">
+      {route.view === 'reader' && <div className="main-full">
+        <Suspense fallback={<p role="status" className="page-loading">加载阅读器…</p>}>
+          <ReaderPage papers={papers} paperId={route.paperId} />
+        </Suspense>
+      </div>}
+      <div className="main-body" hidden={full}>
         <div className={`page page-${view}`}>
           {view === 'overview' && <Suspense fallback={<p role="status" className="page-loading">加载总览…</p>}>
             <OverviewPage api={api} papers={papers} />

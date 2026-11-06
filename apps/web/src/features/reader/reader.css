@@ -1,0 +1,1565 @@
+/* 论文阅读器（PTR 批注器）样式。原样式来自队友的 feat/pdf-annotator，
+   这里去掉了与 Paper2Run 重复的全局令牌和 html/body 规则（令牌来自 styles/tokens.css），
+   所有选择器都收进 .ptr 作用域，避免与应用外壳的 .shell/.main/.side 等类名冲突。 */
+
+
+.ptr {
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Segoe UI", "Microsoft YaHei", sans-serif;
+  --mono: "SF Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r-xs: 5px;
+  --r-s: 7px;
+  --r-m: 9px;
+  --r-l: 13px;
+  --head-h: 52px;
+  --ease: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur-fast: 140ms;
+
+  /* highlight palette (switchable in settings) */
+  --hl-soft: rgba(124, 121, 255, 0.28);
+  --hl-strong: rgba(91, 91, 214, 0.55);
+  --hl-border: rgba(91, 91, 214, 0.9);
+  --hl-fill: rgba(124, 121, 255, 0.14);
+  --hl-area: rgba(124, 121, 255, 0.18);
+}
+
+.ptr *,
+.ptr *::before,
+.ptr *::after {
+  box-sizing: border-box;
+}
+
+.ptr button,
+.ptr input,
+.ptr textarea,
+.ptr select {
+  font: inherit;
+  color: inherit;
+}
+
+.ptr :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ptr a {
+  color: var(--accent-text);
+}
+
+
+/* ---------- shell：填满 Paper2Run 主区域（外壳已有自己的侧栏与顶栏） ---------- */
+.ptr {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+
+.ptr .ptr-load-error,
+.ptr .ptr-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  height: 100%;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.ptr .ptr-load-error b,
+.ptr .ptr-empty b {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ptr .ptr-load-error {
+  position: absolute;
+  inset: 0;
+}
+
+.ptr.collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+
+/* ---------- sidebar ---------- */
+.ptr .ptr-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--side);
+  border-right: 1px solid var(--line);
+}
+
+.ptr .ptr-side-top {
+  flex: none;
+  padding: 14px 14px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ptr .brand-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+}
+
+.ptr .brand-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.ptr .brand-name {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--accent-text);
+  white-space: nowrap;
+}
+
+.ptr .brand-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.ptr .head-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ptr .head-icon-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+
+.ptr .start-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  height: 42px;
+  margin-top: 12px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.ptr .start-pill:hover {
+  background: var(--raised);
+}
+
+.ptr .start-pill-plus {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  border: 1.4px solid var(--muted);
+  color: var(--muted);
+}
+
+
+/* 多选模式头部：纯文字「选择文件」+ 灰框圆形 × */
+.ptr .multi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  min-height: 42px;
+}
+
+.ptr .multi-title {
+  padding-left: 4px;
+  color: var(--text);
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.ptr .multi-exit {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--faint);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.ptr .multi-exit:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+
+.ptr .ptr-side-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 14px 14px;
+}
+
+
+/* ---------- bookshelf：时间分组 ---------- */
+.ptr .shelf-group + .shelf-group {
+  margin-top: 22px;
+}
+
+.ptr .group-label {
+  margin: 0 2px 10px;
+  color: var(--faint);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+
+.ptr .shelf-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.ptr .shelf-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 0;
+  border-radius: var(--r-m);
+}
+
+.ptr .shelf-main {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 4px 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-m) 0 0 var(--r-m);
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ptr .shelf-item:hover {
+  background: var(--hover);
+}
+
+.ptr .shelf-item:hover .shelf-main {
+  color: var(--text);
+}
+
+.ptr .shelf-item.on {
+  background: var(--nav-on);
+}
+
+.ptr .shelf-item.on .shelf-main {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.ptr .shelf-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ptr .shelf-main .doc-ico {
+  flex: none;
+  color: var(--faint);
+}
+
+.ptr .shelf-item.on .doc-ico {
+  color: var(--accent-text);
+}
+
+.ptr .pin-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--accent-text);
+  opacity: 0.85;
+}
+
+
+/* ⋯ kebab + dropdown menu */
+.ptr .kebab-wrap {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ptr .kebab {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ptr .kebab:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.ptr .row-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 148px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: dialog-in 140ms var(--ease);
+}
+
+.ptr .row-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) ease;
+}
+
+.ptr .row-menu button:hover {
+  background: var(--hover);
+}
+
+.ptr .row-menu button.danger {
+  color: var(--bad);
+}
+
+
+/* ---------- multi-select mode ---------- */
+/* 圆圈常驻 DOM：进入多选时宽度/透明度渐入，标题随之右移（动画过渡） */
+.ptr .checkbox {
+  flex: none;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  width: 0;
+  height: 20px;
+  margin-right: 0;
+  border: 1.5px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    width 280ms var(--ease),
+    opacity 280ms ease,
+    margin-right 280ms var(--ease),
+    border-color 280ms ease,
+    background 160ms ease;
+}
+
+.ptr .checkbox.show {
+  width: 20px;
+  margin-right: 12px;
+  border-color: var(--faint);
+  opacity: 1;
+}
+
+.ptr .checkbox.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+
+/* 底部批量操作栏：仅上方横线 + 中间竖线，无边框按钮 */
+.ptr .bulk-bar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.ptr .bulk-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  height: 46px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14.5px;
+  cursor: pointer;
+  transition: color var(--dur-fast) ease;
+}
+
+.ptr .bulk-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.ptr .bulk-btn.active {
+  color: var(--text);
+}
+
+.ptr .bulk-btn.danger.active {
+  color: var(--bad);
+}
+
+.ptr .bulk-btn:disabled {
+  cursor: default;
+}
+
+.ptr .bulk-divider {
+  flex: none;
+  width: 1px;
+  margin: 10px 6px;
+  background: var(--line);
+}
+
+
+.ptr .shelf-empty {
+  margin: 6px 2px;
+  color: var(--faint);
+  font-size: 13px;
+  text-align: center;
+}
+
+
+/* ---------- main / pdf stage ---------- */
+.ptr .ptr-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ptr .ptr-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  height: var(--head-h);
+  padding: 0 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.ptr .crumbs {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.ptr .crumbs span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ptr .crumbs i {
+  font-style: normal;
+  color: var(--faint);
+}
+
+.ptr .crumbs b {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 收起态顶栏：logo + 圆角框（打开侧边栏/搜索/新建）+ 标题 */
+.ptr .head-frame {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.ptr .head-frame .head-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+}
+
+.ptr .head-title {
+  min-width: 0;
+  margin-left: 8px;
+  color: var(--text);
+  font-size: 14.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
+/* 收起态：整条顶栏放大、拉开间距 */
+.ptr .ptr-head.collapsed-head {
+  height: 68px;
+  padding: 0 26px;
+  gap: 14px;
+}
+
+.ptr .collapsed-head .brand-logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.ptr .collapsed-head .brand-logo svg {
+  width: 21px;
+  height: 21px;
+}
+
+.ptr .collapsed-head .head-frame {
+  gap: 5px;
+  padding: 5px;
+  border-radius: 17px;
+}
+
+.ptr .collapsed-head .head-frame .head-icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+}
+
+.ptr .collapsed-head .head-frame .head-icon-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.ptr .collapsed-head .head-title {
+  margin-left: 12px;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+
+/* ---------- drawing toolbar ---------- */
+.ptr .toolbar-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.ptr .tool-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ptr .tool-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ptr .tool-btn.on {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.ptr .tool-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: dialog-in 160ms var(--ease);
+}
+
+.ptr .color-dot {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  outline: 1px solid var(--line);
+  outline-offset: 2px;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.ptr .color-dot:hover {
+  transform: scale(1.08);
+}
+
+.ptr .color-dot.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ptr .panel-divider {
+  flex: none;
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+}
+
+.ptr .width-opt {
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease;
+}
+
+.ptr .width-opt:hover {
+  background: var(--hover);
+}
+
+.ptr .width-opt.on {
+  background: var(--accent-soft);
+}
+
+.ptr .width-opt .bar {
+  display: inline-block;
+  width: 18px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.ptr .width-opt .erase-dot {
+  display: inline-block;
+  border-radius: 50%;
+  border: 1.5px dashed var(--muted);
+}
+
+
+/* 选区评论图标 */
+.ptr .sel-comment-btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--accent-text);
+  cursor: pointer;
+  box-shadow: var(--shadow-pop);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.ptr .sel-comment-btn:hover {
+  transform: translateY(-1px);
+}
+
+
+/* ---------- drawing layer ---------- */
+.ptr .drawing-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 4;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.ptr .drawing-layer.active {
+  pointer-events: auto;
+}
+
+
+/* ---------- movable comment dialog (no dim behind) ---------- */
+.ptr .comment-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  pointer-events: none;
+}
+
+.ptr .comment-dialog {
+  position: fixed;
+  left: 50%;
+  top: 42%;
+  z-index: 71;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 90vw);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+
+.ptr .comment-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 0;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.ptr .comment-head:active {
+  cursor: grabbing;
+}
+
+.ptr .comment-grip {
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.ptr .comment-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.ptr .comment-head .dialog-close {
+  margin-left: auto;
+}
+
+.ptr .comment-body {
+  padding: 12px 16px 0;
+}
+
+.ptr .comment-textarea {
+  width: 100%;
+  min-height: 150px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--dur-fast) ease;
+}
+
+.ptr .comment-textarea:focus {
+  border-color: var(--accent);
+}
+
+.ptr .comment-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+
+.ptr .pdf-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: var(--bg);
+}
+
+
+/* ---------- buttons ---------- */
+.ptr .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: none;
+  height: 32px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: var(--r-m);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease,
+    color var(--dur-fast) ease;
+}
+
+.ptr .btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ptr .btn:active {
+  transform: translateY(0.5px);
+}
+
+.ptr .btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.ptr .btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.ptr .btn-secondary {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.ptr .btn-secondary:hover {
+  background: var(--raised);
+}
+
+.ptr .btn-sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+
+
+/* ---------- modal / dialog ---------- */
+.ptr .overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.44);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  animation: overlay-in 160ms var(--ease);
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+
+.ptr .dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(600px, 86dvh);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  box-shadow: var(--shadow-pop);
+  animation: dialog-in 200ms var(--ease);
+}
+
+/* pdfjs 的 pdf_viewer.css 也有 .dialog（4px），用更高特异性夺回控制权 */
+.ptr .overlay .dialog,
+.ptr .comment-overlay .comment-dialog {
+  border-radius: 24px;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+
+.ptr .dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 14px 16px 0;
+}
+
+.ptr .dialog-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.ptr .dialog-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border: 0;
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ptr .dialog-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+
+.ptr .dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px 16px;
+}
+
+
+/* ---------- search dialog ---------- */
+.ptr .search-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ptr .search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  background: var(--field);
+  color: var(--muted);
+  transition: border-color var(--dur-fast) ease;
+}
+
+.ptr .search-box:focus-within {
+  border-color: var(--accent);
+}
+
+.ptr .search-box input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+
+.ptr .search-box input::placeholder {
+  color: var(--faint);
+}
+
+
+.ptr .seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-m);
+  background: var(--seg-bg, rgba(0, 0, 0, 0.05));
+}
+
+.ptr .seg button {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ptr .seg button:hover {
+  color: var(--text);
+}
+
+.ptr .seg button.on {
+  background: var(--seg-on, var(--surface));
+  color: var(--text);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+
+.ptr .search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ptr .search-filter-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.ptr .search-filter-btn {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.ptr .search-filter-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ptr .search-filter-btn.active {
+  color: var(--accent-text);
+}
+
+.ptr .search-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 45;
+  min-width: 128px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: dialog-in 140ms var(--ease);
+}
+
+.ptr .search-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) ease;
+}
+
+.ptr .search-menu button:hover {
+  background: var(--hover);
+}
+
+.ptr .search-menu button.on {
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+
+.ptr .search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ptr .result-item {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-m);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.ptr .result-item:hover {
+  background: var(--hover);
+  border-color: var(--line);
+}
+
+.ptr .result-main {
+  display: block;
+  font-size: 13.5px;
+  color: var(--text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ptr .result-main .hl-mark {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.ptr .result-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ptr .result-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.ptr .result-meta .ui-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.ptr .result-meta .dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.ptr .search-empty {
+  padding: 28px 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+
+/* ---------- settings dialog ---------- */
+.ptr .settings-section + .settings-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.ptr .settings-section h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.ptr .settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+}
+
+.ptr .settings-row .grow {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+}
+
+.ptr .settings-row .desc {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ptr .swatches {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ptr .swatch {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  outline: 1px solid var(--line);
+  outline-offset: 2px;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.ptr .swatch:hover {
+  transform: scale(1.08);
+}
+
+.ptr .swatch.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ptr .settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ptr .settings-about {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.ptr .settings-about a {
+  color: var(--accent-text);
+}
+
+
+/* ---------- new pdf dialog ---------- */
+.ptr .field-label {
+  display: block;
+  margin: 10px 0 5px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.ptr .field-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  background: var(--field);
+  color: var(--text);
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color var(--dur-fast) ease;
+}
+
+.ptr .field-input:focus {
+  border-color: var(--accent);
+}
+
+.ptr .field-error {
+  margin: 6px 0 0;
+  color: var(--bad, #be2a1e);
+  font-size: 12px;
+  min-height: 16px;
+}
+
+.ptr .dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.ptr .dialog-foot-start {
+  justify-content: flex-start;
+}
+
+
+/* ---------- confirm dialog (图二 style) ---------- */
+.ptr .confirm-body {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.ptr .confirm-btns {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.ptr .confirm-btns.end {
+  justify-content: flex-end;
+}
+
+.ptr .btn-danger {
+  background: var(--bad);
+  color: #ffffff;
+}
+
+.ptr .btn-danger:hover {
+  filter: brightness(0.92);
+}
+
+
+/* ---------- narrow windows ---------- */
+@media (max-width: 860px) {
+
+  .ptr {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ptr .ptr-side {
+    display: none;
+  }
+}
+
+
+/* ---------- zoom controls ---------- */
+.ptr .zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  background: var(--surface);
+}
+
+.ptr .zoom-label {
+  min-width: 44px;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--r-s);
+  background: transparent;
+  color: var(--text);
+  font: 500 12px / 1 var(--mono);
+  cursor: pointer;
+  transition: background var(--dur-fast) ease;
+}
+
+.ptr .zoom-label:hover {
+  background: var(--hover);
+}
+
+.ptr .toolbar-divider {
+  flex: none;
+  width: 1px;
+  height: 22px;
+  margin: 0 6px;
+  background: var(--line);
+}
+
+
+/* ---------- eraser size slider ---------- */
+.ptr .eraser-size-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ptr .eraser-size-label {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.ptr .eraser-slider input[type="range"] {
+  width: 140px;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.ptr .eraser-size-value {
+  color: var(--muted);
+  font: 11.5px / 1 var(--mono);
+  min-width: 30px;
+}
+
+
+/* ---------- margin comment bubbles ---------- */
+.ptr .comment-margin-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ptr .comment-margin-content {
+  position: absolute;
+  inset: 0;
+}
+
+.ptr .comment-bubble {
+  position: absolute;
+  display: block;
+  width: 176px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease,
+    color var(--dur-fast) ease;
+}
+
+.ptr .comment-bubble:hover,
+.ptr .comment-bubble.on {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  box-shadow: var(--shadow-pop);
+}
+
+.ptr .comment-hover-mark {
+  position: absolute;
+  border-radius: 4px;
+  background: #ff9f1c;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+
+/* ---------- history group / toast ---------- */
+.ptr .history-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.ptr .history-group .tool-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ptr .ptr-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 34px;
+  transform: translateX(-50%);
+  z-index: 90;
+  padding: 10px 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13.5px;
+  box-shadow: var(--shadow-pop);
+  animation: dialog-in 180ms var(--ease);
+}
+
+
+/* 缩放进行中：库高亮层短暂隐去（pdf.js 重排完成后瞬时归位，避免抽搐） */
+.ptr .pdf-stage.zooming [class*="highlight-layer"],
+.ptr .pdf-stage.zooming [class*="highlightLayer"] {
+  opacity: 0;
+}

@@ -27,6 +27,15 @@ test('draft and task ids are decoded', () => {
   assert.equal(parseRoute('#/task/t1').redirect, null);
 });
 
+test('reader routes carry an optional decoded paper id', () => {
+  assert.deepEqual(parseRoute('#/reader'), { route: { view: 'reader', paperId: '' }, redirect: null });
+  assert.deepEqual(parseRoute('#/reader/'), { route: { view: 'reader', paperId: '' }, redirect: null });
+  assert.deepEqual(parseRoute('#/reader?x=1'), { route: { view: 'reader', paperId: '' }, redirect: null });
+  assert.deepEqual(parseRoute('#/reader/p1'), { route: { view: 'reader', paperId: 'p1' }, redirect: null });
+  assert.deepEqual(parseRoute('#/reader/a%2Fb').route, { view: 'reader', paperId: 'a/b' });
+  assert.equal(parseRoute('#/readers').route.view, 'overview', 'a longer word is not the reader route');
+});
+
 test('draftHref encodes the project id', () => {
   assert.equal(draftHref('a/b'), '#/draft/a%2Fb');
   assert.equal(draftHref('p1'), '#/draft/p1');

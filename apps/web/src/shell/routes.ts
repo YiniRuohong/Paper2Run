@@ -4,9 +4,10 @@
 //   #/new              new experiment (full-bleed workbench)
 //   #/draft/<id>       draft project workbench (full-bleed)
 //   #/task/<id>        task workbench (full-bleed)
+//   #/reader[/<id>]    paper reader (PDF preview + annotations; sidebar shell, full-height body)
 // Retired links redirect: #/autonomous[?task=<id>] and #/new?project=<id>.
 export type Route =
-  | { view: 'overview' } | { view: 'settings' }
+  | { view: 'overview' } | { view: 'settings' } | { view: 'reader'; paperId: string }
   | { view: 'new' } | { view: 'draft'; projectId: string } | { view: 'task'; taskId: string };
 
 export const draftHref = (projectId: string) => `#/draft/${encodeURIComponent(projectId)}`;
@@ -34,6 +35,9 @@ export function parseRoute(hash: string): { route: Route; redirect: string | nul
   if (hash.startsWith('#/task/')) {
     const taskId = idOf(hash, '#/task/');
     return taskId ? to({ view: 'task', taskId }) : to({ view: 'overview' });
+  }
+  if (/^#\/reader(?:[/?]|$)/.test(hash)) {
+    return to({ view: 'reader', paperId: hash.startsWith('#/reader/') ? idOf(hash, '#/reader/') : '' });
   }
   if (hash.startsWith('#/settings')) return to({ view: 'settings' });
   return to({ view: 'overview' });

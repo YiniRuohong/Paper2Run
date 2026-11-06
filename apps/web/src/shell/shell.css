@@ -72,6 +72,11 @@
 .main-body { padding: 6px 28px 64px; }
 .page { max-width: var(--page-w); margin: 0 auto; display: grid; gap: 24px; min-width: 0; }
 .page-loading { color: var(--muted); font-size: 13px; }
+/* 全高视图（论文阅读器）：主区域不滚动，子视图填满顶栏以下的空间。 */
+.shell.full .main { display: flex; flex-direction: column; overflow: hidden; scrollbar-gutter: auto; }
+.shell.full .main-head { position: static; flex: none; }
+.main-full { flex: 1; min-height: 0; }
+.main-full > .page-loading { padding: 12px 28px; }
 
 /* ---------- desktop shells ---------- */
 [data-shell] .drag { -webkit-app-region: drag; user-select: none; }

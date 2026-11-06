@@ -229,6 +229,8 @@ export interface PapersApi {
   uninstallOffline(): Promise<DocParseStatus>;
   parsePaper(paperId: string, key: string): Promise<DocParseAccepted>;
   getPaperText(paperId: string, signal?: AbortSignal): Promise<PaperText>;
+  /** 原始论文字节的地址与请求头（GET /papers/{id}/content，支持 Range），给 pdf.js 直接读取。 */
+  contentRequest(paperId: string): { url: string; headers: Record<string, string> };
 }
 
 // csrf：测试或调用方注入的 token 读取函数；缺省时用 client.ts 内存中的会话 token（与 autonomous.ts 相同）。
@@ -354,6 +356,9 @@ export function createPapersApi(actorId: string, fetcher: Fetcher = fetch, csrf?
           sha256: '', page_count: null, content_available: false,
           current_extraction_id: null, active_operation_id: null, error: null,
           created_at: typeof item.created_at === 'string' ? item.created_at : '',
+          // 列表行也带来源类型；阅读器书架据此只列出 PDF。
+          ...(typeof item.source_kind === 'string' && item.source_kind ? { source_kind: item.source_kind } : {}),
+          ...(typeof item.media_type === 'string' && item.media_type ? { media_type: item.media_type } : {}),
         });
       }
       return papers;
@@ -410,6 +415,9 @@ export function createPapersApi(actorId: string, fetcher: Fetcher = fetch, csrf?
     },
     getPaperText(paperId, signal) {
       return read(`/papers/${enc(paperId)}/text`, validatePaperText, signal);
+    },
+    contentRequest(paperId) {
+      return { url: `${BASE}/papers/${enc(paperId)}/content`, headers: { 'X-Actor-ID': actorId } };
     },
   };
 }
