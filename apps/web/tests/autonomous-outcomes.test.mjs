@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  defaultConfig, validateConfig, taskDisplay, taskBucket, outcomeLabel, outcomeTone, errorExplanation, maxRepairRounds, stateLabel, terminalState,
+  defaultConfig, validateConfig, withoutTokenCap, taskDisplay, taskBucket, outcomeLabel, outcomeTone, errorExplanation, maxRepairRounds, stateLabel, terminalState,
   decisionVisible, taskTone,
 } from '../src/features/autonomous/config.ts';
 import { parseReport, parseCandidate, parseReviews } from '../src/features/autonomous/report.ts';
@@ -222,4 +222,19 @@ test('the verified caveat appears in the overview row and the sidebar title, wit
   for (const source of [sidebar, page]) {
     for (const line of source.split('\n').filter(l => /title=\{`|<option /.test(l))) assert.ok((line.match(/ · /g) ?? []).length <= 1, line.trim());
   }
+});
+
+test('no token cap: default omits it, saved caps are dropped on load, and the form has no field for it', async () => {
+  const config = defaultConfig('p'); config.model = { provider_profile: 'm', credential_ref: 'profile:m' }; config.experiment.objective = 'test';
+  assert.equal('max_model_tokens' in config.limits, false);
+  assert.doesNotThrow(() => validateConfig(config));
+  for (const legacy of [100000, null]) {
+    const saved = { ...config, limits: { ...config.limits, max_model_tokens: legacy } };
+    const cleaned = withoutTokenCap(saved);
+    assert.equal('max_model_tokens' in cleaned.limits, false, String(legacy));
+    assert.equal(saved.limits.max_model_tokens, legacy, 'input is not mutated');
+    assert.deepEqual({ ...cleaned.limits }, { ...config.limits });
+  }
+  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /max_model_tokens|Token 上限/);
 });

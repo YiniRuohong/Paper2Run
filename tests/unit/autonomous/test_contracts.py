@@ -47,6 +47,14 @@ def test_invalid_config(section, key, value):
         ProjectConfig.model_validate(data)
 
 
+def test_token_limit_is_optional():
+    data = config()
+    del data["limits"]["max_model_tokens"]
+    assert ProjectConfig.model_validate(data).limits.max_model_tokens is None
+    data["limits"]["max_model_tokens"] = None
+    assert ProjectConfig.model_validate(data).limits.max_model_tokens is None
+
+
 @pytest.mark.parametrize("reference", [
     "credential-store:default", "credential-store:legacy.v1",
     "profile:research-model_1.v2", "profile:0", "profile:" + "a" * 128,

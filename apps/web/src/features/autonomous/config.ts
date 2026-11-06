@@ -44,10 +44,15 @@ export function defaultConfig(projectId: string): ProjectConfig {
     schema_version: 'paper2run.project.v1', project: { id: projectId, workspace: `./workspace/${projectId}` },
     model: { provider_profile: '', credential_ref: '' }, harness: { adapter: 'pi', skills: [] },
     target: { kind: 'local', profile: 'local', allocation: 'dedicated', isolation: 'required', image: 'paper2run-experiment:1' },
-    limits: { wall_time_seconds: 1800, max_model_calls: 30, max_model_tokens: 100000, storage_bytes: 5 * 1024 ** 3, max_repair_rounds: DEFAULT_REPAIR_ROUNDS, gpu_devices: [] },
+    limits: { wall_time_seconds: 1800, max_model_calls: 30, storage_bytes: 5 * 1024 ** 3, max_repair_rounds: DEFAULT_REPAIR_ROUNDS, gpu_devices: [] },
     network: { public_internet: true, host_and_metadata_access: false },
     experiment: { objective: '', protocol_change_policy: 'version_and_pause_if_outside_authorization' },
   };
+}
+/** 不设 token 上限：读到旧配置里的 max_model_tokens 时去掉，下次保存即不再带上限。 */
+export function withoutTokenCap(config: ProjectConfig): ProjectConfig {
+  const { max_model_tokens: _drop, ...limits } = config.limits;
+  return { ...config, limits };
 }
 export function parseProtocol(text: string): Record<string, unknown> | undefined {
   if (!text.trim()) return undefined;
@@ -73,7 +78,7 @@ export function validateConfig(config: ProjectConfig): void {
   if (!config.target.profile.trim()) throw new Error('请填写目标配置名称。');
   if (config.target.kind === 'ssh' && (!config.target.ssh_config_alias?.trim() || !config.target.remote_workspace?.startsWith('/'))) throw new Error('SSH 需要配置别名和绝对远程工作区路径。');
   for (const [key, value] of Object.entries(config.limits)) {
-    if (key === 'gpu_devices') continue;
+    if (key === 'gpu_devices' || (key === 'max_model_tokens' && value == null)) continue;
     // 修复轮次允许 0（只复核一次，不修复）；其余预算必须为正。
     if (key === 'max_repair_rounds') {
       // 输入框清空时页面存为 NaN（保存时会变成 null）：要求填写，不当作 0。

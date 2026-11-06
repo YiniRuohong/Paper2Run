@@ -10,7 +10,7 @@ import { Icon } from '../../ui/Icon';
 import ParseProgress from '../docparse/ParseProgress';
 import ModeDialog from '../docparse/ModeDialog';
 import { canParseNow } from '../docparse/docparse';
-import { DEFAULT_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS, defaultConfig, modelReference, parseProtocol, profileRequest, researchTaskTypes, reusableProfiles, validateConfig } from './config';
+import { DEFAULT_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS, defaultConfig, modelReference, parseProtocol, profileRequest, researchTaskTypes, reusableProfiles, validateConfig, withoutTokenCap } from './config';
 import { launchBlockReason, paperIsPdf } from './launch';
 import { parseProbe, probeMissingNotice, probeStale } from './probe';
 import TargetProbeView, { type ProbeState } from './TargetProbeView';
@@ -136,7 +136,7 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
         }
       }));
       if (generation.current !== run) return;
-      if (saved) { setConfig(saved.config); setConfigVersion(saved.version); setSavedConfig(saved); void runProbe(projectId, saved); }
+      if (saved) { saved = { ...saved, config: withoutTokenCap(saved.config) }; setConfig(saved.config); setConfigVersion(saved.version); setSavedConfig(saved); void runProbe(projectId, saved); }
       setPaperOptions(resolved);
     }).catch(e => { if (generation.current === run) setError(errorDetail(e)); });
   }, [projectId, api, papers, runProbe]);
@@ -202,7 +202,8 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
 
   async function saveConfig() {
     validateConfig(config);
-    const saved = await api.saveConfig(projectId, config, configVersion);
+    const stored = await api.saveConfig(projectId, config, configVersion);
+    const saved = { ...stored, config: withoutTokenCap(stored.config) };
     setConfigVersion(saved.version); setConfig(saved.config); setSavedConfig(saved);
     return saved;
   }
@@ -400,8 +401,8 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
           <input value={config.target.profile} onChange={e => update('target', { ...config.target, profile: e.target.value })} /></label>
         <label className="ui-field"><span className="ui-field-label">本地项目工作区</span>
           <input value={config.project.workspace} onChange={e => update('project', { ...config.project, workspace: e.target.value })} /></label>
-        {(['wall_time_seconds', 'max_model_calls', 'max_model_tokens', 'storage_bytes'] as const).map((name, i) => (
-          <label key={name} className="ui-field"><span className="ui-field-label">{['最长运行时间（秒）', '模型调用上限', '模型 Token 上限', '存储上限（字节）'][i]}</span>
+        {(['wall_time_seconds', 'max_model_calls', 'storage_bytes'] as const).map((name, i) => (
+          <label key={name} className="ui-field"><span className="ui-field-label">{['最长运行时间（秒）', '模型调用上限', '存储上限（字节）'][i]}</span>
             <input type="number" min="1" step="1" value={limits[name]} onChange={e => update('limits', { ...limits, [name]: Number(e.target.value) })} /></label>
         ))}
         <label className="ui-field"><span className="ui-field-label">修复轮次上限<small>独立复核发现问题后 Pi 最多修复的轮数，0–{MAX_REPAIR_ROUNDS}；0 表示只复核一次</small></span>

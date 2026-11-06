@@ -14,7 +14,7 @@ export interface ProjectConfig {
   harness: { adapter: 'pi'; skills: string[] };
   target: { kind: 'local' | 'ssh'; profile: string; ssh_config_alias?: string; remote_workspace?: string; allocation: 'dedicated'; isolation: 'required'; image: 'paper2run-experiment:1' };
   /** max_repair_rounds: 0–10；旧配置没有该键，后端按 3 处理。 */
-  limits: { wall_time_seconds: number; max_model_calls: number; max_model_tokens: number; storage_bytes: number; max_repair_rounds?: number; gpu_devices: string[] };
+  limits: { wall_time_seconds: number; max_model_calls: number; /** 无 token 上限：新配置不写；旧配置可能带数字或 null。 */ max_model_tokens?: number | null; storage_bytes: number; max_repair_rounds?: number; gpu_devices: string[] };
   network: { public_internet: true; host_and_metadata_access: false };
   experiment: { objective: string; protocol_change_policy: 'version_and_pause_if_outside_authorization' };
 }

@@ -336,3 +336,28 @@ def test_reconcile_stops_after_first_status_exhausts_wall_budget(service, monkey
     row = assert_cancelled(service, task_id, "BUDGET_EXHAUSTED", unknown=unknown)
     assert actions == ["status:a", "stop:a", "stop:b"]
     assert row.usage_json["wall_time_seconds"] == 121
+
+
+def test_no_token_limit_never_exhausts_on_tokens(service):
+    from .test_service import configuration
+    settings = configuration()
+    del settings["limits"]["max_model_tokens"]
+    with service.sessions() as db:
+        service.put_config(db, "project", settings, 1); db.commit()
+    seen = []
+    class HeavyBridge(Bridge):
+        def run(self, config, prompt, callback):
+            seen.append(config["limits"])
+            callback({"type": "event", "event": {"type": "turn_start"}})
+            callback({"type": "event", "event": {"type": "message_end", "message": {
+                "role": "assistant", "content": [{"type": "text", "text": "done"}],
+                "usage": {"input": 5_000_000, "output": 10, "totalTokens": 5_000_010}}}})
+            callback({"type": "result", "text": "done", "usage": {"calls": 1, "total_tokens": 5_000_010}})
+    service.bridge_factory = HeavyBridge
+    task_id = create(service)
+    service.launch(task_id)
+    row = wait(service, task_id)
+    assert (row.error_json or {}).get("code") != "BUDGET_EXHAUSTED"
+    assert row.usage_json["total_tokens"] >= 5_000_010
+    assert seen and "max_model_tokens" not in seen[0]
+    assert "max_model_tokens" not in service.remaining(row)
