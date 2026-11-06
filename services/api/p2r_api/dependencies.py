@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +22,25 @@ def data_dir() -> Path:
     return Path(os.environ.get("P2R_DEMO_DIR", ".p2r-demo")).resolve()
 
 
+def _ascii_docparse_root() -> Path | None:
+    """Windows only: an all-ASCII root for the MinerU runtime, or None when there is none."""
+    for base in (os.environ.get("PROGRAMDATA"), os.environ.get("SYSTEMDRIVE", "C:") + "\\"):
+        if base and base.isascii():
+            return (Path(base) / "Paper2Run" / "docparse").resolve()
+    return None
+
+
 def docparse_root() -> Path:
     configured = os.environ.get("P2R_DOCPARSE_DIR")
     if configured:
         return Path(configured).resolve()
-    return data_dir() / "docparse"
+    default = data_dir() / "docparse"
+    # mineru-kit's llama.cpp backend fails to load from a venv under a non-ASCII Windows
+    # path (e.g. a Chinese user name): "No mapping for the Unicode character exists in the
+    # target multi-byte code page". Keep the runtime on an ASCII path there.
+    if sys.platform == "win32" and not str(default).isascii():
+        return _ascii_docparse_root() or default
+    return default
 
 
 def build_runtime(*, db_url: str | None = None, session_factory: Any = None,

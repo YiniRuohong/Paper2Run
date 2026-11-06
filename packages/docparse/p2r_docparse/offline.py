@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sys
@@ -19,6 +20,7 @@ from .proc import CompletedRun, mineru_kit, run_tree, venv_python  # noqa: F401 
 _TEXT_FIELDS = ("text", "table_body", "latex")
 _PROXY_NAMES = {"http_proxy", "https_proxy", "no_proxy", "all_proxy"}
 _MODEL_SOURCES = ("auto", "huggingface", "modelscope")
+_LOG = logging.getLogger("p2r.docparse")
 
 # mineru-kit 4.1.3 `-f zip` layout: markdown.md, middle_json.json, structured_content.json
 # and images/ at the top level of <output>/<input stem>.zip.
@@ -285,6 +287,9 @@ def parse_offline(pdf: bytes, *, root: Path, tier: str, version: str, timeout: f
         if done.timed_out:
             raise DocParseError("DOCPARSE_TIMEOUT")
         if done.returncode != 0:
+            # The API only reports DOCPARSE_OFFLINE_FAILED; keep the reason in the backend log.
+            reason = (getattr(done, "stderr_tail", "") or getattr(done, "stdout_tail", "") or "").strip()
+            _LOG.warning("mineru-kit parse failed rc=%s: %s", done.returncode, reason[-1500:])
             raise DocParseError("DOCPARSE_OFFLINE_FAILED")
         outcomes, whole_document = _read_output(out_dir, page_count)
     if whole_document:
