@@ -6,8 +6,8 @@ import { Segmented } from '../../ui/Controls';
 import { Icon } from '../../ui/Icon';
 import { taskBucket, taskDisplay } from '../autonomous/config';
 import { errorDetail } from '../autonomous/errors';
-import { loadDraftFacts } from '../flow/draftData';
-import { draftProgress, SETUP_ORDER, type SetupStepId } from '../flow/draft';
+import { SETUP_ORDER, type SetupStepId } from '../flow/draft';
+import { loadDraftSteps } from './draftSteps';
 import { SETUP_TITLES } from '../flow/timeline';
 import { loadAutonomousTasks, type RecentDraft, type RecentTask } from '../../shell/hooks';
 import { draftHref } from '../../shell/routes';
@@ -37,8 +37,6 @@ const when = (iso: string) => {
 // 有结局的任务一律算已结束（安全终止归入失败），即使生命周期状态是 paused / stopped。
 const bucket = (task: RecentTask): Filter => taskBucket(task);
 
-const DRAFT_LOAD_CONCURRENCY = 3;
-
 // 总览（#/）：全部项目的草稿与自主任务列表。新建任务在「新建实验」里完成；草稿可继续或删除。
 export default function OverviewPage({ api = defaultApi, papers = defaultPapers }: { api?: AutonomousApi; papers?: PapersApi }) {
   const [phase, setPhase] = useState<Phase>('loading');
@@ -67,26 +65,15 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
     return () => ctl.abort();
   }, [api, papers, rev]);
 
-  // 草稿步骤在列表渲染后再逐个读取：模型配置只取一次，并发有上限，刷新或卸载时中止。
+  // 草稿步骤按草稿 id 读取：轮询刷新只换数组、id 不变时不重读；刷新或卸载时中止。
+  const draftIds = drafts.map(d => d.projectId).join('\n');
   useEffect(() => {
-    if (drafts.length === 0) return;
+    if (!draftIds) return;
     const ctl = new AbortController();
-    void (async () => {
-      const profiles = await api.profiles().catch(() => []);
-      if (ctl.signal.aborted) return;
-      const queue = [...drafts];
-      const worker = async () => {
-        for (let d = queue.shift(); d && !ctl.signal.aborted; d = queue.shift()) {
-          try {
-            const current = draftProgress(await loadDraftFacts(api, papers, d.projectId, profiles, ctl.signal)).current;
-            if (!ctl.signal.aborted) setSteps(prev => ({ ...prev, [d.projectId]: current }));
-          } catch { /* 读不到步骤时保持「草稿」 */ }
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(DRAFT_LOAD_CONCURRENCY, queue.length) }, worker));
-    })();
+    void loadDraftSteps(api, papers, draftIds.split('\n'), ctl.signal,
+      (id, step) => setSteps(prev => ({ ...prev, [id]: step })));
     return () => ctl.abort();
-  }, [api, papers, drafts]);
+  }, [api, papers, draftIds]);
 
   const removeDraft = async (draft: RecentDraft) => {
     if (deleting || !window.confirm(`删除草稿「${draft.name || draft.projectId}」？论文和配置将不再显示。`)) return;
@@ -148,7 +135,8 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
       {visibleDrafts.length > 0 && <ul className="ui-list">
         {visibleDrafts.map(d => {
           const step = steps[d.projectId];
-          return <li key={`draft-${d.projectId}`}>
+          const name = d.name || d.projectId;
+          return <li key={`draft-${d.projectId}`} className="overview-draft">
             <a className="ui-row" href={draftHref(d.projectId)}>
               <span className="ui-tile" aria-hidden="true"><Icon name="doc" /></span>
               <span className="ui-row-main">
@@ -157,11 +145,11 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
               </span>
               <span className="ui-row-end">
                 <time>{when(d.updatedAt)}</time>
-                <button type="button" className="btn btn-secondary" disabled={deleting === d.projectId}
-                  onClick={event => { event.preventDefault(); event.stopPropagation(); void removeDraft(d); }}>删除</button>
                 <Icon name="chevron-right" size={14} />
               </span>
             </a>
+            <button type="button" className="btn btn-secondary" aria-label={`删除草稿「${name}」`}
+              disabled={deleting === d.projectId} onClick={() => void removeDraft(d)}>删除草稿</button>
           </li>;
         })}
       </ul>}

@@ -76,6 +76,9 @@ a.ui-row, button.ui-row, label.ui-row { cursor: pointer; transition: background 
 a.ui-row:hover, button.ui-row:hover, label.ui-row:hover { background: var(--hover); }
 a.ui-row:focus-visible, button.ui-row:focus-visible { outline-offset: -2px; border-radius: var(--r-l); }
 button.ui-row { width: 100%; border: 0; background: transparent; text-align: left; }
+.overview-draft { display: flex; align-items: center; gap: 8px; padding-right: 16px; }
+.overview-draft > a.ui-row { flex: 1; min-width: 0; }
+.overview-draft > .btn { flex: none; }
 .ui-row-main { flex: 1; min-width: 0; }
 .ui-row-title { display: block; font-size: 14px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ui-row-sub { display: block; margin-top: 1px; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
