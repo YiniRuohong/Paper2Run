@@ -9,8 +9,9 @@ import { Switch } from '../../ui/Controls';
 import { Icon } from '../../ui/Icon';
 import ParseProgress from '../docparse/ParseProgress';
 import ModeDialog from '../docparse/ModeDialog';
-import { canParseNow, isParsePending } from '../docparse/docparse';
+import { canParseNow } from '../docparse/docparse';
 import { DEFAULT_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS, defaultConfig, modelReference, parseProtocol, profileRequest, researchTaskTypes, reusableProfiles, validateConfig } from './config';
+import { launchBlockReason, paperIsPdf } from './launch';
 import { parseProbe, probeMissingNotice, probeStale } from './probe';
 import TargetProbeView, { type ProbeState } from './TargetProbeView';
 import { errorDetail } from './TaskPage';
@@ -181,22 +182,21 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
   }
 
   async function selectExistingPaper(id: string) {
+    stopParsePoll();
     setPaperId(id); setPaperVersion(''); setPaperText(null); setIsPdf(false);
     if (!id) return;
     try {
       const info = await papers.getPaper(id);
       setPaperVersion(info.paper_version_id ?? '');
-      // 已有论文若是 PDF 且尚未解析完，允许在本页继续解析。
-      try {
-        const text = await papers.getPaperText(id);
-        if (isParsePending(text) || text.status !== 'ready') {
-          setIsPdf(true);
-          setPaperText(text);
-          const status = await papers.getDocParseStatus();
-          setParseStatus(status);
-          if (text.status === 'parsing') pollText(id);
-        }
-      } catch { /* 纯文本论文没有解析状态，忽略 */ }
+      // 只有 PDF 需要解析；粘贴的正文没有解析记录（/text 状态为 none），不显示解析控件。
+      if (!paperIsPdf(info)) return;
+      setIsPdf(true);
+      const text = await papers.getPaperText(id);
+      setPaperText(text);
+      if (text.status !== 'ready') {
+        setParseStatus(await papers.getDocParseStatus());
+        if (text.status === 'parsing') pollText(id);
+      }
     } catch (e) { setError(errorDetail(e)); }
   }
 
@@ -207,14 +207,10 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
     return saved;
   }
 
-  const parseBlocking = isPdf && paperText?.status !== 'ready';
-  const startBlockReason = !projectId ? '请先选择或创建项目'
-    : !paperVersion ? '请先上传或选择论文'
-    : parseBlocking ? `论文解析未完成（${paperText?.status === 'failed' ? '解析失败' : '解析中'}），不能启动`
-    : !authorized ? '请先勾选授权'
-    : !config.model.provider_profile ? '请先选择主模型'
-    : !config.experiment.objective.trim() ? '请填写实验目标'
-    : '';
+  const startBlockReason = launchBlockReason({
+    projectId, paperVersion, pdf: isPdf, text: paperText, authorized,
+    mainProfile: config.model.provider_profile, objective: config.experiment.objective,
+  });
 
   const probeDisabledReason = !projectId ? '请先选择或创建项目' : savedConfig === null ? '保存项目配置后才能探测执行位置。' : '';
   // 探测只是提示：缺项写在启动按钮旁，不禁用启动；准备阶段才是真正的关卡。

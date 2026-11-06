@@ -24,6 +24,8 @@ export interface PaperInfo {
   current_extraction_id: string | null; active_operation_id: string | null;
   error: { code: string; message: string } | null; created_at: string;
   paper_version_id?: string; current_version_id?: string;
+  /** 存储的来源类型（pdf / text）与媒体类型；旧后端不返回时缺省。 */
+  source_kind?: string; media_type?: string;
 }
 
 // --- MinerU PDF parsing (docparse) ---
@@ -186,6 +188,8 @@ function validatePaperInfo(value: unknown): PaperInfo {
     error: error ? { code: str(error.code, 'paper info.error.code'), message: typeof error.message === 'string' ? error.message : str(error.code, 'paper info.error.code') } : null,
     created_at: str(item.created_at, 'paper info.created_at'),
     ...(typeof version === 'string' && version ? { paper_version_id: version } : {}),
+    ...(typeof item.source_kind === 'string' && item.source_kind ? { source_kind: item.source_kind } : {}),
+    ...(typeof item.media_type === 'string' && item.media_type ? { media_type: item.media_type } : {}),
   };
 }
 

@@ -38,7 +38,8 @@ test('new-experiment page owns upload, parse progress, layered config and author
   assert.match(page, /ParseProgress/);
   assert.match(page, /paper_version_id/);
   assert.match(page, /授权并启动/);
-  assert.match(page, /parseBlocking/, 'an unfinished parse blocks the start button');
+  assert.match(page, /launchBlockReason\(/, 'an unfinished PDF parse blocks the start button (see autonomous-launch.test.mjs)');
+  assert.match(page, /paperIsPdf\(info\)/, 'the paper kind comes from the stored source kind');
   assert.match(page, /startBlockReason/, 'the disabled start button explains why');
   assert.match(page, /crypto\.randomUUID\(\)/, 'parse calls carry an idempotency key');
   assert.doesNotMatch(page, /localStorage|sessionStorage/);

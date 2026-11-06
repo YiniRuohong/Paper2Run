@@ -195,6 +195,26 @@ def test_invalid_utf8_text_rejected(seeded):
         assert resp.json()["error"]["code"] == "TEXT_INVALID_UTF8"
 
 
+def test_paper_json_reports_source_kind_and_media_type(seeded):
+    """The frontend decides whether parsing applies from these fields, not from text status."""
+    app, ids = seeded
+    with TestClient(app) as client:
+        text_id = post_text(client, ids["project"], key="kind-text").json()["data"]["paper_id"]
+        pdf = client.post(
+            f"/api/v1/projects/{ids['project']}/papers",
+            headers=headers("kind-pdf"),
+            files={"file": ("paper.pdf", minimal_pdf(["Kind"]), "application/pdf")},
+            data={"source_processing_consent": "true"},
+        )
+        pdf_id = pdf.json()["data"]["paper_id"]
+        text = client.get(f"/api/v1/papers/{text_id}", headers={"X-Actor-ID": "owner"}).json()["data"]
+        assert (text["source_kind"], text["media_type"]) == ("text", "text/plain")
+        paper = client.get(f"/api/v1/papers/{pdf_id}", headers={"X-Actor-ID": "owner"}).json()["data"]
+        assert (paper["source_kind"], paper["media_type"]) == ("pdf", "application/pdf")
+        listed = client.get(f"/api/v1/projects/{ids['project']}/papers", headers={"X-Actor-ID": "owner"}).json()["data"]
+        assert {row["paper_id"]: row["source_kind"] for row in listed} == {text_id: "text", pdf_id: "pdf"}
+
+
 def test_pdf_upload_still_works(seeded):
     app, ids = seeded
     pdf = minimal_pdf(["Real PDF text"]) + b"\r\n\r\n"

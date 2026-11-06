@@ -96,6 +96,7 @@ def _paper_json(row: PaperRecord) -> dict:
     return {"paper_id": row.id, "paper_version_id": version.id if version else None,
             "project_id": row.project_id, "title": row.title,
             "status": row.status, "sha256": row.sha256, "page_count": row.page_count,
+            "source_kind": row.source_kind, "media_type": row.media_type,
             "content_available": True, "current_extraction_id": extraction.id if extraction else None,
             "active_operation_id": operation.id if operation else None, "processing_consent": {"accepted_at": row.created_at.isoformat(), "policy_version": "1"},
             "error": row.error_json, "created_at": row.created_at.isoformat()}
