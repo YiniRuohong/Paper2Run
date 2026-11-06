@@ -171,8 +171,6 @@ test('error detail keeps the backend message and appends the explanation', async
 test('an emptied repair-round field is invalid, not zero', async () => {
   const config = defaultConfig('p'); config.model = { provider_profile: 'm', credential_ref: 'profile:m' }; config.experiment.objective = 'test';
   for (const value of [NaN, null]) assert.throws(() => validateConfig({ ...config, limits: { ...config.limits, max_repair_rounds: value } }), /请填写修复轮次上限（0–10）/, String(value));
-  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
-  assert.match(page, /e\.target\.value === '' \? NaN/, 'an empty input is stored as NaN, which validateConfig rejects');
 });
 
 test('the verified caveat appears in the overview row and the sidebar title, with at most one · per line', async () => {

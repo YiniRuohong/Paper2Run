@@ -33,17 +33,28 @@ test('entry mounts the autonomous-only app shell and redirects the retired route
   assert.doesNotMatch(shell, /guided|MockWorkspace/);
 });
 
-test('new-experiment page owns upload, parse progress, layered config and authorized start', async () => {
-  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
+const flowSource = path => readFile(new URL(`../src/features/flow/${path}`, import.meta.url), 'utf8');
+
+test('draft page owns upload, parse progress and authorized start', async () => {
+  const draft = await flowSource('DraftPage.tsx');
+  // draftData.ts holds the paper loading moved out of the page (paper kind from the stored source kind).
+  const page = (await Promise.all(['steps/PaperStep.tsx', 'steps/LaunchStep.tsx', 'DraftPage.tsx', 'draftData.ts'].map(flowSource))).join('\n');
   assert.match(page, /ModeDialog/);
   assert.match(page, /ParseProgress/);
   assert.match(page, /paper_version_id/);
   assert.match(page, /授权并启动/);
   assert.match(page, /launchBlockReason\(/, 'an unfinished PDF parse blocks the start button (see autonomous-launch.test.mjs)');
-  assert.match(page, /paperIsPdf\(info\)/, 'the paper kind comes from the stored source kind');
+  assert.match(page, /paperIsPdf\(/, 'the paper kind comes from the stored source kind');
   assert.match(page, /startBlockReason/, 'the disabled start button explains why');
   assert.match(page, /crypto\.randomUUID\(\)/, 'parse calls carry an idempotency key');
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
+  assert.match(draft, /newestTaskId\(/, 'a project that already has a task opens that task');
+});
+
+test('deleted setup options do not come back in the guided steps (anti-goal 3)', async () => {
+  for (const file of ['flow.css', 'DraftPage.tsx', 'StepFrame.tsx', 'RailHead.tsx', 'steps/PaperStep.tsx', 'steps/ObjectiveStep.tsx', 'steps/ModelStep.tsx', 'steps/LaunchStep.tsx']) {
+    assert.doesNotMatch(await flowSource(file), /专家|Skills|协议 JSON|校验配置|保存配置/, file);
+  }
 });
 
 test('task page keeps approval, three-state notices, recovery and report sections as first-class surfaces', async () => {

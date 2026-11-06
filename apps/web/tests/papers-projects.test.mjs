@@ -71,3 +71,11 @@ test('listProjects defaults description and version', async () => {
   assert.equal(items[1].description, 'hi');
   assert.equal(items[1].version, 7);
 });
+
+test('createProject leaves the description empty: it is the draft objective (step 02), not a label', async () => {
+  const { calls, fetcher } = capture(() => ok({ id: 'p', name: 'Demo', role: 'owner', version: 1, created_at: '2026-01-01T00:00:00Z' }, 201));
+  await createPapersApi('actor', fetcher).createProject('Demo');
+  const body = JSON.parse(calls[0].body);
+  assert.equal(body.name, 'Demo');
+  assert.ok(!body.description, 'a placeholder description would mark the objective step done');
+});

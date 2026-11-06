@@ -308,7 +308,8 @@ export function createPapersApi(actorId: string, fetcher: Fetcher = fetch): Pape
       return page.items;
     },
     createProject(name, key) {
-      return write('/projects', { name, description: 'Autonomous experiment flow' }, validateProjectAccepted, key);
+      // No description: on a draft it holds the experiment objective (step 02), so a label would mark that step done.
+      return write('/projects', { name }, validateProjectAccepted, key);
     },
     getProject(projectId, signal) {
       return read(`/projects/${enc(projectId)}`, validateProjectInfo, signal);

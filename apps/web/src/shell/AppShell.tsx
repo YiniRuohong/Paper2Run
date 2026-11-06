@@ -11,15 +11,15 @@ import './shell.css';
 
 // App shell (magpie-style sidebar + quiet header). Hash routes:
 //   #/            总览（全部项目的自主任务，只读）
-//   #/new         新建实验（全幅工作台）
-//   #/draft/<id>  草稿工作台（全幅；DraftPage 就绪前先挂 NewExperimentPage）
+//   #/new         新建实验（全幅草稿页，第 01 步；首次上传前不创建服务端对象）
+//   #/draft/<id>  草稿工作台（全幅；从当前步继续）
 //   #/task/<id>   任务工作台（全幅）
 //   #/settings    设置（主题、本地服务、解析模式）
 // 路由解析与旧链接重定向见 routes.ts。new/draft/task 不渲染侧栏与面包屑栏。
 const api = createAutonomousApi();
 const papers = createPapersApi('demo-user');
 const OverviewPage = lazy(() => import('../features/overview/OverviewPage'));
-const NewExperimentPage = lazy(() => import('../features/autonomous/NewExperimentPage'));
+const DraftPage = lazy(() => import('../features/flow/DraftPage'));
 const TaskPage = lazy(() => import('../features/autonomous/TaskPage'));
 const Settings = lazy(() => import('../features/settings/Settings'));
 
@@ -51,7 +51,7 @@ export default function AppShell() {
         <Suspense fallback={<p role="status" className="page-loading">加载中…</p>}>
           {route.view === 'task'
             ? <TaskPage key={route.taskId} taskId={route.taskId} api={api} />
-            : <NewExperimentPage key={projectId ?? 'new'} api={api} papers={papers} initialProject={projectId ?? ''} />}
+            : <DraftPage key={projectId ?? 'new'} projectId={projectId} api={api} papers={papers} />}
         </Suspense>
       </main>
     </div>;

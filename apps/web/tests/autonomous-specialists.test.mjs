@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { createAutonomousApi } from '../src/api-client/autonomous.ts';
 import { defaultConfig, validateConfig, modelReference, profileRequest, reusableProfiles, researchTaskTypes } from '../src/features/autonomous/config.ts';
 
@@ -100,13 +100,14 @@ test('anonymous requests only allow SDK-supported HTTP loopback hosts and omit a
 });
 
 test('autonomous source never persists key or reuse source in browser storage or query', async () => {
-  for (const file of ['../src/features/autonomous/NewExperimentPage.tsx', '../src/features/autonomous/TaskPage.tsx']) {
-    const page = await readFile(new URL(file, import.meta.url), 'utf8');
-    assert.doesNotMatch(page, /localStorage|sessionStorage/, file);
+  const flowDir = new URL('../src/features/flow/', import.meta.url);
+  const flowFiles = (await readdir(flowDir, { recursive: true })).filter(name => name.endsWith('.tsx')).map(name => new URL(name, flowDir));
+  assert.ok(flowFiles.length >= 7, 'the guided draft components are scanned');
+  for (const file of [...flowFiles, new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url)]) {
+    const page = await readFile(file, 'utf8');
+    assert.doesNotMatch(page, /localStorage|sessionStorage/, file.pathname);
     for (const line of page.split('\n').filter(line => /replaceState|query\.get/.test(line))) assert.doesNotMatch(line, /api_key|reuseCredentials|credential_ref/);
   }
-  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
-  assert.match(page, /setKey\(''\); setReuseCredentials\(''\)/);
-  assert.match(page, /专家输出仅建议/);
-  assert.match(page, /共享总预算/);
+  const model = await readFile(new URL('../src/features/flow/steps/ModelStep.tsx', import.meta.url), 'utf8');
+  assert.match(model, /setKey\(''\)/, 'the key leaves memory right after the connection is saved');
 });

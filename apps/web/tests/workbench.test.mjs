@@ -104,8 +104,8 @@ test('errorDetail lives in errors.ts and the test helper re-exports it', async (
   assert.match(errors, /export const errorDetail/);
   const helper = await import('./helpers/error-detail.mjs');
   assert.equal(typeof helper.errorDetail, 'function');
-  const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
-  assert.match(page, /from '\.\/errors'/);
+  const page = await readFile(new URL('../src/features/flow/DraftPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /from '\.\.\/autonomous\/errors'/);
 });
 
 test('app layout keeps the rail spanning every row and its head pinned', async () => {
