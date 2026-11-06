@@ -9,6 +9,7 @@ import TargetProbeView, { type ProbeState } from '../../autonomous/TargetProbeVi
 import { budgetLine, connectionLabel, legacyConfigLine, legacyLaunchBlock, mergeConfig, saveConfigWithRetry, type DraftPaper } from '../draft';
 import { readConfig, type SavedConfig } from '../draftData';
 import StepFrame, { type Act, type StepFeedback } from '../StepFrame';
+import { SETUP_TITLES } from '../timeline';
 import '../../autonomous/autonomous.css';
 
 const clip = (text: string, n: number) => Array.from(text).length > n ? `${Array.from(text).slice(0, n).join('')}…` : text;
@@ -85,7 +86,7 @@ export default function LaunchStep({ projectId, paper, paperText, saved, profile
     window.location.replace(`#/task/${encodeURIComponent(created.id)}`);
   });
 
-  return <StepFrame guide="确认论文、目标和模型，选择执行位置后授权启动。" feedback={feedback}
+  return <StepFrame title={SETUP_TITLES.launch} guide="确认论文、目标和模型，选择执行位置后授权启动。" feedback={feedback}
     next={{ label: '授权并启动', disabled: startBlockReason || undefined, onClick: start }}>
     <dl className="flow-summary">
       <div><dt>论文</dt><dd>{paper?.title ?? '—'}</dd></div>

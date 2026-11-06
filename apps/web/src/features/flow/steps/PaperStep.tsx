@@ -4,6 +4,7 @@ import { Disclosure } from '../../../ui/Disclosure';
 import ParseProgress from '../../docparse/ParseProgress';
 import type { DraftPaper } from '../draft';
 import StepFrame, { type StepFeedback, type StepNext } from '../StepFrame';
+import { SETUP_TITLES } from '../timeline';
 
 export interface ParseControls {
   onRetry(): void;
@@ -34,7 +35,7 @@ export default function PaperStep({ paper, paperText, parseStatus, busy, feedbac
   // A PDF that was uploaded but never parsed (e.g. the parse call failed) needs a way to start it.
   const unparsed = !!paper?.pdf && paperText?.status === 'none' && !!parseStatus?.mode;
 
-  return <StepFrame guide="选择要复现的论文 PDF，或直接粘贴正文。" feedback={feedback} next={next}>
+  return <StepFrame title={SETUP_TITLES.paper} guide="选择要复现的论文 PDF，或直接粘贴正文。" feedback={feedback} next={next}>
     {paper && <p className="flow-current">当前论文：<b>{paper.title}</b>{paper.pageCount ? ` · ${paper.pageCount} 页` : ''}{paper.pdf ? '' : ' · 粘贴的正文'}</p>}
     {paper?.pdf && <ParseProgress
       docparse={{ pdf: true, needsChoice: parseStatus?.mode === null, status: parseStatus, text: paperText }}
@@ -47,9 +48,15 @@ export default function PaperStep({ paper, paperText, parseStatus, busy, feedbac
     {unparsed && <div className="flow-actions"><button type="button" className="btn btn-secondary" disabled={busy} onClick={parse.onRetry}>开始解析</button></div>}
 
     <div className="ui-form">
-      <label className="ui-field"><span className="ui-field-label">{paper ? '换一篇 PDF' : '论文 PDF'}</span>
-        <input key={fileInput} type="file" accept="application/pdf,.pdf" disabled={busy} onChange={e => setFile(e.target.files?.[0] ?? null)} />
-      </label>
+      <div className="ui-field"><span className="ui-field-label">{paper ? '换一篇 PDF' : '论文 PDF'}</span>
+        <div className="flow-actions">
+          <label className={`btn btn-secondary flow-file-pick${busy ? ' is-disabled' : ''}`}>
+            <input key={fileInput} className="flow-file-input" type="file" accept="application/pdf,.pdf" disabled={busy} onChange={e => setFile(e.target.files?.[0] ?? null)} />
+            选择 PDF
+          </label>
+          {file && <span className="flow-file-name" title={file.name}>{file.name}</span>}
+        </div>
+      </div>
       <div className="ui-field">
         <span className="ui-field-label" />
         <div className="flow-actions">

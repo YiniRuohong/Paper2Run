@@ -6,6 +6,7 @@ import { modelReference, profileRequest } from '../../autonomous/config';
 import { connectionLabel, mergeConfig, profileIdFor, refreshOnFailure, saveConfigWithRetry, usableConnection } from '../draft';
 import { readConfig } from '../draftData';
 import StepFrame, { type Act, type StepFeedback } from '../StepFrame';
+import { SETUP_TITLES } from '../timeline';
 
 const NEW = '';
 const API_OPTIONS = [{ value: 'openai-completions', label: 'OpenAI 兼容' }, { value: 'anthropic-messages', label: 'Anthropic' }] as const;
@@ -65,7 +66,7 @@ export default function ModelStep({ projectId, config, profiles, connectionLost,
     }
   }, refresh).then(onDone));
 
-  return <StepFrame guide="AI 用这个模型阅读论文、写代码、推进实验。" feedback={feedback}
+  return <StepFrame title={SETUP_TITLES.model} guide="AI 用这个模型阅读论文、写代码、推进实验。" feedback={feedback}
     next={{ label: creating ? '保存并继续' : unchanged ? '下一步' : '使用此连接并继续', disabled: reason || undefined, onClick: save }}>
     {connectionLost && <p className="ui-callout tone-warn" role="status"><Icon name="alert" /><span>应用重启后模型连接已清空，请重新填写。</span></p>}
     <div className="ui-form">

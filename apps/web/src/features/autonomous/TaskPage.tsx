@@ -210,19 +210,14 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
     status={task && display ? {
       text: display.text,
       tone: !hasOutcome && needsRecovery && display.tone !== 'bad' ? 'warn' : display.tone,
+      title: display.caption ?? undefined,
     } : null}
-    meta={task && display ? <>
-      {display.lifecycle && <span>生命周期：{display.lifecycle}</span>}
-      {display.caption && <span>{display.caption}</span>}
-      <span>更新于 {task.updated_at || '—'}</span><span>{events.length} 条事件</span>
-    </> : <span>任务的阶段、命令输出和产物会在这里持续更新。</span>}
-    progress={<span className="auto-progress">{`进度 · ${doneCount} / 9`}<Badge tone="idle" title="阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定">按事件归纳</Badge></span>}
+    progressBar={{ done: doneCount, total: 9, label: activeTitle, extra: <Badge tone="idle" title="阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定">按事件归纳</Badge> }}
     stages={stages}
     activeStageId={task ? activeId : null}
     files={wbFiles}
     filesError={filesError || null}
-    filesEmpty="还没有文件。实验写入工作区或冻结证据后会出现在这里。"
-    filesNote={files ? <>「证据」是已冻结并按 SHA-256 校验的产物{files.workspace_available ? '；workspace 为本机隔离工作区的实时文件' : '；远程工作区不可浏览，仅显示冻结证据'}{files.truncated ? '；文件过多，仅列出前 2000 个' : ''}。</> : null}
+    filesEmpty=""
     onRefreshFiles={taskId ? () => setFilesTick(x => x + 1) : undefined}
     loadFile={loadFile}
   >
@@ -238,6 +233,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
             {running && <span className="wb-live-dot" aria-hidden="true" />}
             <b>{running ? '运行中' : display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {stepNumber} / 9 步 · {activeTitle} · {toolSteps} 步操作
           </p>
+          {display?.caption && <p className="ui-help">{display.caption}</p>}
           {latestNote && <p className="ui-help">{running ? '正在：' : '最近进度：'}{latestNote}</p>}
         </div>
 

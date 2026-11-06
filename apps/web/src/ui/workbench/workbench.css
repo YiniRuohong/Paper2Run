@@ -116,6 +116,12 @@ button.wb-tab { gap: 7px; padding: 0 13px; }
 .wb-tab-open span { min-width: 0; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-tab-close { display: grid; place-items: center; width: 22px; height: 22px; margin-right: 4px; border-radius: 6px; color: var(--faint); }
 .wb-tab-close:hover { background: var(--hover); color: var(--text); }
+/* progress-bar tab (replaces the 实时 label): accent fill, never the ok colour */
+button.wb-tab.wb-tab-bar { max-width: 360px; gap: 9px; }
+.wb-bar-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-bar-track { flex: none; width: 72px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.wb-bar-fill { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width var(--dur-fast) ease; }
+.wb-bar-count { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .wb-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); color: var(--ok); animation: wb-pulse 2s var(--ease) infinite; }
 .wb-tools { display: flex; align-items: center; gap: 4px; flex: none; }
 .wb-tools .btn-icon { border: 1px solid var(--line); background: var(--surface); width: 32px; height: 32px; border-radius: 9px; }

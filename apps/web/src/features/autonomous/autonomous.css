@@ -29,7 +29,6 @@
 
 /* ---------- 任务工作台（#/task/<id>） ---------- */
 .auto-live { display: grid; gap: 14px; min-width: 0; }
-.auto-progress { display: inline-flex; align-items: center; gap: 8px; }
 .auto-taskbar { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid var(--line-soft); }
 .auto-taskbar-field { flex: 1; min-width: 220px; }
 .auto-compose .auto-actions { padding: 10px 16px; }

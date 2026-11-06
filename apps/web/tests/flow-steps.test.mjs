@@ -10,6 +10,7 @@ import * as launch from '../src/features/autonomous/launch.ts';
 import * as probe from '../src/features/autonomous/probe.ts';
 import * as draft from '../src/features/flow/draft.ts';
 import * as draftData from '../src/features/flow/draftData.ts';
+import * as timeline from '../src/features/flow/timeline.ts';
 
 // Shallow-render one setup step in a VM: React hooks and UI children are
 // stubbed, the draft helpers are real. Only the step's own save sequence runs.
@@ -32,6 +33,7 @@ async function mount(file, props) {
     react,
     '../draft': draft,
     '../draftData': draftData,
+    '../timeline': timeline,
     '../StepFrame': { default: box('StepFrame') },
     '../../../ui/Controls': { Segmented: box('Segmented'), Switch: box('Switch') },
     '../../../ui/Icon': { Icon: () => null },

@@ -250,15 +250,14 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     <Workbench
       railHead={<RailHead />}
       title={paper?.title || '新建实验'}
-      status={{ text: `草稿 · 第 ${SETUP_ORDER.indexOf(progress.current) + 1} 步`, tone: 'idle' }}
       actions={projectId ? <button type="button" className="btn btn-sm btn-secondary" disabled={busy} onClick={removeDraft}>删除草稿</button> : undefined}
-      progress={`已完成 ${doneCount} / ${stages.length} 步`}
+      progressBar={{ done: doneCount, total: 9, label: stages.find(st => st.id === shown)?.title ?? '' }}
       stages={stages}
       activeStageId={shown}
       onSelectStage={id => { const target = SETUP_ORDER.find(s => s === id); if (target && reachable(progress, target)) setViewing(target); }}
       files={files}
       loadFile={loadFile}
-      filesEmpty="上传论文后，这里会出现解析预览与项目配置。"
+      filesEmpty=""
     >
       {loadFailed ? <div className="ui-callout tone-bad flow-error" role="alert"><Icon name="alert" />
         <span>{error || '正在重新读取…'}</span>

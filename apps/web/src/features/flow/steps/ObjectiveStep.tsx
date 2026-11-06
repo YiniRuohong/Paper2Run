@@ -4,6 +4,7 @@ import type { PapersApi } from '../../../api-client/papers';
 import { OBJECTIVE_LIMIT, mergeConfig, objectiveError, refreshOnFailure, saveConfigWithRetry } from '../draft';
 import { readConfig } from '../draftData';
 import StepFrame, { type Act, type StepFeedback } from '../StepFrame';
+import { SETUP_TITLES } from '../timeline';
 
 const EXAMPLE = '例如：复现论文表 2 中模型在 CIFAR-10 上的测试准确率，只用 CPU 跑缩小版本（1 个 epoch），与论文数值相差 5 个百分点以内视为一致。';
 
@@ -36,7 +37,7 @@ export default function ObjectiveStep({ projectId, projectVersion, initial, hasC
     }
   }, refresh).then(onDone));
 
-  return <StepFrame guide="写清要验证什么、看哪个指标、允许多大范围。" feedback={feedback}
+  return <StepFrame title={SETUP_TITLES.objective} guide="写清要验证什么、看哪个指标、允许多大范围。" feedback={feedback}
     next={{ label: '下一步', disabled: busy ? '处理中…' : invalid || undefined, onClick: save }}>
     <label className="flow-textarea">
       <span className="sr-only">实验目标</span>

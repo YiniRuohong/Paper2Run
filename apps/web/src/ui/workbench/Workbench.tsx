@@ -45,10 +45,12 @@ export type WbContent = { text: string } | { blob: Blob };
 export interface WorkbenchProps {
   eyebrow?: ReactNode;
   title: ReactNode;
-  status?: { text: string; tone: Tone } | null;
+  status?: { text: string; tone: Tone; /** Tooltip, e.g. a caveat that must stay reachable. */ title?: string } | null;
   meta?: ReactNode;
   actions?: ReactNode;
   progress?: ReactNode;
+  /** Replaces the "实时" tab label with a thin progress bar (and hides `progress`). Clicking it still returns to the live view. */
+  progressBar?: { done: number; total: number; label: string; extra?: ReactNode };
   /** App layout: the rail runs full height and starts with this (brand, back link); the header moves above the centre and right columns. */
   railHead?: ReactNode;
   stages: WbStage[];
@@ -61,6 +63,7 @@ export interface WorkbenchProps {
   files: WbFile[] | null;
   filesError?: string | null;
   filesNote?: ReactNode;
+  /** Empty-listing sentence; '' renders nothing. */
   filesEmpty?: string;
   onRefreshFiles?: () => void;
   loadFile: (file: WbFile, signal: AbortSignal) => Promise<WbContent>;
@@ -225,6 +228,8 @@ export function Workbench(props: WorkbenchProps) {
   const activeEntry = active !== null ? loaded[active] : undefined;
   const fileCount = files?.length ?? 0;
   const folderCount = countFolders(allTree);
+  const bar = props.progressBar;
+  const barDone = bar ? Math.max(0, Math.min(bar.done, bar.total)) : 0;
 
   return <div className={`wb${props.railHead ? ' is-app' : ''}`}>
     <header className="wb-head">
@@ -232,7 +237,7 @@ export function Workbench(props: WorkbenchProps) {
         {props.eyebrow && <p className="wb-eyebrow">{props.eyebrow}</p>}
         <h1 className="wb-title">{props.title}</h1>
         {(props.status || props.meta) && <div className="wb-meta">
-          {props.status && <span className={`wb-status tone-${props.status.tone}`}><span className="wb-status-dot" aria-hidden="true" />{props.status.text}</span>}
+          {props.status && <span className={`wb-status tone-${props.status.tone}`} title={props.status.title}><span className="wb-status-dot" aria-hidden="true" />{props.status.text}</span>}
           {props.meta}
         </div>}
       </div>
@@ -242,7 +247,7 @@ export function Workbench(props: WorkbenchProps) {
     <div className={`wb-grid${full ? ' is-full' : ''}`}>
       <nav className="wb-rail" aria-label="阶段时间线">
         {props.railHead && <div className="wb-rail-head drag">{props.railHead}</div>}
-        {props.progress && <p className="wb-progress">{props.progress}</p>}
+        {!props.progressBar && props.progress && <p className="wb-progress">{props.progress}</p>}
         <ol className="wb-stages">
           {stages.map((stage, i) => {
             const isActive = stage.id === props.activeStageId;
@@ -276,9 +281,18 @@ export function Workbench(props: WorkbenchProps) {
       <section className="wb-viewer" ref={viewer} aria-label="查看器">
         <div className="wb-tabbar">
           <div className="wb-tabs" role="tablist" aria-label="已打开">
-            <button type="button" role="tab" aria-selected={active === null} className={`wb-tab wb-tab-live${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
-              <span className="wb-live-dot" aria-hidden="true" />{props.liveLabel ?? '实时'}
-            </button>
+            {bar
+              ? <button type="button" role="tab" aria-selected={active === null} aria-label={`实时 · ${bar.label}`} className={`wb-tab wb-tab-live wb-tab-bar${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
+                <span className="wb-bar-label">{bar.label}</span>
+                <span className="wb-bar-track" role="progressbar" aria-valuenow={barDone} aria-valuemin={0} aria-valuemax={bar.total} aria-label={`进度 ${barDone} / ${bar.total}`}>
+                  <span className="wb-bar-fill" style={{ width: `${bar.total > 0 ? Math.round(barDone / bar.total * 100) : 0}%` }} />
+                </span>
+                <span className="wb-bar-count">{barDone} / {bar.total}</span>
+                {bar.extra}
+              </button>
+              : <button type="button" role="tab" aria-selected={active === null} className={`wb-tab wb-tab-live${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
+                <span className="wb-live-dot" aria-hidden="true" />{props.liveLabel ?? '实时'}
+              </button>}
             {tabs.map(path => <span key={path} className={`wb-tab${active === path ? ' is-on' : ''}`}>
               <button type="button" role="tab" aria-selected={active === path} className="wb-tab-open" title={path} onClick={() => setActive(path)}>
                 <FileGlyph file={byPath.get(path)} size={13} /><span>{baseName(path)}</span>
@@ -318,7 +332,7 @@ export function Workbench(props: WorkbenchProps) {
         {props.filesError && <p className="wb-files-msg tone-bad" role="alert">{props.filesError}</p>}
         <div className="wb-tree" role="tree" aria-label="文件树">
           {files === null && !props.filesError && <div className="wb-tree-skel" aria-hidden="true"><span /><span /><span /><span /></div>}
-          {files !== null && fileCount === 0 && <p className="wb-files-msg">{props.filesEmpty ?? '还没有文件。'}</p>}
+          {files !== null && fileCount === 0 && props.filesEmpty !== '' && <p className="wb-files-msg">{props.filesEmpty ?? '还没有文件。'}</p>}
           {files !== null && fileCount > 0 && shown.length === 0 && <p className="wb-files-msg">没有匹配「{query.trim()}」的文件。</p>}
           <TreeLevel node={tree} depth={0} collapsed={searching ? EMPTY : collapsed} active={active}
             onToggle={path => setCollapsed(prev => { const next = new Set(prev); if (next.has(path)) next.delete(path); else next.add(path); return next; })}

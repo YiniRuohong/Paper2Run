@@ -132,7 +132,8 @@ test('task page continues the nine-step timeline in the full-bleed layout', asyn
   assert.doesNotMatch(page, /export \{ errorDetail \}/);
   assert.match(page, /auto-live-status/);
   assert.match(page, /title="详细记录"/);
-  assert.match(page, /进度 · \$\{doneCount\} \/ 9/);
+  assert.match(page, /progressBar=\{\{ done: doneCount, total: 9, label: activeTitle/);
+  assert.match(page, /阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定/);
 });
 
 test('at 860px and below the app rail is capped like the plain layout so the form stays on the first screen', async () => {
