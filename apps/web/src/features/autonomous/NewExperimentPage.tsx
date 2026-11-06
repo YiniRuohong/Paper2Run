@@ -247,7 +247,7 @@ export default function NewExperimentPage({ api = autonomous, papers = papersApi
               <input value={newProjectName} disabled={busy} onChange={e => setNewProjectName(e.target.value)} placeholder="项目名称" />
               <button type="button" className="btn btn-secondary" disabled={busy || !newProjectName.trim()} onClick={() => void act(async () => {
                 const created = await papers.createProject(newProjectName.trim());
-                setProjects(old => [...old, { id: created.id, name: created.name }]);
+                setProjects(old => [...old, { id: created.id, name: created.name, description: '', version: created.version, role: created.role, created_at: created.created_at }]);
                 setProjectId(created.id); setNewProjectName('');
                 setNotice('项目已创建。');
               })}>创建</button>

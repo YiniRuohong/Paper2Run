@@ -8,7 +8,10 @@ import {
 
 export interface Page<T> { items: T[]; has_more: boolean; next_cursor: string | null }
 
-export interface ProjectInfo { id: string; name: string; role?: string; version?: number; created_at?: string }
+export interface ProjectInfo {
+  id: string; name: string; description: string; version: number;
+  role?: string; created_at?: string; updated_at?: string;
+}
 
 export interface ProjectAccepted {
   id: string; name: string; role: string; version: number; created_at: string;
@@ -160,6 +163,22 @@ function validateProjectAccepted(value: unknown): ProjectAccepted {
   };
 }
 
+// 列表/详情共用；description 缺省 ''，version 缺省 1（旧后端不返回时）。
+function validateProjectInfo(value: unknown): ProjectInfo {
+  const item = record(value, 'project must be an object');
+  const id = str(item.id, 'project.id');
+  const out: ProjectInfo = {
+    id,
+    name: typeof item.name === 'string' && item.name ? item.name : id,
+    description: typeof item.description === 'string' ? item.description : '',
+    version: item.version === undefined || item.version === null ? 1 : nonNegativeInt(item.version, 'project.version'),
+  };
+  if (typeof item.role === 'string') out.role = item.role;
+  if (typeof item.created_at === 'string') out.created_at = item.created_at;
+  if (typeof item.updated_at === 'string') out.updated_at = item.updated_at;
+  return out;
+}
+
 function validatePaperAccepted(value: unknown): PaperAccepted {
   const item = record(value, 'paper accepted must be an object');
   return {
@@ -196,6 +215,9 @@ function validatePaperInfo(value: unknown): PaperInfo {
 export interface PapersApi {
   listProjects(signal?: AbortSignal): Promise<ProjectInfo[]>;
   createProject(name: string, key?: string): Promise<ProjectAccepted>;
+  getProject(projectId: string, signal?: AbortSignal): Promise<ProjectInfo>;
+  updateProjectDescription(projectId: string, description: string, version: number): Promise<ProjectInfo>;
+  deleteProject(projectId: string): Promise<void>;
   listPapers(projectId: string, signal?: AbortSignal): Promise<PaperInfo[]>;
   getPaper(paperId: string, signal?: AbortSignal): Promise<PaperInfo>;
   uploadPaperPdf(projectId: string, file: File, options?: { titleHint?: string; key?: string }): Promise<PaperAccepted>;
@@ -282,15 +304,34 @@ export function createPapersApi(actorId: string, fetcher: Fetcher = fetch): Pape
   const enc = encodeURIComponent;
   return {
     async listProjects(signal) {
-      const page = await readArray('/projects', v => {
-        const item = record(v, 'project must be an object');
-        const out: ProjectInfo = { id: str(item.id, 'project.id'), name: typeof item.name === 'string' && item.name ? item.name : str(item.id, 'project.id') };
-        return out;
-      }, signal);
+      const page = await readArray('/projects', validateProjectInfo, signal);
       return page.items;
     },
     createProject(name, key) {
       return write('/projects', { name, description: 'Autonomous experiment flow' }, validateProjectAccepted, key);
+    },
+    getProject(projectId, signal) {
+      return read(`/projects/${enc(projectId)}`, validateProjectInfo, signal);
+    },
+    async updateProjectDescription(projectId, description, version) {
+      const headers = new Headers({
+        'Content-Type': 'application/json',
+        'Idempotency-Key': crypto.randomUUID(),
+        'If-Match': `"${version}"`,
+      });
+      const response = await send(`/projects/${enc(projectId)}`, { method: 'PATCH', headers, body: JSON.stringify({ description }) });
+      const requestId = response.headers.get('X-Request-ID') ?? undefined;
+      if (!response.ok) throw errorEnvelope(await responsePayload(response, response.status >= 500), response);
+      try {
+        const { data } = envelopeData(await responsePayload(response, true), response.status, requestId, true);
+        return validateProjectInfo(data);
+      } catch (error) {
+        throw asUnknown(error, `保存已返回成功状态但响应无法验证；请刷新项目后再确认。(${response.status})`, response.status, 'UNKNOWN_WRITE_RESULT', requestId);
+      }
+    },
+    async deleteProject(projectId) {
+      const response = await send(`/projects/${enc(projectId)}`, { method: 'DELETE' });
+      if (!response.ok) throw errorEnvelope(await responsePayload(response, response.status >= 500), response);
     },
     async listPapers(projectId, signal) {
       const page = await readArray(`/projects/${enc(projectId)}/papers`, v => v, signal);
