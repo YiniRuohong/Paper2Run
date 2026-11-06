@@ -137,6 +137,47 @@ def test_plain_resume_while_pending_reports_decision_pending(service):
         assert service.row(db, task_id).pending_decision_json == decision
 
 
+def test_stop_withdraws_pending_decision_exactly_once(service):
+    task_id, decision = pending(service)
+    with service.sessions() as db:
+        row = service.control(db, task_id, "stop")
+        assert row.state == "stopping" and row.pending_decision_json is None
+        db.commit()
+    with service.sessions() as db:
+        # A replayed stop (idempotency reconcile) must not write a second withdrawal.
+        service.control(db, task_id, "stop"); db.commit()
+    service.finish_stop(task_id)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        assert row.state == "stopped" and row.pending_decision_json is None
+    assert events(service, task_id, "decision_withdrawn") == [
+        {"decision_id": decision["id"], "reason": "task_stopped"}]
+    assert not events(service, task_id, "protocol_approved") and not events(service, task_id, "protocol_rejected")
+
+
+def test_decision_raised_while_stopping_is_withdrawn_when_stop_settles(service):
+    task_id = create(service, protocol=protocol())
+    with service.sessions() as db:
+        service.control(db, task_id, "stop"); db.commit()
+    with service.sessions() as db:
+        # A turn that was still finishing left a proposal behind after the stop request.
+        row = service.row(db, task_id)
+        row.pending_decision_json = {"id": "late", "kind": "protocol_approval"}
+        db.commit()
+    service.finish_stop(task_id)
+    with service.sessions() as db:
+        assert service.row(db, task_id).pending_decision_json is None
+    assert events(service, task_id, "decision_withdrawn") == [{"decision_id": "late", "reason": "task_stopped"}]
+
+
+def test_stop_without_pending_decision_writes_no_withdrawal(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        service.control(db, task_id, "stop"); db.commit()
+    service.finish_stop(task_id)
+    assert not events(service, task_id, "decision_withdrawn")
+
+
 def test_legacy_approve_message_still_works(service):
     task_id, decision = pending(service)
     with service.sessions() as db:
