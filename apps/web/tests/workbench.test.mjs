@@ -107,3 +107,17 @@ test('errorDetail lives in errors.ts and the test helper re-exports it', async (
   const page = await readFile(new URL('../src/features/autonomous/NewExperimentPage.tsx', import.meta.url), 'utf8');
   assert.match(page, /from '\.\/errors'/);
 });
+
+test('app layout keeps the rail spanning every row and its head pinned', async () => {
+  const css = await readFile(new URL('../src/ui/workbench/workbench.css', import.meta.url), 'utf8');
+  const block = (re) => { const m = css.match(re); assert.ok(m, `block ${re} exists`); return m[0]; };
+  const media1240 = block(/@media \(max-width: 1240px\) \{[\s\S]*?\n\}/);
+  const appRail = media1240.match(/\.wb\.is-app \.wb-rail\s*\{[^}]*\}/);
+  assert.ok(appRail, '1240 block styles the app rail');
+  assert.doesNotMatch(appRail[0], /grid-row/, 'the rail must keep spanning rows through grid-area');
+  const head = block(/\.wb\.is-app \.wb-rail-head\s*\{[^}]*\}/);
+  assert.match(head, /position:\s*sticky/);
+  assert.match(head, /top:\s*0/);
+  assert.match(head, /background:/);
+  assert.doesNotMatch(css.replace(/\.wb\.is-app \.wb-rail-head\s*\{[^}]*\}/, ''), /^\.wb-rail-head\s*\{[^}]*sticky/m, 'plain layout stays unchanged');
+});

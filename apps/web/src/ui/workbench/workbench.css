@@ -245,6 +245,8 @@ button.wb-tab { gap: 7px; padding: 0 13px; }
 .wb.is-app .wb-viewer { grid-area: viewer; }
 .wb.is-app .wb-files { grid-area: files; }
 .wb-rail-head { display: flex; align-items: center; gap: 10px; flex: none; min-height: 40px; margin: -4px -2px 10px 0; padding: 4px 6px 10px 8px; border-bottom: 1px solid var(--line-soft); }
+/* Pinned: the brand and back link stay visible while the stage list scrolls. */
+.wb.is-app .wb-rail-head { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--surface) 55%, var(--bg)); }
 /* macOS hidden-inset title bar: leave room for the traffic lights, and make the strip draggable. */
 [data-shell="darwin"] .wb.is-app .wb-rail-head { padding-left: 82px; -webkit-app-region: drag; user-select: none; }
 [data-shell="darwin"] .wb.is-app .wb-rail-head button, [data-shell="darwin"] .wb.is-app .wb-rail-head a { -webkit-app-region: no-drag; }
@@ -263,7 +265,7 @@ button.wb-tab { gap: 7px; padding: 0 13px; }
     grid-template-columns: 236px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
     grid-template-areas: "rail head" "rail viewer" "rail files"; height: auto;
   }
-  .wb.is-app .wb-rail { grid-row: auto; max-height: calc(100dvh - var(--head-h) - 40px); }
+  .wb.is-app .wb-rail { max-height: calc(100dvh - var(--head-h) - 40px); }
 }
 @media (max-width: 860px) {
   .wb-grid { grid-template-columns: minmax(0, 1fr); }
