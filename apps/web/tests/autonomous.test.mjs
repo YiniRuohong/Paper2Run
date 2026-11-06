@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAutonomousApi } from '../src/api-client/autonomous.ts';
-import { defaultConfig, validateConfig, parseProtocol, protocolApproval, mergeEvents, stateLabel, terminalState } from '../src/features/autonomous/config.ts';
+import { defaultConfig, validateConfig, parseProtocol, protocolApproval, mergeEvents, STREAM_EVENT_KEEP, stateLabel, terminalState } from '../src/features/autonomous/config.ts';
 const envelope = (data, status = 200) => new Response(JSON.stringify({ data, meta: { request_id: 'req-1' } }), { status });
 function capture(data) {
   const calls = [];
@@ -104,4 +104,21 @@ test('decisions post an explicit approve or reject to the decision endpoint with
   assert.deepEqual(JSON.parse(calls[2].init.body), { action: 'reject' }, 'a blank note is not sent');
   const { api: conflict } = capture(() => new Response(JSON.stringify({ error: { code: 'DECISION_MISMATCH', message: 'stale' }, meta: { request_id: 'req-d' } }), { status: 409 }));
   await assert.rejects(conflict.decide('t', 'd', 'approve'), e => e.status === 409 && e.code === 'DECISION_MISMATCH' && e.requestId === 'req-d');
+});
+
+test('mergeEvents keeps every milestone and specialist call and caps only the streamed model output', () => {
+  const ev = (sequence, type, payload = {}) => ({ sequence, type, payload, created_at: '' });
+  const events = [
+    ev(1, 'tool_started'), ev(2, 'sdk_event', { type: 'research_delegation_started' }),
+    ...Array.from({ length: 700 }, (_, i) => ev(3 + i, 'sdk_event', { type: 'message_update' })),
+    ev(703, 'tool_completed'),
+  ];
+  const merged = mergeEvents([], events);
+  assert.deepEqual(merged.filter(e => e.type !== 'sdk_event').map(e => e.sequence), [1, 703], 'no milestone is dropped');
+  assert.ok(merged.some(e => e.sequence === 2), 'the specialist call stays');
+  const streamed = merged.filter(e => e.type === 'sdk_event' && e.payload.type === 'message_update');
+  assert.equal(streamed.length, STREAM_EVENT_KEEP);
+  assert.equal(streamed.at(-1).sequence, 702, 'the newest streamed output is the one kept');
+  const many = Array.from({ length: 1500 }, (_, i) => ev(i + 1, 'tool_started'));
+  assert.equal(mergeEvents([], many).length, 1500, 'milestones have no cap');
 });

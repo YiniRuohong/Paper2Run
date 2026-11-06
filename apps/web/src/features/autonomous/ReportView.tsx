@@ -49,7 +49,7 @@ export function ReportBrief({ report, onOpen }: { report: unknown; onOpen: () =>
   const label = outcomeLabel(parsed.outcome);
   const tone = outcomeTone(parsed.outcome);
   const verdictText = parsed.verdict === 'not_comparable' ? '不可比较' : parsed.verdict;
-  const statusText = parsed.status === 'incomplete' ? '流程未完成' : parsed.status;
+  const statusText = reportStatusText(parsed.status);
   const all = Object.entries(parsed.evaluation.metrics);
   const metrics = all.slice(0, 6);
   return <div className="auto-brief">
@@ -129,7 +129,7 @@ function OutcomeCard({ report }: { report: ExperimentReport }) {
 }
 
 function ConclusionCard({ report }: { report: ExperimentReport }) {
-  const statusText = report.status === 'incomplete' ? '流程未完成' : report.status;
+  const statusText = reportStatusText(report.status);
   const verdictText = report.verdict === 'not_comparable' ? '不可比较' : report.verdict;
   return <Card>
     <CardHeader icon="flask" title="结论" status={{ text: verdictText, tone: report.verdict === 'not_comparable' ? 'warn' : 'idle' }}
@@ -276,4 +276,10 @@ function MetricsCard({ report }: { report: ExperimentReport }) {
 
 function formatNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toPrecision(6).replace(/\.?0+$/, '');
+}
+
+// 报告状态用中文显示；未知的值原样显示，不猜。
+const REPORT_STATUS_TEXT: Record<string, string> = { incomplete: '流程未完成', not_comparable: '不可比较' };
+function reportStatusText(status: string): string {
+  return Object.prototype.hasOwnProperty.call(REPORT_STATUS_TEXT, status) ? REPORT_STATUS_TEXT[status] : status;
 }

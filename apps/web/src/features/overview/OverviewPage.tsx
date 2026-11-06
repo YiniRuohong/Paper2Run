@@ -38,6 +38,11 @@ const when = (iso: string) => {
 // 有结局的任务一律算已结束（安全终止归入失败），即使生命周期状态是 paused / stopped。
 const bucket = (task: RecentTask): Filter => taskBucket(task);
 
+// 标题只显示前十个字，末尾逐渐变淡（完整标题在鼠标悬停提示里）。
+const TITLE_CHARS = 10;
+const head = (text: string) => [...text].slice(0, TITLE_CHARS).join('');
+const fadeCls = (text: string) => ([...text].length > TITLE_CHARS ? ' is-fade' : '');
+
 // 总览（#/）：全部项目的草稿与自主任务列表。新建任务在「新建实验」里完成；草稿可继续或删除。
 export default function OverviewPage({ api = defaultApi, papers = defaultPapers }: { api?: AutonomousApi; papers?: PapersApi }) {
   const [phase, setPhase] = useState<Phase>('loading');
@@ -141,7 +146,7 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
             <a className="ui-row" href={draftHref(d.projectId)}>
               <span className="ui-tile" aria-hidden="true"><Icon name="doc" /></span>
               <span className="ui-row-main">
-                <span className="ui-row-title" title={d.name}>{d.name || '（未命名草稿）'}</span>
+                <span className={`ui-row-title${fadeCls(d.name)}`} title={d.name}>{head(d.name) || '（未命名草稿）'}</span>
                 <span className="ui-row-sub">{step ? `草稿 · 第 ${SETUP_ORDER.indexOf(step) + 1} 步 · ${SETUP_TITLES[step]}` : '草稿'}</span>
               </span>
               <span className="ui-row-end">
@@ -171,7 +176,7 @@ export default function OverviewPage({ api = defaultApi, papers = defaultPapers 
           <a className="ui-row" href={taskHref(t.id)}>
             <span className="ui-tile" aria-hidden="true"><Icon name="flask" /></span>
             <span className="ui-row-main">
-              <span className="ui-row-title" title={t.objective}>{t.objective || '（未命名实验）'}</span>
+              <span className={`ui-row-title${fadeCls(t.projectName || t.objective)}`} title={t.projectName ? `${t.projectName}\n${t.objective}` : t.objective}>{head(t.projectName || t.objective) || '（未命名实验）'}</span>
               <span className="ui-row-sub ui-mono">{t.id}</span>
               {shown.caption && <span className="ui-row-sub">{shown.caption}</span>}
             </span>

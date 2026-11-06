@@ -300,7 +300,8 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
     // 修复轮次回到前面的阶段时，后面只在上一轮开始过的阶段显示「可进入」，不显示完成。
     else if (idx > activeIdx) mark = 'open';
     else if (!finished) mark = task?.pending_decision != null || task?.state === 'paused' || task?.state === 'blocked' ? 'attention' : running ? 'running' : 'current';
-    else if (failed.has(phase.id) || task?.state === 'failed' || task?.outcome === 'blocked_by_safety') mark = 'failed';
+    // 复核通过的任务里，中途的工具报错已被修复，不再把阶段标红；只有任务失败或安全终止才标红。
+    else if (task?.state === 'failed' || task?.outcome === 'blocked_by_safety' || (failed.has(phase.id) && task?.outcome !== 'verified' && task?.state !== 'completed')) mark = 'failed';
     else mark = hasOutcome || task?.state === 'completed' || task?.state === 'succeeded' ? 'done' : 'attention';
     const count = all.reduce((n, item) => n + 1 + (item.children?.length ?? 0), 0);
     const note = phase.id === active ? notes.get(active) : undefined;

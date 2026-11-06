@@ -26,3 +26,6 @@
   .overview { gap: 24px; }
   .overview .ui-row { padding: 12px 14px; }
 }
+
+/* 标题只显示前十个字：末尾逐渐变淡 */
+.overview .ui-row-title.is-fade { display: block; flex: none; width: fit-content; max-width: 100%; overflow: hidden; white-space: nowrap; -webkit-mask-image: linear-gradient(90deg, #000 50%, transparent); mask-image: linear-gradient(90deg, #000 50%, transparent); }

@@ -190,6 +190,23 @@ export const errorExplanation = (code: string): string | null => own(ERROR_EXPLA
 /** 决定提交冲突：两次点击竞争或决定已被替换。刷新任务即可，不当作错误。 */
 export const decisionSuperseded = (code: string) => code === 'INVALID_STATE' || code === 'DECISION_MISMATCH';
 
+/** 模型流式输出（sdk_event）最多保留最近这么多条；节点类事件和专家调用事件不设上限。 */
+export const STREAM_EVENT_KEEP = 300;
+const isSpecialistEvent = (e: import('../../api-client/autonomous.ts').AutonomousEvent) => {
+  const p = (e.payload && typeof e.payload === 'object' ? e.payload : {}) as Record<string, unknown>;
+  return p.type === 'research_delegation_started' || p.type === 'research_delegation_completed' || (p.type === 'message_end' && p.delegated === true);
+};
+
+// 合并事件：按序号去重排序。时间线、报告和用量都靠节点类事件（工具调用、冻结证据、复核……），
+// 它们一条都不能丢；占绝大多数的是流式输出，只留最近一段。
 export function mergeEvents(previous: import('../../api-client/autonomous.ts').AutonomousEvent[], incoming: import('../../api-client/autonomous.ts').AutonomousEvent[]) {
-  return [...new Map([...previous, ...incoming].map(e => [e.sequence, e])).values()].sort((a, b) => a.sequence - b.sequence).slice(-500);
+  const all = [...new Map([...previous, ...incoming].map(e => [e.sequence, e])).values()].sort((a, b) => a.sequence - b.sequence);
+  const dropped = new Set<number>();
+  let streamed = 0;
+  for (let i = all.length - 1; i >= 0; i--) {
+    const e = all[i];
+    if (e.type !== 'sdk_event' || isSpecialistEvent(e)) continue;
+    if (++streamed > STREAM_EVENT_KEEP) dropped.add(e.sequence);
+  }
+  return dropped.size === 0 ? all : all.filter(e => !dropped.has(e.sequence));
 }

@@ -34,6 +34,8 @@ const defaultApi = createAutonomousApi();
 const defaultPapers = createPapersApi('demo-user');
 const STAGE_NOTE = '阶段由智能体自报进度与事件归纳得出，不是程序判定';
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+/** 事件接口一次最多返回这么多条（后端 limit）。 */
+const EVENT_PAGE = 200;
 
 /** 一句话说明任务错误：有已知代码时用中文解释，否则用后端消息；原始 JSON 另放折叠区。 */
 function errorSummary(error: unknown): string {
@@ -94,6 +96,8 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   // 最近一次操作失败的错误码：CREDENTIAL_REQUIRED 时显示「需要恢复」。
   const [lastControlError, setLastControlError] = useState<string | null>(null);
   const [paperTitle, setPaperTitle] = useState<{ projectId: string; name: string } | null>(null);
+  // 论文名读完（成功或失败）之前标题留空，避免先闪一下整段实验目标。
+  const [titleSettled, setTitleSettled] = useState(false);
   const taskScope = useRef({ id: taskId });
   if (taskScope.current.id !== taskId) taskScope.current = { id: taskId };
   useEffect(() => { setKeysInjected(false); setKeyInput(''); setLastControlError(null); }, [taskId]);
@@ -148,11 +152,19 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     async function poll() {
       try {
         const scope = taskScope.current;
-        const [current, stream] = await Promise.all([api.task(taskId, controller.signal), api.events(taskId, cursor, controller.signal)]);
+        const [current, first] = await Promise.all([api.task(taskId, controller.signal), api.events(taskId, cursor, controller.signal)]);
         if (controller.signal.aborted || taskScope.current !== scope || current.id !== scope.id) return;
+        // 一次最多返回 EVENT_PAGE 条：积压多时接着读完，不等下一个 2 秒，否则打开时看到的是中间状态。
+        let last = first; let fetched = first.events;
+        while (last.events.length >= EVENT_PAGE && !controller.signal.aborted) {
+          const next = await api.events(taskId, last.next_cursor, controller.signal);
+          if (next.next_cursor === last.next_cursor) break;
+          last = next; fetched = fetched.concat(next.events);
+        }
+        if (controller.signal.aborted || taskScope.current !== scope) return;
         setTask(current);
-        setEvents(old => mergeEvents(old, stream.events));
-        cursor = stream.next_cursor;
+        setEvents(old => mergeEvents(old, fetched));
+        cursor = last.next_cursor;
         pollError.current = ''; setLoadFailed(false);
       } catch (e) {
         // 轮询每 2 秒一次：同一个错误只弹一次，恢复后再出错才再弹。
@@ -173,7 +185,8 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   useEffect(() => {
     if (!projectId) return;
     let alive = true;
-    papers.getProject(projectId).then(project => { if (alive && project.name) setPaperTitle({ projectId, name: project.name }); }).catch(() => { /* 回退为实验目标 */ });
+    setTitleSettled(false);
+    papers.getProject(projectId).then(project => { if (alive && project.name) setPaperTitle({ projectId, name: project.name }); }).catch(() => { /* 回退为实验目标 */ }).then(() => { if (alive) setTitleSettled(true); });
     return () => { alive = false; };
   }, [papers, projectId]);
 
@@ -314,7 +327,7 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const taskSkills = task?.config_snapshot?.harness?.skills ?? [];
   const skillSnapshot = taskSkills.map(id => skills.find(s => s.id === id) ?? null);
 
-  const title = paperTitle && paperTitle.projectId === projectId ? paperTitle.name : task?.objective ?? '正在读取任务…';
+  const title = paperTitle && paperTitle.projectId === projectId ? paperTitle.name : task && titleSettled ? task.objective : ' ';
   const phase = PHASES.find(p => p.id === (activeId === 'launch' ? 'setup' : activeId));
   const guide = `${phase?.idle ? `${phase.idle}。` : ''}${STAGE_NOTE}。`;
 

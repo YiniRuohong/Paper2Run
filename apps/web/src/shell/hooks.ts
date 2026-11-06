@@ -30,6 +30,8 @@ export const RECENT_LIMIT = 6;
 export interface RecentTask {
   id: string;
   projectId: string;
+  /** 论文名（项目名）；总览用它做标题。 */
+  projectName?: string;
   objective: string;
   state: string;
   /** 程序判定的结局；null 表示尚未判定。 */
@@ -53,7 +55,7 @@ export async function loadAutonomousTasks(api: AutonomousApi, papers: PapersApi,
       if (signal?.aborted) return;
       if (list.length === 0) drafts.push({ projectId: project.id, name: project.name, updatedAt: project.updated_at ?? '' });
       for (const task of list) {
-        tasks.push({ id: task.id, projectId: task.project_id || project.id, objective: task.objective, state: task.state, outcome: task.outcome ?? null, updatedAt: task.updated_at ?? task.created_at ?? '' });
+        tasks.push({ id: task.id, projectId: task.project_id || project.id, projectName: project.name, objective: task.objective, state: task.state, outcome: task.outcome ?? null, updatedAt: task.updated_at ?? task.created_at ?? '' });
       }
     } catch {
       failedProjects += 1;
