@@ -30,7 +30,10 @@ export function validateStart(message) {
   if (!c || typeof c.cwd !== 'string' || typeof c.session_dir !== 'string') fail('config.cwd and session_dir are required');
   if (typeof c.system_prompt !== 'string' || !Array.isArray(c.tools)) fail('system_prompt and tools are required');
   validateModel(c.model);
-  for (const field of ['max_model_calls', 'max_model_tokens']) if (!Number.isSafeInteger(c.limits?.[field]) || c.limits[field] < 0) fail(`limits.${field} must be a nonnegative integer`);
+  if (!Number.isSafeInteger(c.limits?.max_model_calls) || c.limits.max_model_calls < 0) fail('limits.max_model_calls must be a nonnegative integer');
+  // An absent or null token limit means no token cap.
+  if (c.limits.max_model_tokens == null) delete c.limits.max_model_tokens;
+  else if (!Number.isSafeInteger(c.limits.max_model_tokens) || c.limits.max_model_tokens < 0) fail('limits.max_model_tokens must be a nonnegative integer');
   if (!Number.isFinite(c.limits.wall_time_seconds) || c.limits.wall_time_seconds <= 0 || c.limits.wall_time_seconds > 2147483) fail('wall_time_seconds must be positive and bounded');
   c.specialists ??= [];
   if (!Array.isArray(c.specialists)) fail('specialists must be an array');
@@ -59,7 +62,7 @@ export function validateStart(message) {
 export function guardedStream(streamFn, limits, usage, stopped) {
   return async (...args) => {
     if (stopped()) throw new BridgeError('aborted', 'run aborted');
-    if (usage.calls >= limits.max_model_calls || usage.total_tokens >= limits.max_model_tokens) throw new BridgeError('budget_exceeded', 'model budget exhausted');
+    if (usage.calls >= limits.max_model_calls || (limits.max_model_tokens !== undefined && usage.total_tokens >= limits.max_model_tokens)) throw new BridgeError('budget_exceeded', 'model budget exhausted');
     usage.calls++;
     return streamFn(...args);
   };

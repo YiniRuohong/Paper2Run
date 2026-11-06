@@ -94,7 +94,9 @@ def write_guard(request):
         _error("VALIDATION_ERROR", "Idempotency-Key is required")
     if len(request.headers["idempotency-key"]) > 128:
         _error("VALIDATION_ERROR", "Idempotency-Key exceeds limit")
-    if request.headers.get("sec-fetch-site") == "cross-site":
+    # Same rule as the target probe: another loopback port or a sibling subdomain
+    # is same-site, not same-origin. The launcher page and the Vite proxy send same-origin.
+    if request.headers.get("sec-fetch-site", "").lower() in ("cross-site", "same-site"):
         _error("CSRF_FAILED", "cross-site autonomous mutation refused", status=403)
 
 

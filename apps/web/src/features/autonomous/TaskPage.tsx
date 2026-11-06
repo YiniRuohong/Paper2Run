@@ -9,7 +9,7 @@ import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
 import { PHASES, currentProtocolSha, progressNotes, safetyBlock, toWbFiles } from './stages';
 import { ProgressNotes, SpecialistCalls } from './ActivityViews';
-import { decisionSuperseded, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
+import { decisionSuperseded, decisionVisible, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { errorDetail } from './errors';
 import { connectionLabel } from '../flow/draft';
 import RailHead from '../flow/RailHead';
@@ -20,6 +20,7 @@ import { CandidateCard } from './CandidateCard';
 import { FiguresView } from './FiguresView';
 import { ReportDetails, ReportSummary } from './ReportView';
 import { UsageView } from './UsageView';
+import { frozenMainProfile, recoveryProfileRequest, recoveryState, type Recovery } from './recovery';
 import '../flow/flow.css';
 import './autonomous.css';
 
@@ -27,8 +28,6 @@ const defaultApi = createAutonomousApi();
 const defaultPapers = createPapersApi('demo-user');
 const STAGE_NOTE = '阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定';
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
-
-type Recovery = { needed: boolean; retainedJobs: string[] };
 
 /** 一句话说明任务错误：有已知代码时用中文解释，否则用后端消息；原始 JSON 另放折叠区。 */
 function errorSummary(error: unknown): string {
@@ -50,20 +49,33 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const [filesTick, setFilesTick] = useState(0);
   const [skills, setSkills] = useState<Capability[]>([]);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [profilesLoaded, setProfilesLoaded] = useState(false);
+  const [profilesTick, setProfilesTick] = useState(0);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [keyInput, setKeyInput] = useState('');
   const [keysInjected, setKeysInjected] = useState(false);
+  // 最近一次操作失败的错误码：CREDENTIAL_REQUIRED 时显示「需要恢复」。
+  const [lastControlError, setLastControlError] = useState<string | null>(null);
   const [paperTitle, setPaperTitle] = useState<{ projectId: string; name: string } | null>(null);
   const taskScope = useRef({ id: taskId });
   if (taskScope.current.id !== taskId) taskScope.current = { id: taskId };
-  useEffect(() => { setKeysInjected(false); setKeyInput(''); }, [taskId]);
+  useEffect(() => { setKeysInjected(false); setKeyInput(''); setLastControlError(null); }, [taskId]);
 
   async function act(work: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
-    try { await work(); } catch (e) { setError(errorDetail(e)); } finally { setBusy(false); }
+    try {
+      await work();
+      setLastControlError(null);
+    } catch (e) {
+      setError(errorDetail(e));
+      if (e instanceof ApiError) {
+        setLastControlError(e.code);
+        if (e.code === 'CREDENTIAL_REQUIRED') setKeysInjected(false);
+      }
+    } finally { setBusy(false); }
   }
 
   async function controlTask(id: string, action: 'pause' | 'resume' | 'stop' | 'message', text?: string) {
@@ -125,15 +137,15 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
     return () => { alive = false; };
   }, [papers, projectId]);
 
-  // Skills / 模型配置（快照展示与密钥重注入用）。
+  // Skills / 模型配置（快照展示与密钥重注入用）。模型配置只在服务端内存里：任务切换、显示恢复卡片、注入密钥后都重新读取。
   useEffect(() => {
     let alive = true;
     Promise.all([api.capabilities(), api.profiles()]).then(([caps, list]) => {
       if (!alive) return;
-      setSkills(caps); setProfiles(list);
+      setSkills(caps); setProfiles(list); setProfilesLoaded(true);
     }).catch(() => { /* 非关键信息，忽略 */ });
     return () => { alive = false; };
-  }, [api]);
+  }, [api, taskId, profilesTick]);
 
   // 文件列表：新冻结证据或工具调用完成后重新拉取。
   const fileSignal = events.filter(e => e.type === 'artifact_frozen' || e.type === 'tool_completed' || e.type === 'report_created').length;
@@ -185,24 +197,19 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   };
 
   // ---- 三态与恢复（P0-5）----
-  // 需恢复：最近一次恢复类事件是 recovery_required（应用曾退出，密钥未重注入）。
-  let recovery: Recovery = { needed: false, retainedJobs: [] };
-  for (const event of events) {
-    if (event.type === 'recovery_required') recovery = { needed: true, retainedJobs: [] };
-    if (event.type === 'task_resumed' || event.type === 'task_finished') recovery = { needed: false, retainedJobs: [] };
-    if ((event.type === 'task_paused' || event.type === 'application_exit') && recovery.needed) {
-      const retained = (event.payload as Record<string, unknown> | null)?.background_jobs_retained;
-      if (Array.isArray(retained)) recovery = { ...recovery, retainedJobs: retained.map(String) };
-    }
-  }
+  // 需恢复：recovery_required 事件、CREDENTIAL_REQUIRED 错误，或暂停任务的主模型配置不在内存中（见 recovery.ts）。
+  const recovery: Recovery = task
+    ? recoveryState(task, events, { profiles, profilesLoaded, lastControlError, keysInjected })
+    : { needed: false, retainedJobs: [] };
   // 有结局的任务已结束：不再提示恢复、暂停或停止。
   const hasOutcome = task?.outcome != null;
-  if (task && (terminalState(task.state) || hasOutcome)) recovery = { needed: false, retainedJobs: [] };
-  const needsRecovery = recovery.needed && !keysInjected;
+  const needsRecovery = recovery.needed;
+  useEffect(() => { if (needsRecovery) setProfilesTick(x => x + 1); }, [needsRecovery]);
 
   const display = task ? taskDisplay(task) : null;
   const safety = safetyBlock(task, events);
-  const approval = protocolApproval(task?.pending_decision);
+  // 已停止、已结束或有结局的任务不再显示「需要你决定」（后端停止时撤回决定）。
+  const approval = task && decisionVisible(task) ? protocolApproval(task.pending_decision) : null;
   // 只有真正在运行且没有结局时才说「运行中 / 正在」；排队、暂停、已有结局都用状态文字与「最近进度」。
   const running = task?.state === 'running' && !hasOutcome;
   const terminal = task ? terminalState(task.state) : false;
@@ -214,13 +221,20 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
 
   const mainProfileId = task?.config_snapshot?.model?.provider_profile ?? '';
   const mainProfile = profiles.find(p => p.id === mainProfileId) ?? null;
+  // 在线配置缺失（应用重启后）时，用任务快照中冻结的公开配置重新保存密钥。
+  const frozenProfile = frozenMainProfile(task?.config_snapshot);
+  const recoveryProfile = mainProfile ?? (frozenProfile?.auth_mode === 'api-key' ? frozenProfile : null);
+  const injectHint = !recoveryProfile ? '任务快照中没有可用的主模型配置，无法注入密钥；可以导出 ZIP 后新建任务'
+    : !keyInput.trim() ? '请先输入 API Key' : undefined;
   const canResume = !!task && paused && !hasOutcome && task.pending_decision == null && !needsRecovery;
   const resumeHint = hasOutcome ? '任务已有结局，不能继续'
     : !paused ? ''
     : task?.pending_decision != null ? '请先处理上方决策'
     : needsRecovery ? '请先重新输入模型密钥'
     : '';
-  const pauseHint = hasOutcome ? '任务已有结局' : task && !terminal && task.state !== 'running' ? '只有运行中的任务可以暂停' : undefined;
+  // 后端允许暂停 queued 与 running（control.py）；已暂停的任务不需要再暂停。
+  const pausable = !!task && (task.state === 'queued' || task.state === 'running');
+  const pauseHint = hasOutcome ? '任务已有结局' : task && !terminal && !pausable ? '只有排队中或运行中的任务可以暂停' : undefined;
   // 结局已定但生命周期仍在暂停：停止仍可用，用来终止保留的后台作业。
   const stopHint = hasOutcome && !terminal ? '结局已定；停止会终止仍保留的后台作业' : '停止任务（不会停止远端实例计费）';
 
@@ -232,7 +246,7 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const guide = `${phase?.idle ? `${phase.idle}。` : ''}${STAGE_NOTE}。`;
 
   const controls = task ? <>
-    <button type="button" className="btn btn-secondary" disabled={busy || terminal || hasOutcome || task.state !== 'running'} title={pauseHint} onClick={() => void act(async () => { await controlTask(task.id, 'pause'); })}>暂停</button>
+    <button type="button" className="btn btn-secondary" disabled={busy || terminal || hasOutcome || !pausable} title={pauseHint} onClick={() => void act(async () => { await controlTask(task.id, 'pause'); })}>暂停</button>
     <button type="button" className={`btn ${canResume ? 'btn-primary' : 'btn-secondary'}`} disabled={busy || terminal || !canResume} title={resumeHint || undefined} onClick={() => void act(async () => { await controlTask(task.id, 'resume'); })}>继续</button>
     <button type="button" className="btn btn-secondary" disabled={busy || terminal} title={stopHint} onClick={() => void act(async () => { await controlTask(task.id, 'stop'); })}>停止</button>
     <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void act(() => api.exportTask(task.id))}><Icon name="download" size={14} />导出 ZIP</button>
@@ -293,22 +307,25 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
             </ol>
             <div className="ui-form">
               <label className="ui-field"><span className="ui-field-label">模型配置</span>
-                <select value={mainProfileId} disabled>{mainProfile
-                  ? <option value={mainProfile.id}>{mainProfile.id} · {mainProfile.model}</option>
-                  : <option value={mainProfileId}>{mainProfileId || '（读取中…）'}</option>}</select>
+                <select value={mainProfileId} disabled>{recoveryProfile
+                  ? <option value={mainProfileId}>{recoveryProfile.id} · {recoveryProfile.model}{mainProfile ? '' : '（任务快照）'}</option>
+                  : <option value={mainProfileId}>{mainProfileId || '未知'}</option>}</select>
               </label>
               <label className="ui-field"><span className="ui-field-label">API Key<small>仅本次内存注入，重启应用后需重新输入</small></span>
-                <input type="password" autoComplete="off" value={keyInput} disabled={busy || !mainProfile} onChange={e => setKeyInput(e.target.value)} />
+                <input type="password" autoComplete="off" value={keyInput} disabled={busy || !recoveryProfile} onChange={e => setKeyInput(e.target.value)} />
               </label>
             </div>
             <div className="auto-actions">
-              <button type="button" className="btn btn-primary" disabled={busy || !mainProfile || !keyInput.trim()} onClick={() => void act(async () => {
-                if (!mainProfile) return;
-                await api.saveProfile({ ...mainProfile, api_key: keyInput.trim() });
+              <button type="button" className="btn btn-primary" disabled={busy || !!injectHint} title={injectHint} onClick={() => void act(async () => {
+                const request = recoveryProfileRequest(mainProfile, task.config_snapshot, keyInput);
+                if (!request) return;
+                await api.saveProfile(request);
                 setKeyInput('');
                 setKeysInjected(true);
+                setProfilesTick(x => x + 1);
                 setNotice('密钥已重新注入；现在可以点击「继续」恢复任务。');
               })}>注入密钥</button>
+              {injectHint && !recoveryProfile && <span className="ui-help">{injectHint}</span>}
             </div>
           </div>
         </Card>}
@@ -316,8 +333,7 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
         {approval && <ApprovalCard approval={approval} busy={busy}
           blockedReason={task.state !== 'paused' ? '任务暂停后才能处理决定' : undefined}
           onApprove={() => void act(() => decideTask(task.id, approval.id, 'approve'))}
-          onReject={note => void act(() => decideTask(task.id, approval.id, 'reject', note))}
-          onPause={() => void act(async () => { await controlTask(task.id, 'pause'); })} />}
+          onReject={note => void act(() => decideTask(task.id, approval.id, 'reject', note))} />}
 
         {task.error != null && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" />
           <div className="auto-error"><b>阻塞 / 错误</b><span>{errorSummary(task.error)}</span>

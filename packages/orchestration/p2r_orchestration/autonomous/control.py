@@ -72,6 +72,15 @@ class ControlMixin:
         self.event(db, row, "task_resumed", {"jobs_to_reconcile": row.jobs_json})
         return row
 
+    def withdraw_decision(self, db, row, reason):
+        """Drop a pending decision nobody can answer any more. Idempotent: the
+        event is written only when a decision is actually withdrawn."""
+        decision = row.pending_decision_json
+        if not decision:
+            return
+        row.pending_decision_json = None
+        self.event(db, row, "decision_withdrawn", {"decision_id": decision.get("id"), "reason": reason})
+
     def approve_decision(self, db, row, decision):
         # The user approves the precise frozen proposal, not merely a resume.
         row.protocol_json = decision["proposed"]
@@ -129,6 +138,7 @@ class ControlMixin:
             return row
         if action == "stop":
             self.request_cancel(row)
+            self.withdraw_decision(db, row, "task_stopped")
             if row.state == "stopped":
                 return row
             row.state = "stopping"
@@ -149,6 +159,8 @@ class ControlMixin:
                 self.request_cancel(row)
             if not self.cancel_requested(row):
                 return
+            # A turn still finishing when stop was requested may have left a proposal.
+            self.withdraw_decision(db, row, "task_stopped")
             jobs = dict(row.jobs_json)
             if not jobs:
                 row.state, row.error_json = "stopped", self.cancellation_error(row)

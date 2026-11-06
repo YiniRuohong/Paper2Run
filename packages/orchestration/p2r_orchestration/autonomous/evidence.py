@@ -4,15 +4,30 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import zipfile
 
 from sqlalchemy import select
 from p2r_evaluation.autonomous import evaluate_artifacts
 from p2r_evaluation.reference_verification import verify_reference_values
+from p2r_evaluation.safe_read import is_link_or_reparse
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
 from p2r_orchestration.errors import ServiceError
 from .security import fail, digest
+
+_lstat = os.lstat  # seam: tests simulate Windows reparse points on POSIX
+
+
+def link_or_reparse(path) -> bool:
+    """True for a symlink or a Windows reparse point (junction, mount point), which
+    Path.is_symlink() does not report. A missing path is not a link; callers still
+    check is_file()/is_dir() and refuse it there."""
+    try:
+        return is_link_or_reparse(_lstat(path))
+    except FileNotFoundError:
+        return False
+
 
 def verify_export_zip(raw):
     from p2r_artifacts.archive_verify import verify_export_zip as verify

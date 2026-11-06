@@ -2,7 +2,7 @@
 // 这些端点不在 /api/v1/autonomous 前缀下，但自主实验流程是它们的唯一消费者。
 // 写请求带 Idempotency-Key；密钥类内容任何情况下不经过本模块。
 import {
-  ApiError, asUnknown, boolean, envelopeData, errorEnvelope, invalid, isAbort,
+  ApiError, asUnknown, boolean, csrfToken, envelopeData, errorEnvelope, initializeSession, invalid, isAbort, isSessionReady,
   nonNegativeInt, nullableStr, record, responsePayload, str, type Fetcher,
 } from './client.ts';
 
@@ -231,13 +231,18 @@ export interface PapersApi {
   getPaperText(paperId: string, signal?: AbortSignal): Promise<PaperText>;
 }
 
-export function createPapersApi(actorId: string, fetcher: Fetcher = fetch): PapersApi {
+// csrf：测试或调用方注入的 token 读取函数；缺省时用 client.ts 内存中的会话 token（与 autonomous.ts 相同）。
+export function createPapersApi(actorId: string, fetcher: Fetcher = fetch, csrf?: () => string | undefined): PapersApi {
   if (!actorId) throw new ApiError('actor ID is required', 0, 'INVALID_ACTOR');
 
   async function send(path: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
+    const write = !!init.method && !['GET', 'HEAD'].includes(init.method);
+    if (write && !csrf && !isSessionReady() && fetcher === fetch) await initializeSession();
     const headers = new Headers(init.headers);
     headers.set('X-Actor-ID', actorId);
     if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+    const token = write ? csrf?.() ?? csrfToken() : undefined;
+    if (token) headers.set('X-CSRF-Token', token);
     try {
       return await fetcher(`${BASE}${path}`, { ...init, headers, credentials: 'same-origin', cache: 'no-store', ...(signal ? { signal } : {}) });
     } catch (error) {

@@ -92,8 +92,10 @@ export function objectiveError(text: string): string {
 }
 
 export function budgetLine(limits: ProjectConfig['limits']): string {
-  const tokens = limits.max_model_tokens % 10000 === 0 ? `${limits.max_model_tokens / 10000} 万` : String(limits.max_model_tokens);
-  return `${Math.round(limits.wall_time_seconds / 60)} 分钟 · ${limits.max_model_calls} 次模型调用 · ${tokens} tokens · ${limits.max_repair_rounds ?? 3} 轮修复`;
+  // No token cap by default; a cap is shown only when a config still carries one.
+  const cap = limits.max_model_tokens;
+  const tokens = typeof cap === 'number' ? ` · ${cap % 10000 === 0 ? `${cap / 10000} 万` : cap} tokens` : '';
+  return `${Math.round(limits.wall_time_seconds / 60)} 分钟 · ${limits.max_model_calls} 次模型调用${tokens} · ${limits.max_repair_rounds ?? 3} 轮修复`;
 }
 
 export function newestTaskId(tasks: Pick<AutonomousTask, 'id' | 'created_at' | 'updated_at'>[]): string | null {

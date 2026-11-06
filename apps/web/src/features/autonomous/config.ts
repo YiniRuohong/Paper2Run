@@ -44,10 +44,15 @@ export function defaultConfig(projectId: string): ProjectConfig {
     schema_version: 'paper2run.project.v1', project: { id: projectId, workspace: `./workspace/${projectId}` },
     model: { provider_profile: '', credential_ref: '' }, harness: { adapter: 'pi', skills: [] },
     target: { kind: 'local', profile: 'local', allocation: 'dedicated', isolation: 'required', image: 'paper2run-experiment:1' },
-    limits: { wall_time_seconds: 1800, max_model_calls: 30, max_model_tokens: 100000, storage_bytes: 5 * 1024 ** 3, max_repair_rounds: DEFAULT_REPAIR_ROUNDS, gpu_devices: [] },
+    limits: { wall_time_seconds: 1800, max_model_calls: 30, storage_bytes: 5 * 1024 ** 3, max_repair_rounds: DEFAULT_REPAIR_ROUNDS, gpu_devices: [] },
     network: { public_internet: true, host_and_metadata_access: false },
     experiment: { objective: '', protocol_change_policy: 'version_and_pause_if_outside_authorization' },
   };
+}
+/** 不设 token 上限：读到旧配置里的 max_model_tokens 时去掉，下次保存即不再带上限。 */
+export function withoutTokenCap(config: ProjectConfig): ProjectConfig {
+  const { max_model_tokens: _drop, ...limits } = config.limits;
+  return { ...config, limits };
 }
 export function parseProtocol(text: string): Record<string, unknown> | undefined {
   if (!text.trim()) return undefined;
@@ -73,7 +78,7 @@ export function validateConfig(config: ProjectConfig): void {
   if (!config.target.profile.trim()) throw new Error('请填写目标配置名称。');
   if (config.target.kind === 'ssh' && (!config.target.ssh_config_alias?.trim() || !config.target.remote_workspace?.startsWith('/'))) throw new Error('SSH 需要配置别名和绝对远程工作区路径。');
   for (const [key, value] of Object.entries(config.limits)) {
-    if (key === 'gpu_devices') continue;
+    if (key === 'gpu_devices' || (key === 'max_model_tokens' && value == null)) continue;
     // 修复轮次允许 0（只复核一次，不修复）；其余预算必须为正。
     if (key === 'max_repair_rounds') {
       // 输入框清空时页面存为 NaN（保存时会变成 null）：要求填写，不当作 0。
@@ -103,12 +108,12 @@ const STATE_LABELS: Record<string, string> = { created: '已创建', queued: '�
 export const stateLabel = (state: string) => own(STATE_LABELS, state) ?? state;
 export const taskStateLabel = stateLabel;
 // 任务状态到 tone 的唯一映射：进行中 run；需要人（暂停/阻塞/待决策）warn；
-// 失败 bad；正常结束 ok；其余 idle。不新造颜色。
+// 失败 bad；正常完成 ok；其余 idle。不新造颜色。
+// 停止、取消、无进展结束都不是「完成」：没有结局时用 idle，不配绿。
 export const taskTone = (state: string): 'ok' | 'run' | 'bad' | 'warn' | 'idle' =>
   state === 'failed' ? 'bad'
-    : state === 'incomplete' ? 'idle' // 无进展结束，没有候选结果：不配绿
     : state === 'paused' || state === 'blocked' || state === 'awaiting_decision' ? 'warn'
-    : terminalState(state) ? 'ok'
+    : state === 'completed' || state === 'succeeded' ? 'ok'
     : state === 'running' || state === 'starting' || state === 'queued' ? 'run'
     : 'idle';
 
@@ -145,13 +150,18 @@ export interface TaskDisplay {
   /** 是否显示「已暂停 / 后台作业可能仍在运行」类提示。 */
   pausedNotice: boolean;
 }
+/** 待决定是否仍需要人处理：任务已结束、正在停止或已有结局时，决定无法再回答，不显示。
+ * 后端停止时会撤回决定（decision_withdrawn）；这里兜住旧任务和竞争窗口。 */
+export function decisionVisible(task: { state: string; outcome?: string | null; pending_decision?: unknown }): boolean {
+  return task.pending_decision != null && !terminalState(task.state) && task.state !== 'stopping' && task.outcome == null;
+}
 export function taskDisplay(task: { state: string; outcome?: string | null; pending_decision?: unknown }): TaskDisplay {
   const outcome = task.outcome ?? null;
   if (outcome) {
     return { text: outcomeLabel(outcome)!, tone: outcomeTone(outcome)!, caption: knownOutcome(outcome) ? OUTCOMES[outcome].caption : null,
       lifecycle: stateLabel(task.state), finished: true, pausedNotice: false };
   }
-  const tone: Tone = task.pending_decision != null && task.state !== 'failed' ? 'warn' : taskTone(task.state);
+  const tone: Tone = decisionVisible(task) ? 'warn' : taskTone(task.state);
   return { text: stateLabel(task.state), tone, caption: null, lifecycle: null, finished: terminalState(task.state), pausedNotice: task.state === 'paused' };
 }
 /** 总览筛选：安全终止归入「失败」，其余有结局的任务归入「已结束」。 */
@@ -170,6 +180,10 @@ const ERROR_EXPLANATIONS: Record<string, string> = {
   CANDIDATE_INCOMPLETE: '候选结果不满足提交条件，详见事件日志',
   TASK_BUSY: '上一个执行进程仍在暂停，请稍后重试',
   BUDGET_EXHAUSTED: '任务预算（模型调用次数、tokens 或运行时间）已用完，任务已自动停止；已完成的证据仍可导出',
+  CREDENTIAL_REQUIRED: '模型密钥只保存在内存中，应用重启后需要重新输入；在本页「需要恢复」卡片中重新输入后继续',
+  CANCELLATION_PENDING: '任务正在停止，等待后台作业结束',
+  PAPER_CONTENT_REQUIRED: '论文正文尚未就绪，请先完成解析',
+  CSRF_FAILED: '请求来源被拒绝；请从启动器打开的页面操作',
 };
 export const errorExplanation = (code: string): string | null => own(ERROR_EXPLANATIONS, code) ?? null;
 /** 决定提交冲突：两次点击竞争或决定已被替换。刷新任务即可，不当作错误。 */

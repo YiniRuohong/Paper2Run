@@ -96,10 +96,12 @@ uv sync --extra test
 npm --prefix apps/harness ci
 bash scripts/autonomous/build-image.sh
 pnpm --dir apps/web build
-uv run uvicorn p2r_api.main:create_demo_app --factory --host 127.0.0.1 --port 8000
+P2R_ALLOWED_ORIGINS=http://127.0.0.1:8000 uv run uvicorn p2r_api.main:create_local_app --factory --host 127.0.0.1 --port 8000
 ```
 
-访问 `http://127.0.0.1:8000/#/autonomous`。通过现有论文流程创建项目并上传 PDF 或粘贴正文，完成解析后返回自主模式。选择论文版本，配置模型 profile、目标、Skills、预算和实验目标，确认授权后启动。模型密钥只保存在当前控制面内存，服务重启后需重新注入；不能以普通 API 的 `env:` 引用读取任意宿主变量。
+`P2R_ALLOWED_ORIGINS` 必须与浏览器实际打开页面的 Origin 完全一致（逗号分隔，只接受 loopback 地址；未设置时为 `http://127.0.0.1:8000`），否则自主模式的写请求会被拒绝。一键启动 `python scripts/launch.py` 会自动设置它。
+
+访问 `http://127.0.0.1:8000/#/new` 新建实验：在同一页创建项目、上传 PDF 或粘贴正文（PDF 需先完成解析），配置模型 profile、目标、Skills、预算和实验目标，确认授权后启动。启动后进入 `#/task/<id>` 任务工作台；`#/` 总览列出全部任务。模型密钥只保存在当前控制面内存，服务重启后需重新注入；不能以普通 API 的 `env:` 引用读取任意宿主变量。
 
 暂停保留后台训练；应用退出停止 Agent 调度但不表示训练结束。重开后先查看已有作业，补充模型凭据，再显式恢复。协议超授权变更须批准当前决策 ID；普通恢复不能替代批准。停止仅针对任务作业，不释放云实例或终止平台计费。
 

@@ -241,7 +241,8 @@ def run_worker(service, task_id, bridge, message):
                     # conservatively so repeated interruption cannot erase cost.
                     profiles = [row.config_snapshot["model_profile"], *row.config_snapshot.get("specialist_profiles", {}).values()]
                     reservation = max(p.get("context_window", 128000) + p.get("max_tokens", 4096) for p in profiles)
-                    remaining_tokens = row.config_snapshot["limits"]["max_model_tokens"] - row.usage_json.get("total_tokens", 0)
+                    token_limit = row.config_snapshot["limits"].get("max_model_tokens")
+                    remaining_tokens = reservation if token_limit is None else token_limit - row.usage_json.get("total_tokens", 0)
                     pending_tokens = max(0, min(remaining_tokens, reservation))
                 if event.get("type") == "message_end" and sdk_message.get("role") == "assistant":
                     content = sdk_message.get("content", [])

@@ -8,6 +8,7 @@ import * as stages from '../src/features/autonomous/stages.ts';
 import * as errors from '../src/features/autonomous/errors.ts';
 import * as flowTimeline from '../src/features/flow/timeline.ts';
 import * as flowDraft from '../src/features/flow/draft.ts';
+import * as recovery from '../src/features/autonomous/recovery.ts';
 import { ApiError } from '../src/api-client/client.ts';
 
 // Shallow-render TaskPage in a VM: React hooks and every child component are
@@ -61,6 +62,7 @@ async function harness(options = {}) {
     '../flow/timeline': flowTimeline,
     '../flow/draft': flowDraft,
     '../flow/RailHead': { default: box('RailHead') },
+    './recovery': recovery,
     '../../api-client/autonomous': { createAutonomousApi: () => api, ApiError },
     '../../api-client/papers': { createPapersApi: () => papers },
     // StepFrame renders its content and the footer controls (actions) of the task page.
@@ -171,6 +173,35 @@ test('recovery_required gates resume behind key re-injection, then unlocks it', 
   assert.equal(h.button('继续').props.disabled, false);
 });
 
+const frozenProfile = { id: 'main', model: 'm', base_url: 'https://example.test', api: 'openai-completions', auth_mode: 'api-key', secret_configured: true };
+const frozenConfig = { ...helpers.defaultConfig('A'), model: { provider_profile: 'main', credential_ref: 'profile:main' }, model_profile: frozenProfile };
+
+test('after a restart a paused task recovers from the frozen profile and re-reads profiles', async () => {
+  // Paused before the restart: no recovery_required event, and the live profile store is empty.
+  const options = { profiles: [], taskOver: { config_snapshot: frozenConfig } };
+  const h = await harness(options);
+  assert.ok(h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'), 'recovery card renders without an event');
+  const keyInput = h.nodes().find(n => n.type === 'input' && n.props.type === 'password');
+  assert.equal(keyInput.props.disabled, false, 'the frozen profile makes the key field usable');
+  keyInput.props.onChange({ target: { value: 'sk-again' } }); h.render();
+  let reads = 0;
+  h.api.profiles = async () => { reads += 1; return [{ ...frozenProfile }]; };
+  h.button('注入密钥').props.onClick(); await h.settle(); await h.settle();
+  const saved = h.calls.saveProfile[0];
+  assert.deepEqual([saved.id, saved.base_url, saved.model, saved.api, saved.api_key], ['main', 'https://example.test', 'm', 'openai-completions', 'sk-again']);
+  assert.ok(reads >= 1, 'profiles are re-read after injection');
+  assert.ok(!h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'));
+  assert.equal(h.button('继续').props.disabled, false);
+});
+
+test('a CREDENTIAL_REQUIRED resume error opens the recovery card with guidance', async () => {
+  const h = await harness({ profiles: [{ ...frozenProfile }], taskOver: { config_snapshot: frozenConfig }, controlError: new ApiError('reconfigure', 409, 'CREDENTIAL_REQUIRED', 'req-c') });
+  assert.ok(!h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'));
+  h.button('继续').props.onClick(); await h.settle();
+  assert.ok(h.nodes().some(n => n.type === 'Card' && n.props.className === 'auto-recovery'));
+  assert.match(JSON.stringify(h.nodes().find(n => n.type === 'div' && n.props.role === 'alert').children), /需要恢复.*CREDENTIAL_REQUIRED · req-c/);
+});
+
 test('a late poll response cannot overwrite the task after switching tasks', async () => {
   const h = await harness();
   let release;
@@ -225,6 +256,37 @@ test('LEGACY_TASK and TASK_FINISHED errors get a specific explanation and keep c
 });
 
 const pendingDecision = { id: 'dec-1', kind: 'protocol_approval', proposed: { protocol: { metrics: ['f1'] }, sha256: 'cd'.repeat(32) }, changed: ['metrics'], reason: 'switch metric' };
+
+test('a stopped or finished task never shows 需要你决定, even with a leftover decision', async () => {
+  for (const over of [{ state: 'stopped' }, { state: 'cancelled' }, { state: 'paused', outcome: 'completed_with_issues' }]) {
+    const h = await harness({ taskOver: { ...over, pending_decision: pendingDecision } });
+    assert.ok(!h.nodes().some(n => n.type === 'ApprovalCard'), JSON.stringify(over));
+    if (!over.outcome) assert.equal(h.nodes().find(n => n.type === 'Workbench').props.status.tone, 'idle', JSON.stringify(over));
+  }
+});
+
+test('the approval card has no dead 先暂停 action; pause stays on the main action bar', async () => {
+  const h = await harness({ taskOver: { pending_decision: pendingDecision } });
+  assert.equal('onPause' in h.nodes().find(n => n.type === 'ApprovalCard').props, false);
+  const card = await readFile(new URL('../src/features/autonomous/ApprovalCard.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(card, /先暂停|onPause/);
+  assert.ok(h.button('暂停'), 'the main action bar keeps 暂停');
+});
+
+test('暂停 is available for queued and running tasks, as control.py allows', async () => {
+  for (const state of ['queued', 'running']) {
+    const h = await harness({ taskOver: { state } });
+    const pause = h.button('暂停');
+    assert.equal(pause.props.disabled, false, state);
+    pause.props.onClick(); await h.settle();
+    assert.deepEqual(h.calls.control.at(-1), { id: 'ta', action: 'pause', text: undefined }, state);
+  }
+  for (const state of ['paused', 'stopping', 'stopped']) {
+    const h = await harness({ taskOver: { state } });
+    assert.equal(h.button('暂停').props.disabled, true, state);
+    if (state !== 'stopped') assert.match(h.button('暂停').props.title, /排队中或运行中/, state);
+  }
+});
 
 test('approve and reject go through the explicit decision endpoint, never through resume', async () => {
   const h = await harness({ taskOver: { pending_decision: pendingDecision } });

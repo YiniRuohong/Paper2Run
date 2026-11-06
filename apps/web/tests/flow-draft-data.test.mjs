@@ -49,8 +49,8 @@ test('loadDraft also returns what the page needs: project version, saved config,
   const { api, papers } = fakes({ config: saved, tasks, rows: ['a'], info: { a: { source_kind: 'pdf' } } });
   const draft = await loadDraft(api, papers, 'p', []);
   assert.equal(draft.project.version, 4);
-  assert.equal(draft.saved, saved);
-  assert.equal(draft.facts.config, saved.config);
+  assert.deepEqual(draft.saved, saved);
+  assert.deepEqual(draft.facts.config, saved.config);
   assert.equal(draft.facts.taskCount, 1);
   assert.equal(draft.tasks, tasks);
   assert.equal(draft.paperText.preview, '# T');

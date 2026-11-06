@@ -83,7 +83,7 @@ test('objectiveError', () => {
 });
 
 test('budgetLine', () => {
-  assert.equal(budgetLine(defaultConfig('p').limits), '30 分钟 · 30 次模型调用 · 10 万 tokens · 3 轮修复');
+  assert.equal(budgetLine(defaultConfig('p').limits), '30 分钟 · 30 次模型调用 · 3 轮修复', 'no token cap by default');
   const l = { ...defaultConfig('p').limits, max_model_tokens: 123456, max_repair_rounds: undefined };
   assert.equal(budgetLine(l), '30 分钟 · 30 次模型调用 · 123456 tokens · 3 轮修复');
 });
@@ -184,4 +184,15 @@ test('refreshOnFailure re-reads the server after a failed save and keeps the err
   await assert.rejects(draft.refreshOnFailure(async () => { throw boom; }, async () => { refreshed += 1; }), error => error === boom);
   assert.equal(refreshed, 1);
   await assert.rejects(draft.refreshOnFailure(async () => { throw boom; }, async () => { throw new Error('reload failed'); }), error => error === boom, 'a failed refresh never hides the save error');
+});
+
+test('readConfig drops a token cap left in an older saved config', async () => {
+  const { readConfig } = await import('../src/features/flow/draftData.ts');
+  const legacy = { ...defaultConfig('p'), limits: { ...defaultConfig('p').limits, max_model_tokens: 100000 } };
+  const saved = await readConfig({ config: async () => ({ version: 4, config: legacy }) }, 'p');
+  assert.equal(saved.version, 4);
+  assert.equal('max_model_tokens' in saved.config.limits, false);
+  assert.equal(legacy.limits.max_model_tokens, 100000, 'the input is not mutated');
+  const missing = await readConfig({ config: async () => { throw new ApiError('none', 404, 'RESOURCE_NOT_FOUND'); } }, 'p');
+  assert.equal(missing, null);
 });

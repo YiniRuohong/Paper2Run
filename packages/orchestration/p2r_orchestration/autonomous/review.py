@@ -99,8 +99,8 @@ class FrozenTarget:
         current = self.root
         for part in ("artifacts", *pure.parts):
             current = current / part
-            if current.is_symlink():
-                fail("INVALID_PATH", "symbolic links are not readable")
+            if evidence.link_or_reparse(current):
+                fail("INVALID_PATH", "symbolic links and reparse points are not readable")
         resolved = current.resolve()
         if not resolved.is_relative_to((self.root / "artifacts").resolve()):
             fail("INVALID_PATH", "path escapes the frozen candidate")
@@ -126,7 +126,7 @@ class FrozenTarget:
     def logs(self, job_id: str, offset: int = 0, limit: int = 16000) -> dict:
         self._own(job_id)
         log = self.root / "logs" / f"{job_id}.txt"
-        if self.root.joinpath("logs").is_symlink() or log.is_symlink() or not log.is_file():
+        if evidence.link_or_reparse(self.root / "logs") or evidence.link_or_reparse(log) or not log.is_file():
             fail("EVIDENCE_INTEGRITY", "frozen run log is missing or unsafe", 409)
         return _page({"job_id": job_id}, "stdout", log.read_bytes(), offset, limit)
 

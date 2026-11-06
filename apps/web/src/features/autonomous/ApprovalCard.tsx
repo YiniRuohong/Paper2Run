@@ -7,16 +7,15 @@ import type { ProtocolApproval } from '../../api-client/autonomous';
 export const REJECT_NOTE_LIMIT = 4000;
 
 // 审批卡（P0-4）：人在环中的决策做成一等公民。
-// 批准 / 拒绝 / 先暂停是三个独立动作；批准与拒绝都走显式决定接口（契约 C2），
+// 批准与拒绝是两个独立动作（暂停在任务页主操作栏）；批准与拒绝都走显式决定接口（契约 C2），
 // 不用自由文本消息冒充。拒绝保留当前方案，可选理由会作为你的指令转达给 Pi。
-export function ApprovalCard({ approval, busy, blockedReason, onApprove, onReject, onPause }: {
+export function ApprovalCard({ approval, busy, blockedReason, onApprove, onReject }: {
   approval: ProtocolApproval;
   busy: boolean;
   /** 决定按钮不可用的原因（例如任务尚未暂停）。 */
   blockedReason?: string;
   onApprove: () => void;
   onReject: (note: string) => void;
-  onPause: () => void;
 }) {
   const [note, setNote] = useState('');
   const sha = approval.proposed.sha256;
@@ -58,7 +57,6 @@ export function ApprovalCard({ approval, busy, blockedReason, onApprove, onRejec
       <div className="auto-actions">
         <button type="button" className="btn btn-primary" disabled={blocked} title={blockedReason} onClick={onApprove}>批准此方案并继续</button>
         <button type="button" className="btn btn-secondary" disabled={blocked} title={blockedReason} onClick={() => onReject(note)}>拒绝变更并继续</button>
-        <button type="button" className="btn btn-secondary" disabled={blocked} title={blockedReason} onClick={onPause}>先暂停</button>
         {blockedReason && <span className="ui-help">{blockedReason}</span>}
       </div>
     </div>
