@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
+from p2r_contracts.autonomous import DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS
 from p2r_persistence.autonomous import AutonomousTaskRecord as Task
 from p2r_orchestration.autonomous.evidence import export_zip
 from p2r_orchestration.autonomous import files as task_file_access
@@ -33,8 +34,8 @@ class Profile(Strict):
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     credential_ref: str | None = Field(default=None, max_length=256)
     reuse_credentials_from: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-    context_window: int = Field(default=128000, gt=0, le=10000000)
-    max_tokens: int = Field(default=4096, gt=0, le=1000000)
+    context_window: int = Field(default=DEFAULT_CONTEXT_WINDOW, gt=0, le=10000000)
+    max_tokens: int = Field(default=DEFAULT_MAX_TOKENS, gt=0, le=1000000)
 
 
 class Configuration(Strict):

@@ -142,3 +142,9 @@ def test_limits_default_repair_rounds():
 
 def test_outcomes_are_fixed():
     assert OUTCOMES == ("verified", "completed_with_issues", "review_unavailable", "blocked_by_safety")
+
+
+def test_default_output_cap_leaves_room_for_reasoning():
+    from p2r_contracts.autonomous import DEFAULT_MAX_TOKENS
+    # 4096 was used up by a reasoning model's thinking before any tool call.
+    assert DEFAULT_MAX_TOKENS >= 32_768

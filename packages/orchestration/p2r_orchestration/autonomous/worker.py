@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import time
 
+from p2r_contracts.autonomous import DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS
 from p2r_persistence.models import utcnow
 from . import driver, evidence
 from .candidate import freeze
@@ -243,7 +244,7 @@ def run_worker(service, task_id, bridge, message):
                     # If the process dies before provider usage arrives, reserve
                     # conservatively so repeated interruption cannot erase cost.
                     profiles = [row.config_snapshot["model_profile"], *row.config_snapshot.get("specialist_profiles", {}).values()]
-                    reservation = max(p.get("context_window", 128000) + p.get("max_tokens", 4096) for p in profiles)
+                    reservation = max(p.get("context_window", DEFAULT_CONTEXT_WINDOW) + p.get("max_tokens", DEFAULT_MAX_TOKENS) for p in profiles)
                     token_limit = row.config_snapshot["limits"].get("max_model_tokens")
                     remaining_tokens = reservation if token_limit is None else token_limit - row.usage_json.get("total_tokens", 0)
                     pending_tokens = max(0, min(remaining_tokens, reservation))

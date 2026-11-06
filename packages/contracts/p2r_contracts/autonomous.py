@@ -78,6 +78,12 @@ class Target(StrictModel):
 # Task outcomes are assigned by the control plane only, never by the model.
 OUTCOMES = ("verified", "completed_with_issues", "review_unavailable", "blocked_by_safety")
 
+# Model profile defaults when the user does not set them. Reasoning models spend
+# thousands of output tokens thinking before a tool call; 4096 cut every turn
+# short (stopReason "length") before the first action.
+DEFAULT_CONTEXT_WINDOW = 128_000
+DEFAULT_MAX_TOKENS = 32_768
+
 
 class Limits(StrictModel):
     # Task budgets are optional: None (the default) means no limit. A task runs until it

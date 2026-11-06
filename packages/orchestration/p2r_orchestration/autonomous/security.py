@@ -8,6 +8,7 @@ import re
 import threading
 from urllib.parse import urlsplit
 
+from p2r_contracts.autonomous import DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS
 from p2r_orchestration.errors import ServiceError
 
 
@@ -48,7 +49,7 @@ class ProfileStore:
         reference = value.get("credential_ref")
         if reference and not re.fullmatch(r"env:[A-Za-z_][A-Za-z0-9_]*|credential-store:[A-Za-z0-9_.-]{1,128}", reference):
             fail("VALIDATION_ERROR", "unsupported credential reference")
-        if value.get("max_tokens", 4096) > value.get("context_window", 128000):
+        if value.get("max_tokens", DEFAULT_MAX_TOKENS) > value.get("context_window", DEFAULT_CONTEXT_WINDOW):
             fail("VALIDATION_ERROR", "max_tokens exceeds context_window")
         self._environment(actor, value)  # authorization precedes any host lookup
         reuse = value.pop("reuse_credentials_from", None)
@@ -104,14 +105,14 @@ class ProfileStore:
                 if frozen.get("api_key") or frozen.get("credential_ref"):
                     fail("VALIDATION_ERROR", "anonymous profile cannot carry credentials")
                 return {"id": frozen["model"], "base_url": frozen["base_url"], "api": frozen["api"],
-                        "auth_mode": "none", "api_key": "", "context_window": frozen.get("context_window", 128000),
-                        "max_tokens": frozen.get("max_tokens", 4096)}
+                        "auth_mode": "none", "api_key": "", "context_window": frozen.get("context_window", DEFAULT_CONTEXT_WINDOW),
+                        "max_tokens": frozen.get("max_tokens", DEFAULT_MAX_TOKENS)}
             if not secret:
                 fail("CREDENTIAL_REQUIRED", "reconfigure credentials for the frozen model profile", 409)
             self.secrets.add(secret)
             return {"id": frozen["model"], "base_url": frozen["base_url"], "api": frozen["api"],
-                    "auth_mode": "api-key", "api_key": secret, "context_window": frozen.get("context_window", 128000),
-                    "max_tokens": frozen.get("max_tokens", 4096)}
+                    "auth_mode": "api-key", "api_key": secret, "context_window": frozen.get("context_window", DEFAULT_CONTEXT_WINDOW),
+                    "max_tokens": frozen.get("max_tokens", DEFAULT_MAX_TOKENS)}
 
     def snapshot(self, actor, profile_id, credential_ref=None):
         with self.lock:
