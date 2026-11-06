@@ -10,7 +10,7 @@ test('the product entry is the autonomous-only app shell', async () => {
 
 test('retired guided/lab/mock surfaces are gone from the source tree', async () => {
   const features = (await readdir(new URL('../src/features', import.meta.url))).sort();
-  assert.deepEqual(features, ['autonomous', 'docparse', 'overview', 'settings']);
+  assert.deepEqual(features, ['autonomous', 'docparse', 'flow', 'overview', 'settings']);
   const clients = (await readdir(new URL('../src/api-client', import.meta.url))).sort();
   assert.deepEqual(clients, ['autonomous.ts', 'client.ts', 'papers.ts']);
   const root = (await readdir(new URL('../src', import.meta.url))).sort();
