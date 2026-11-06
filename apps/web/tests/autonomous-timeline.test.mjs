@@ -377,3 +377,14 @@ test('the truncation note counts only capped top-level items, not nested childre
   assert.match(flatPlan.summary, /15 条记录/);
   assert.match(flatPlan.summary, /显示最近 14 条/);
 });
+
+test('timeline sub-steps open real artifacts only, never the whole raw event log', () => {
+  const { stages } = buildStages({ id: 't', state: 'running' }, [
+    tool(1, 'c1', 'bash', { command: 'python train.py' }), done(2, 'c1', 'bash'),
+    ev(3, 'artifact_frozen', { name: 'm.json', kind: 'result', protocol_sha256: 'abcdef0123456789', round: 1 }),
+  ]);
+  const items = stages.flatMap(s => s.items ?? []);
+  assert.ok(items.length >= 2);
+  assert.ok(items.every(item => item.openPath !== 'logs/events.log'));
+  assert.ok(items.some(item => item.openPath === 'artifacts/abcdef012345/r1/m.json'));
+});

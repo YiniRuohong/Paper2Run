@@ -9,24 +9,44 @@ import { parseReport, type ExperimentReport } from './report';
 // status / verdict / completion_gate / 缺失项 / 执行观测 / 指标全部来自程序；
 // model_narrative 单独折叠并固定标注「模型叙述（不是执行证据）」。
 // not_comparable 是诚实状态：不出现任何绿色「成功」标识。
+// 任务页把报告分两处放：ReportSummary（结局、结论、指标、证据完备性）在中间栏上方，
+// ReportDetails（完成门槛、执行观测、模型叙述、局限）收进折叠的「详细记录」。
 export function ReportView({ report, onOpenEvent }: { report: unknown; onOpenEvent?: (sequence: number) => void }) {
+  return <div className="auto-report">
+    <ReportSummary report={report} />
+    <ReportDetails report={report} onOpenEvent={onOpenEvent} />
+  </div>;
+}
+
+/** 结论性内容：结局在前、结论在后，然后是指标与证据完备性。 */
+export function ReportSummary({ report }: { report: unknown }) {
   const parsed = parseReport(report);
   if (!parsed) {
     return <Card>
       <CardHeader icon="doc" title="实验报告" status={{ text: '结构未识别', tone: 'idle' }}
-        subtitle="报告结构与前端预期不一致，以下为原始内容。" />
+        subtitle="报告结构与前端预期不一致，原始内容见下方折叠区。" />
       <div className="ui-card-section">
-        <pre className="ui-code" aria-label="报告原始 JSON（只读）">{JSON.stringify(report, null, 2)}</pre>
+        <Disclosure variant="sub" title="报告原始 JSON">
+          <pre className="ui-code" aria-label="报告原始 JSON（只读）">{JSON.stringify(report, null, 2)}</pre>
+        </Disclosure>
       </div>
     </Card>;
   }
   return <div className="auto-report">
     <OutcomeCard report={parsed} />
     <ConclusionCard report={parsed} />
-    <GateCard report={parsed} />
-    <EvidenceCard report={parsed} />
-    <ObservationsCard report={parsed} onOpenEvent={onOpenEvent} />
     <MetricsCard report={parsed} />
+    <EvidenceCard report={parsed} />
+  </div>;
+}
+
+/** 过程性内容：完成门槛、逐条执行观测、模型叙述与局限。 */
+export function ReportDetails({ report, onOpenEvent }: { report: unknown; onOpenEvent?: (sequence: number) => void }) {
+  const parsed = parseReport(report);
+  if (!parsed) return null;
+  return <div className="auto-report">
+    <GateCard report={parsed} />
+    <ObservationsCard report={parsed} onOpenEvent={onOpenEvent} />
     <Card>
       <CardHeader icon="doc" title="模型叙述" subtitle="模型自述的实验过程，不是执行证据；结论以上方程序判定为准。" />
       <div className="ui-card-section">
@@ -178,15 +198,16 @@ function MetricsCard({ report }: { report: ExperimentReport }) {
     <CardHeader icon="chart" title="指标" subtitle="由独立评测器重算；参考值标注来源范围（scope）。" />
     <div className="ui-card-section">
       {metrics.length === 0 && <p className="ui-help">没有可展示的指标。</p>}
-      {metrics.length > 0 && <dl className="ui-kv">
+      {metrics.length > 0 && <div className="wb-stat-grid auto-metrics">
         {metrics.map(([name, value]) => {
           const ci = report.evaluation.confidenceIntervals[`${name}_95`];
-          return <div className="ui-kv-row" key={name}><dt className="ui-mono">{name}</dt><dd>
-            <span className="ui-mono">{formatNumber(value)}</span>
-            {ci && <span className="ui-mono auto-ci">95% CI [{formatNumber(ci.lower)}, {formatNumber(ci.upper)}]</span>}
-          </dd></div>;
+          return <div className="wb-stat" key={name}>
+            <span className="ui-mono">{name}</span>
+            <b>{formatNumber(value)}</b>
+            {ci && <small className="ui-mono auto-ci">95% CI [{formatNumber(ci.lower)}, {formatNumber(ci.upper)}]</small>}
+          </div>;
         })}
-      </dl>}
+      </div>}
       {report.evaluation.withinTolerance !== null && <p className="ui-help">
         容差判定（仅数值对比，不代表复现成立）：{report.evaluation.withinTolerance ? '在容差内' : '超出容差'}
       </p>}

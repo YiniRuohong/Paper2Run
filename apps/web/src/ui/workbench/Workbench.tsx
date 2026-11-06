@@ -51,6 +51,8 @@ export interface WorkbenchProps {
   progress?: ReactNode;
   /** Replaces the "实时" tab label with a thin progress bar (and hides `progress`). Clicking it still returns to the live view. */
   progressBar?: { done: number; total: number; label: string; extra?: ReactNode };
+  /** The live view fills the whole centre column: no tab bar and no download button until a file is opened; then a plain tab leads back. */
+  bareLive?: boolean;
   /** App layout: the rail runs full height and starts with this (brand, back link); the header moves above the centre and right columns. */
   railHead?: ReactNode;
   stages: WbStage[];
@@ -220,7 +222,8 @@ export function Workbench(props: WorkbenchProps) {
   const activeEntry = active !== null ? loaded[active] : undefined;
   const fileCount = files?.length ?? 0;
   const folderCount = countFolders(allTree);
-  const bar = props.progressBar;
+  const bare = !!props.bareLive;
+  const bar = bare ? undefined : props.progressBar;
   const barDone = bar ? Math.max(0, Math.min(bar.done, bar.total)) : 0;
 
   return <div className={`wb${props.railHead ? ' is-app' : ''}`}>
@@ -270,10 +273,14 @@ export function Workbench(props: WorkbenchProps) {
         </ol>
       </nav>
 
-      <section className="wb-viewer" ref={viewer} aria-label="查看器">
-        <div className="wb-tabbar">
+      <section className={`wb-viewer${bare ? ' is-bare' : ''}`} ref={viewer} aria-label="查看器">
+        {(!bare || tabs.length > 0) && <div className="wb-tabbar">
           <div className="wb-tabs" role="tablist" aria-label="已打开">
-            {bar
+            {bare
+              ? <button type="button" role="tab" aria-selected={active === null} className={`wb-tab wb-tab-live${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
+                <span className="wb-live-dot" aria-hidden="true" />{props.liveLabel ?? '当前步骤'}
+              </button>
+              : bar
               ? <button type="button" role="tab" aria-selected={active === null} aria-label={`实时 · ${bar.label}`} className={`wb-tab wb-tab-live wb-tab-bar${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
                 <span className="wb-bar-label">{bar.label}</span>
                 <span className="wb-steps" role="progressbar" aria-valuenow={barDone} aria-valuemin={0} aria-valuemax={bar.total} aria-label={`进度 ${barDone} / ${bar.total}`}>
@@ -294,9 +301,9 @@ export function Workbench(props: WorkbenchProps) {
           </div>
           <div className="wb-tools">
             {activeFile && <button type="button" className="btn btn-icon" aria-label="重新读取" title="重新读取" onClick={() => ensureLoaded(activeFile, true)}><Icon name="refresh" size={15} /></button>}
-            <button type="button" className="btn btn-icon" aria-label="下载当前文件" title={activeFile ? `下载 ${baseName(activeFile.path)}` : '打开文件后可下载'} disabled={!activeEntry || activeEntry.state !== 'ready'} onClick={download}><Icon name="download" size={15} /></button>
+            {!bare && <button type="button" className="btn btn-icon" aria-label="下载当前文件" title={activeFile ? `下载 ${baseName(activeFile.path)}` : '打开文件后可下载'} disabled={!activeEntry || activeEntry.state !== 'ready'} onClick={download}><Icon name="download" size={15} /></button>}
           </div>
-        </div>
+        </div>}
         <div className="wb-pane" hidden={active !== null}>{props.children}</div>
         {activeFile && <div className="wb-pane wb-pane-file">
           <div className="wb-file-meta">

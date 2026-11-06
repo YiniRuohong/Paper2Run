@@ -5,11 +5,12 @@ export interface StepNext { label: string; /** Reason the button is disabled; ab
 /** Runs a write with the page's busy flag and top error line; resolves false when it failed. */
 export type Act = (work: () => Promise<void>) => Promise<boolean>;
 
-// The fixed rhythm of every setup step: the title with a "!" badge whose hover
-// or focus bubble holds the guide, the previous step's result, this step's few
-// fields, then the button that moves on. The previous step's result is not
-// shown here: DraftPage raises it as a toast (StepFeedback).
-export default function StepFrame({ title, guide, children, next }: { title: string; guide: string; children: ReactNode; next?: StepNext }) {
+// The fixed rhythm of every step, before and after the start: the title with a
+// "!" badge whose hover or focus bubble holds the guide, this step's content,
+// then the footer pinned to the bottom of the centre column. Setup steps put
+// one button there (next); the task page puts its controls there (actions).
+// The previous step's result is not shown here: DraftPage raises it as a toast.
+export default function StepFrame({ title, guide, children, next, actions }: { title: string; guide: string; children: ReactNode; next?: StepNext; actions?: ReactNode }) {
   const tipId = useId();
   return <section className="flow-step">
     <div className="flow-head">
@@ -20,9 +21,10 @@ export default function StepFrame({ title, guide, children, next }: { title: str
       </span>
     </div>
     <div className="flow-fields">{children}</div>
-    {next && <div className="flow-next">
-      <button type="button" className="btn btn-primary" disabled={!!next.disabled} onClick={next.onClick}>{next.label}</button>
-      {next.disabled && <span className="ui-help">{next.disabled}</span>}
+    {(next || actions) && <div className="flow-next">
+      {next && <button type="button" className="btn btn-primary" disabled={!!next.disabled} onClick={next.onClick}>{next.label}</button>}
+      {next?.disabled && <span className="ui-help">{next.disabled}</span>}
+      {actions}
     </div>}
   </section>;
 }

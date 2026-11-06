@@ -44,6 +44,8 @@ async function harness(options = {}) {
     decide: async (id, decisionId, action, note) => { calls.decide.push({ id, decisionId, action, note }); if (options.decideError) throw options.decideError; return makeTask(id, { state: 'queued' }); },
     exportTask: async () => {},
   };
+  // The header uses the project (paper) name; without one it falls back to the objective.
+  const papers = { getProject: async id => { if (!options.projectName) throw new Error('no name'); return { id, name: options.projectName }; } };
   const react = {
     Fragment: 'fragment',
     createElement: (type, props, ...children) => typeof type === 'function' ? type({ ...props, children }) : ({ type, props: props ?? {}, children }),
@@ -60,6 +62,9 @@ async function harness(options = {}) {
     '../flow/draft': flowDraft,
     '../flow/RailHead': { default: box('RailHead') },
     '../../api-client/autonomous': { createAutonomousApi: () => api, ApiError },
+    '../../api-client/papers': { createPapersApi: () => papers },
+    // StepFrame renders its content and the footer controls (actions) of the task page.
+    '../flow/StepFrame': { default: props => ({ type: 'StepFrame', props, children: [props.children, props.actions] }) },
     '../../ui/workbench/Workbench': { Workbench: box('Workbench') },
     '../../ui/Card': { Badge: box('Badge'), Card: box('Card'), CardHeader: box('CardHeader') },
     '../../ui/Disclosure': { Disclosure: box('Disclosure') },
@@ -67,7 +72,8 @@ async function harness(options = {}) {
     './ApprovalCard': { ApprovalCard: box('ApprovalCard') },
     './CandidateCard': { CandidateCard: box('CandidateCard') },
     './ActivityViews': { ProgressNotes: box('ProgressNotes'), SpecialistCalls: box('SpecialistCalls') },
-    './ReportView': { ReportView: box('ReportView') },
+    './ReportView': { ReportSummary: box('ReportSummary'), ReportDetails: box('ReportDetails') },
+    './FiguresView': { FiguresView: box('FiguresView') },
     './UsageView': { UsageView: box('UsageView') },
     './autonomous.css': {},
   };
@@ -285,4 +291,37 @@ test('the 连接模型 step names the connection, falling back to the profile id
   assert.equal(stagesOf(named).find(st => st.id === 'model').summary, 'dashscope.aliyuncs.com · qwen-max');
   const unknown = await harness({ taskOver: { config_snapshot: config }, profiles: [] });
   assert.equal(stagesOf(unknown).find(st => st.id === 'model').summary, 'model-3f2a');
+});
+
+test('the task page header names the paper like the setup steps, and the objective moves into the summary', async () => {
+  const h = await harness({ projectName: 'Gaussian Error Linear Units (GELUs)' });
+  const workbench = h.nodes().find(n => n.type === 'Workbench');
+  assert.equal(workbench.props.title, 'Gaussian Error Linear Units (GELUs)');
+  assert.equal(workbench.props.bareLive, true, 'no progress tab or download button in the centre column');
+  const frame = h.nodes().find(n => n.type === 'StepFrame');
+  assert.ok(frame, 'the stage is shown in the shared step frame');
+  assert.match(frame.props.guide, /不是程序判定/);
+  assert.ok(h.button('继续') && h.button('导出 ZIP'), 'controls sit in the pinned footer');
+  assert.match(h.text(), /goal ta/, 'the objective is still on the page');
+});
+
+test('the centre column leads with conclusions and figures; process and raw logs stay folded', async () => {
+  const report = { status: 'not_comparable' };
+  const error = { code: 'BUDGET_EXHAUSTED', message: 'cumulative task budget exhausted' };
+  const h = await harness({ taskOver: { state: 'stopped', outcome: 'not_comparable', report, error } });
+  const all = h.nodes();
+  const at = type => all.findIndex(n => n.type === type);
+  const details = all.find(n => n.type === 'Disclosure' && /详细记录/.test(n.props.title));
+  assert.ok(details, 'a folded 详细记录 section exists');
+  const inside = [];
+  const visit = n => { if (Array.isArray(n)) return n.forEach(visit); if (n && typeof n === 'object') { inside.push(n); visit(n.children); } };
+  visit(details.children);
+  assert.ok(at('ReportSummary') >= 0 && at('ReportSummary') < all.indexOf(details), 'outcome and conclusion come first');
+  assert.ok(at('FiguresView') >= 0 && at('FiguresView') < all.indexOf(details), 'figures are on the page, not folded');
+  assert.ok(inside.some(n => n.type === 'ReportDetails'), 'gate, observations and narrative are folded');
+  assert.ok(!all.some(n => n.type === 'ReportDetails' && !inside.includes(n)), 'report details appear only inside the fold');
+  assert.match(h.text(), /任务预算/, 'a known error code reads as a plain sentence');
+  const rawError = all.find(n => n.type === 'Disclosure' && n.props.title === '原始错误');
+  assert.ok(rawError, 'the raw error JSON is folded');
+  assert.equal(h.button('发送指令'), undefined, 'a finished task has no instruction composer');
 });

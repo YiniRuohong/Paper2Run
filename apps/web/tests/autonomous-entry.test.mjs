@@ -39,7 +39,7 @@ test('draft page owns upload, parse progress and authorized start', async () => 
   const draft = await flowSource('DraftPage.tsx');
   // draftData.ts holds the paper loading moved out of the page (paper kind from the stored source kind).
   const page = (await Promise.all(['steps/PaperStep.tsx', 'steps/LaunchStep.tsx', 'DraftPage.tsx', 'draftData.ts'].map(flowSource))).join('\n');
-  assert.match(page, /ModeDialog/);
+  assert.doesNotMatch(page, /ModeDialog/, 'PDFs are parsed locally without a mode choice');
   assert.match(page, /ParseProgress/);
   assert.match(page, /paper_version_id/);
   assert.match(page, /授权并启动/);

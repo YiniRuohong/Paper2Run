@@ -169,6 +169,7 @@ const ERROR_EXPLANATIONS: Record<string, string> = {
   CANDIDATE_UNDER_REVIEW: '候选结果正在独立复核，证据已冻结；复核结束后才能修改',
   CANDIDATE_INCOMPLETE: '候选结果不满足提交条件，详见事件日志',
   TASK_BUSY: '上一个执行进程仍在暂停，请稍后重试',
+  BUDGET_EXHAUSTED: '任务预算（模型调用次数、tokens 或运行时间）已用完，任务已自动停止；已完成的证据仍可导出',
 };
 export const errorExplanation = (code: string): string | null => own(ERROR_EXPLANATIONS, code) ?? null;
 /** 决定提交冲突：两次点击竞争或决定已被替换。刷新任务即可，不当作错误。 */

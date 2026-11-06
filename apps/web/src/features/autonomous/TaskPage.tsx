@@ -2,32 +2,47 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ApiError, createAutonomousApi, type AutonomousApi, type AutonomousEvent, type AutonomousFiles, type AutonomousTask, type Capability, type ModelProfile,
 } from '../../api-client/autonomous';
+import { createPapersApi, type PapersApi } from '../../api-client/papers';
 import { Workbench, type WbContent, type WbFile } from '../../ui/workbench/Workbench';
 import { Badge, Card, CardHeader } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
-import { currentProtocolSha, progressNotes, safetyBlock, toWbFiles } from './stages';
+import { PHASES, currentProtocolSha, progressNotes, safetyBlock, toWbFiles } from './stages';
 import { ProgressNotes, SpecialistCalls } from './ActivityViews';
 import { decisionSuperseded, errorExplanation, mergeEvents, protocolApproval, taskDisplay, terminalState } from './config';
 import { errorDetail } from './errors';
 import { connectionLabel } from '../flow/draft';
 import RailHead from '../flow/RailHead';
+import StepFrame from '../flow/StepFrame';
 import { flowStages, type SetupView } from '../flow/timeline';
 import { ApprovalCard } from './ApprovalCard';
 import { CandidateCard } from './CandidateCard';
-import { ReportView } from './ReportView';
+import { FiguresView } from './FiguresView';
+import { ReportDetails, ReportSummary } from './ReportView';
 import { UsageView } from './UsageView';
 import '../flow/flow.css';
 import './autonomous.css';
 
 const defaultApi = createAutonomousApi();
+const defaultPapers = createPapersApi('demo-user');
+const STAGE_NOTE = '阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定';
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
 type Recovery = { needed: boolean; retainedJobs: string[] };
 
-// 任务工作台（#/task/<id>）：阶段时间线 + 实时页签 + 文件树。
+/** 一句话说明任务错误：有已知代码时用中文解释，否则用后端消息；原始 JSON 另放折叠区。 */
+function errorSummary(error: unknown): string {
+  const e = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const code = typeof e.code === 'string' ? e.code : '';
+  const message = typeof e.message === 'string' ? e.message : '';
+  return (code && errorExplanation(code)) || message || code || '任务报告了一个错误，详情见原始错误。';
+}
+
+// 任务工作台（#/task/<id>）：阶段时间线 + 当前阶段 + 文件树，与准备阶段同一套版式：
+// 中间栏没有页签栏，内容铺满，标题旁「!」放阶段说明，底部固定操作栏放控制按钮。
+// 中间栏先放结论性内容（结局、结论、指标、图表、候选），过程与日志收进折叠的「详细记录」。
 // 审批、继续、暂停、停止是四个独立动作；报告的程序判定与模型叙述分区。
-export default function TaskPage({ taskId, api = defaultApi }: { taskId: string; api?: AutonomousApi }) {
+export default function TaskPage({ taskId, api = defaultApi, papers = defaultPapers }: { taskId: string; api?: AutonomousApi; papers?: Pick<PapersApi, 'getProject'> }) {
   const [task, setTask] = useState<AutonomousTask | null>(null);
   const [events, setEvents] = useState<AutonomousEvent[]>([]);
   const [files, setFiles] = useState<AutonomousFiles | null>(null);
@@ -41,6 +56,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   const [notice, setNotice] = useState('');
   const [keyInput, setKeyInput] = useState('');
   const [keysInjected, setKeysInjected] = useState(false);
+  const [paperTitle, setPaperTitle] = useState<{ projectId: string; name: string } | null>(null);
   const taskScope = useRef({ id: taskId });
   if (taskScope.current.id !== taskId) taskScope.current = { id: taskId };
   useEffect(() => { setKeysInjected(false); setKeyInput(''); }, [taskId]);
@@ -100,6 +116,15 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
     return () => { controller.abort(); clearTimeout(timer); };
   }, [taskId, api]);
 
+  // 标题用论文名（项目名），与准备阶段的页头一致；读不到时回退为实验目标。
+  const projectId = task?.project_id ?? '';
+  useEffect(() => {
+    if (!projectId) return;
+    let alive = true;
+    papers.getProject(projectId).then(project => { if (alive && project.name) setPaperTitle({ projectId, name: project.name }); }).catch(() => { /* 回退为实验目标 */ });
+    return () => { alive = false; };
+  }, [papers, projectId]);
+
   // Skills / 模型配置（快照展示与密钥重注入用）。
   useEffect(() => {
     let alive = true;
@@ -136,7 +161,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
     { id: 'model', done: !!task, summary: snapshotProfile ? connectionLabel(snapshotProfile) : snapshotProfileId || null },
     { id: 'launch', done: !!task, summary: !snapshot ? null : snapshot.target?.kind === 'ssh' ? `SSH · ${snapshot.target.ssh_config_alias ?? ''}` : '本地隔离环境' },
   ];
-  const { stages, activeId, doneCount } = flowStages({ setup, current: null, task, events });
+  const { stages, activeId } = flowStages({ setup, current: null, task, events });
   const stepNumber = stages.findIndex(st => st.id === activeId) + 1;
   const activeTitle = stages[stepNumber - 1]?.title ?? '';
   const latestNote = progressNotes(events)[0]?.summary ?? null;
@@ -198,21 +223,33 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
   const pauseHint = hasOutcome ? '任务已有结局' : task && !terminal && task.state !== 'running' ? '只有运行中的任务可以暂停' : undefined;
   // 结局已定但生命周期仍在暂停：停止仍可用，用来终止保留的后台作业。
   const stopHint = hasOutcome && !terminal ? '结局已定；停止会终止仍保留的后台作业' : '停止任务（不会停止远端实例计费）';
-  const messageHint = hasOutcome ? '任务已有结局，不再接收指令' : terminal ? '任务已结束' : undefined;
 
   const taskSkills = task?.config_snapshot?.harness?.skills ?? [];
   const skillSnapshot = taskSkills.map(id => skills.find(s => s.id === id) ?? null);
 
+  const title = paperTitle && paperTitle.projectId === projectId ? paperTitle.name : task?.objective ?? '正在读取任务…';
+  const phase = PHASES.find(p => p.id === (activeId === 'launch' ? 'setup' : activeId));
+  const guide = `${phase?.idle ? `${phase.idle}。` : ''}${STAGE_NOTE}。`;
+
+  const controls = task ? <>
+    <button type="button" className="btn btn-secondary" disabled={busy || terminal || hasOutcome || task.state !== 'running'} title={pauseHint} onClick={() => void act(async () => { await controlTask(task.id, 'pause'); })}>暂停</button>
+    <button type="button" className={`btn ${canResume ? 'btn-primary' : 'btn-secondary'}`} disabled={busy || terminal || !canResume} title={resumeHint || undefined} onClick={() => void act(async () => { await controlTask(task.id, 'resume'); })}>继续</button>
+    <button type="button" className="btn btn-secondary" disabled={busy || terminal} title={stopHint} onClick={() => void act(async () => { await controlTask(task.id, 'stop'); })}>停止</button>
+    <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void act(() => api.exportTask(task.id))}><Icon name="download" size={14} />导出 ZIP</button>
+    {resumeHint && <span className="ui-help">{resumeHint}</span>}
+    {hasOutcome && !terminal && <span className="ui-help">{stopHint}</span>}
+  </> : undefined;
+
   return <div className="flow-page"><Workbench
     railHead={<RailHead />}
-    eyebrow={<>自主实验{task ? <> · <span className="ui-mono">{task.id}</span></> : null}</>}
-    title={task?.objective ?? '正在读取任务…'}
+    title={title}
     status={task && display ? {
       text: display.text,
       tone: !hasOutcome && needsRecovery && display.tone !== 'bad' ? 'warn' : display.tone,
       title: display.caption ?? undefined,
     } : null}
-    progressBar={{ done: doneCount, total: 9, label: activeTitle, extra: <Badge tone="idle" title="阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定">按事件归纳</Badge> }}
+    bareLive
+    liveLabel={activeTitle || '当前阶段'}
     stages={stages}
     activeStageId={task ? activeId : null}
     files={wbFiles}
@@ -221,7 +258,7 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
     onRefreshFiles={taskId ? () => setFilesTick(x => x + 1) : undefined}
     loadFile={loadFile}
   >
-    <div className="auto-live">
+    <StepFrame title={task ? activeTitle || '当前阶段' : '正在读取任务…'} guide={guide} actions={controls}>
       {error && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" /><span>{error}</span><button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>重新读取</button></div>}
       {notice && <p role="status" className="ui-callout tone-idle"><Icon name="info" /><span>{notice}</span></p>}
 
@@ -231,7 +268,8 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
         <div className="auto-live-status" role="status">
           <p className="wb-live-head">
             {running && <span className="wb-live-dot" aria-hidden="true" />}
-            <b>{running ? '运行中' : display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {stepNumber} / 9 步 · {activeTitle} · {toolSteps} 步操作
+            <b>{running ? '运行中' : display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {stepNumber} / 9 步 · {toolSteps} 步操作
+            <Badge tone="idle" title={STAGE_NOTE}>按事件归纳</Badge>
           </p>
           {display?.caption && <p className="ui-help">{display.caption}</p>}
           {latestNote && <p className="ui-help">{running ? '正在：' : '最近进度：'}{latestNote}</p>}
@@ -282,33 +320,35 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
           onPause={() => void act(async () => { await controlTask(task.id, 'pause'); })} />}
 
         {task.error != null && <div className="ui-callout tone-bad" role="alert"><Icon name="alert" />
-          <div className="auto-error"><b>阻塞 / 错误</b><pre className="ui-code">{pretty(task.error)}</pre></div>
+          <div className="auto-error"><b>阻塞 / 错误</b><span>{errorSummary(task.error)}</span>
+            <Disclosure variant="sub" title="原始错误"><pre className="ui-code">{pretty(task.error)}</pre></Disclosure>
+          </div>
         </div>}
 
-        <div className="auto-actions">
-          <button type="button" className="btn btn-secondary" disabled={busy || terminal || hasOutcome || task.state !== 'running'} title={pauseHint} onClick={() => void act(async () => { await controlTask(task.id, 'pause'); })}>暂停</button>
-          <button type="button" className="btn btn-secondary" disabled={busy || terminal || !canResume} title={resumeHint || undefined} onClick={() => void act(async () => { await controlTask(task.id, 'resume'); })}>继续</button>
-          {resumeHint && <span className="ui-help">{resumeHint}</span>}
-          <button type="button" className="btn btn-secondary" disabled={busy || terminal} title={stopHint} onClick={() => void act(async () => { await controlTask(task.id, 'stop'); })}>停止</button>
-          {hasOutcome && !terminal && <span className="ui-help">{stopHint}</span>}
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void act(() => api.exportTask(task.id))}><Icon name="download" size={14} />导出 ZIP</button>
-        </div>
+        {task.report != null && <ReportSummary report={task.report} />}
 
-        <div className="ui-form auto-compose">
+        <FiguresView items={files?.items ?? []} load={(file, signal) => api.fileBlob(task.id, { source: file.source, path: file.path }, signal)} />
+
+        <CandidateCard task={task} events={events} />
+
+        <dl className="flow-summary">
+          {paperTitle && paperTitle.projectId === projectId && <div><dt>论文</dt><dd>{paperTitle.name}</dd></div>}
+          <div><dt>目标</dt><dd>{task.objective}</dd></div>
+          <div><dt>模型</dt><dd>{snapshotProfile ? connectionLabel(snapshotProfile) : snapshotProfileId || '—'}</dd></div>
+          <div><dt>任务</dt><dd className="ui-mono">{task.id}</dd></div>
+        </dl>
+
+        {!terminal && !hasOutcome && <div className="ui-form auto-compose">
           <label className="ui-field"><span className="ui-field-label">追加指令</span>
             <textarea rows={2} value={message} onChange={e => setMessage(e.target.value)} placeholder="例如：先用小数据集跑通，再扩大规模" />
           </label>
           <div className="auto-actions">
-            <button type="button" className="btn btn-primary" disabled={busy || !message.trim() || terminal || hasOutcome} title={messageHint} onClick={() => void act(async () => { await controlTask(task.id, 'message', message.trim()); })}>发送指令</button>
-            {messageHint && <span className="ui-help">{messageHint}</span>}
+            <button type="button" className="btn btn-primary" disabled={busy || !message.trim()} onClick={() => void act(async () => { await controlTask(task.id, 'message', message.trim()); })}>发送指令</button>
           </div>
-        </div>
-
-        <CandidateCard task={task} events={events} />
-
-        {task.report != null && <ReportView report={task.report} />}
+        </div>}
 
         <Disclosure variant="card" title="详细记录">
+          {task.report != null && <ReportDetails report={task.report} />}
           <ProgressNotes events={events} />
           <UsageView usage={(task.usage ?? {}) as Record<string, unknown>} limits={task.config_snapshot?.limits as unknown as Record<string, unknown> | undefined} budgetExhausted={budgetReason} />
 
@@ -347,6 +387,6 @@ export default function TaskPage({ taskId, api = defaultApi }: { taskId: string;
         </Disclosure>
         </Disclosure>
       </>}
-    </div>
+    </StepFrame>
   </Workbench></div>;
 }

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createAutonomousApi, type AutonomousApi } from '../../api-client/autonomous';
-import { createPapersApi, type DocParseMode, type DocParseStatus, type PapersApi } from '../../api-client/papers';
+import { createPapersApi, type DocParseStatus, type PapersApi } from '../../api-client/papers';
 import { draftHref } from '../../shell/routes';
 import { Icon } from '../../ui/Icon';
 import { ToastStack, type ToastItem } from '../../ui/Toast';
 import { Workbench, type WbContent, type WbFile } from '../../ui/workbench/Workbench';
 import { errorDetail } from '../autonomous/errors';
-import ModeDialog from '../docparse/ModeDialog';
-import { canParseNow } from '../docparse/docparse';
+import { OFFLINE_UNREADY, canParseNow, isParsePending } from '../docparse/docparse';
 import { SETUP_ORDER, connectionLabel, draftProgress, newestTaskId, type DraftFacts, type DraftPaper, type DraftProgress, type SetupStepId } from './draft';
 import { loadDraft, type DraftData } from './draftData';
 import { carryNotice, clearNotice, finishUpload, peekNotice } from './draftUpload';
@@ -24,6 +23,7 @@ const autonomous = createAutonomousApi();
 const papersApi = createPapersApi('demo-user');
 const EMPTY: DraftFacts = { paper: null, description: '', config: null, profiles: [], taskCount: 0 };
 const UNTITLED = '未命名论文';
+const INSTALL_POLL_MS = 3000;
 
 const projectName = (hint: string) => Array.from(hint.trim() || UNTITLED).slice(0, 120).join('');
 const clip = (text: string, n: number) => Array.from(text).length > n ? `${Array.from(text).slice(0, n).join('')}…` : text;
@@ -54,9 +54,10 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(() => peekNotice(projectId));
   const [parseStatus, setParseStatus] = useState<DocParseStatus | null>(null);
-  const [modeDialog, setModeDialog] = useState(false);
   const [polling, setPolling] = useState<string | null>(null);
-  const dialogOffered = useRef(false);
+  const parseAfterInstall = useRef<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const createdProject = useRef<string | null>(null);
   const loadAbort = useRef<AbortController | null>(null);
   const [notes, setNotes] = useState<ToastItem[]>([]);
@@ -79,7 +80,8 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
         const status = await papers.getDocParseStatus(controller.signal);
         if (controller.signal.aborted) return null;
         setParseStatus(status);
-        if (status.mode === null && paper.textStatus !== 'parsing' && !dialogOffered.current) { dialogOffered.current = true; setModeDialog(true); }
+        // The local component is still downloading for this paper (also after #/new remounted the page): parse it when ready.
+        if (status.offline.state === 'installing' && isParsePending(next.paperText)) parseAfterInstall.current = paper.paperId;
       }
       if (paper?.pdf && paper.textStatus === 'parsing') setPolling(paper.paperId);
       return next;
@@ -126,6 +128,40 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     return () => { alive = false; clearTimeout(timer); };
   }, [polling, papers, reload]);
 
+  // While the offline component installs, follow its progress; when it is ready, parse the
+  // paper the install was started for, then read the draft again.
+  // The finish runs to the end even though setParseStatus(not installing) ends this effect:
+  // it is guarded by the page being mounted, not by the effect being current.
+  const installing = parseStatus?.offline.state === 'installing';
+  useEffect(() => {
+    if (!installing) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = async (next: DocParseStatus) => {
+      const target = parseAfterInstall.current;
+      parseAfterInstall.current = null;
+      const parse = !!target && canParseNow(next);
+      if (parse) await papers.parsePaper(target!, crypto.randomUUID());
+      if (!mounted.current) return;
+      setParseStatus(next);
+      if (parse) setPolling(target);
+      await reload();
+    };
+    const tick = async () => {
+      try {
+        const next = await papers.getDocParseStatus();
+        if (!alive) return;
+        if (next.offline.state === 'installing') { setParseStatus(next); timer = setTimeout(() => void tick(), INSTALL_POLL_MS); return; }
+        await finish(next);
+      } catch (e) {
+        if (mounted.current) setError(errorDetail(e));
+        if (alive) timer = setTimeout(() => void tick(), INSTALL_POLL_MS * 2);
+      }
+    };
+    timer = setTimeout(() => void tick(), INSTALL_POLL_MS);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [installing, papers, reload]);
+
   const act = useCallback(async (work: () => Promise<void>) => {
     setBusy(true); setError('');
     try { await work(); return true; } catch (e) { setError(errorDetail(e)); return false; } finally { setBusy(false); }
@@ -156,17 +192,25 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     if (!createdProject.current) createdProject.current = (await papers.createProject(projectName(hint))).id;
     return createdProject.current;
   }
-  async function startParse(paperId: string) {
-    const status = await papers.getDocParseStatus();
+  // PDFs are parsed only on this machine. The first time, the local component is
+  // downloaded; the paper is parsed as soon as it is ready (see the install effect).
+  async function localParse(paperId: string) {
+    let status = await papers.getDocParseStatus();
     setParseStatus(status);
     if (canParseNow(status)) {
       await papers.parsePaper(paperId, crypto.randomUUID());
       setPolling(paperId);
+      return;
+    }
+    if (status.mode !== 'offline') return; // this platform cannot parse locally; the step says so
+    parseAfterInstall.current = paperId;
+    if (OFFLINE_UNREADY.has(status.offline.state)) {
+      status = await papers.startOfflineInstall();
+      setParseStatus(status);
     }
   }
   async function accepted(id: string) {
     if (!projectId) { window.location.replace(draftHref(id)); return; }
-    dialogOffered.current = false;
     await reload();
     setViewing('paper');
   }
@@ -175,11 +219,11 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     const id = await ensureProject(name);
     const upload = await papers.uploadPaperPdf(id, file, name.trim() ? { titleHint: projectName(name) } : undefined);
     await finishUpload({
-      startParse: () => startParse(upload.paper_id),
+      startParse: () => localParse(upload.paper_id),
       accepted: async failure => {
         // On #/new the route change remounts the page, so hand the notice over first.
         if (failure !== undefined) {
-          const text = `论文已上传，但解析没有开始：${errorDetail(failure)}。可在第 1 步点“开始解析”重试。`;
+          const text = `论文已上传，但解析没有开始：${errorDetail(failure)}。可在第 1 步重试。`;
           if (projectId) setError(text); else carryNotice(id, text);
         }
         await accepted(id);
@@ -191,18 +235,10 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     await papers.createTextPaper(id, input);
     await accepted(id);
   });
-  const parseAgain = (mode?: DocParseMode) => {
+  const parseAgain = () => {
     const paperId = paper?.paperId;
     if (!paperId) return;
-    void act(async () => {
-      let status = parseStatus;
-      if (mode) { status = await papers.setDocParseMode(mode); setParseStatus(status); setModeDialog(false); }
-      if (!mode || (status && canParseNow(status, mode))) {
-        await papers.parsePaper(paperId, crypto.randomUUID());
-        setPolling(paperId);
-      }
-      await reload();
-    });
+    void act(async () => { await localParse(paperId); await reload(); });
   };
 
   const removeDraft = () => {
@@ -218,7 +254,7 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     return null;
   };
   const setup: SetupView[] = SETUP_ORDER.map(id => ({ id, done: progress.done[id] && reachable(progress, id) && id !== progress.current, summary: summary(id) }));
-  const { stages, doneCount } = flowStages({ setup, current: progress.current, task: null, events: [] });
+  const { stages } = flowStages({ setup, current: progress.current, task: null, events: [] });
 
   // ---- files (before start): the parse preview and the saved config ----
   const fileText = useMemo(() => {
@@ -245,7 +281,7 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     step = <PaperStep paper={paper} paperText={data?.paperText ?? null} parseStatus={parseStatus} busy={busy}
       next={{ label: '下一步', disabled: disabledNext(progress.done.paper ? '' : !paper ? '请先上传论文 PDF 或粘贴正文' : '论文解析完成后才能继续'), onClick: () => setViewing('objective') }}
       onUploadPdf={uploadPdf} onSubmitText={submitText}
-      parse={{ onRetry: () => parseAgain(), onChoose: mode => parseAgain(mode), onReopenChoice: () => setModeDialog(true), onRefresh: () => { reload().catch(e => setError(errorDetail(e))); } }} />;
+      parse={{ onRetry: parseAgain, onInstall: parseAgain, onRefresh: () => { reload().catch(e => setError(errorDetail(e))); } }} />;
   } else if (projectId && data && shown === 'objective') {
     step = <ObjectiveStep projectId={projectId} projectVersion={data.project.version} initial={progress.objective} hasConfig={!!data.saved}
       api={api} papers={papers} busy={busy} act={act} refresh={reload} onDone={advance('model')} />;
@@ -262,7 +298,8 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
       railHead={<RailHead />}
       title={paper?.title || '新建实验'}
       actions={projectId ? <button type="button" className="btn btn-sm btn-secondary" disabled={busy} onClick={removeDraft}>删除草稿</button> : undefined}
-      progressBar={{ done: doneCount, total: 9, label: stages.find(st => st.id === shown)?.title ?? '' }}
+      bareLive
+      liveLabel={stages.find(st => st.id === shown)?.title ?? '当前步骤'}
       stages={stages}
       activeStageId={shown}
       onSelectStage={id => { const target = SETUP_ORDER.find(s => s === id); if (target && reachable(progress, target)) setViewing(target); }}
@@ -278,6 +315,5 @@ export default function DraftPage({ projectId, api = autonomous, papers = papers
     </Workbench>
     <ToastStack items={[...notes, ...(error && !loadFailed ? [{ id: `error-${error}`, tone: 'bad' as const, text: error }] : [])]}
       onClose={id => { if (id.startsWith('error-')) setError(''); else setNotes(list => list.filter(n => n.id !== id)); }} />
-    {modeDialog && <ModeDialog status={parseStatus} busy={busy} onChoose={mode => parseAgain(mode)} onLater={() => setModeDialog(false)} />}
   </div>;
 }

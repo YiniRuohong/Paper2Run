@@ -162,7 +162,8 @@ export function buildStages(task: AutonomousTask | null, events: AutonomousEvent
   };
   for (const e of events) {
     const p = rec(e.payload);
-    const base = { id: `e${e.sequence}`, time: clock(e.created_at), openPath: 'logs/events.log' };
+    // 子步骤只在有真实产物时才打开文件；原始事件日志不再整段铺进中间栏（文件树「记录」里仍可打开）。
+    const base: { id: string; time: ReturnType<typeof clock>; openPath?: string } = { id: `e${e.sequence}`, time: clock(e.created_at) };
     if (e.type === 'tool_started') {
       const name = str(p.name) ?? 'tool';
       const phase = own(TOOL_PHASE, name);

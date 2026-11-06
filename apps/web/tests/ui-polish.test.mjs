@@ -76,10 +76,14 @@ test('C: progressBar replaces the 实时 tab segment and the rail progress line'
   assert.match(done[0], /var\(--accent\)/);
   assert.doesNotMatch(done[0], /--ok/);
   const draft = await read('features/flow/DraftPage.tsx');
-  assert.match(draft, /progressBar=\{\{ done: doneCount, total: 9, label: /);
-  assert.doesNotMatch(draft, /progress=\{/);
+  // The draft page's centre column has no tab bar: no progress tab, no download button.
+  assert.match(draft, /\n\s+bareLive\n/);
+  assert.doesNotMatch(draft, /progressBar=|progress=\{/);
+  assert.match(wb, /\{!bare && <button type="button" className="btn btn-icon" aria-label="下载当前文件"/);
+  assert.match(wb, /\(!bare \|\| tabs\.length > 0\) && <div className="wb-tabbar">/);
+  // The task page uses the same bare centre column as the setup steps: no progress tab, no download button.
   const task = await read('features/autonomous/TaskPage.tsx');
-  assert.match(task, /progressBar=\{\{ done: doneCount, total: 9, label: activeTitle/);
+  assert.match(task, /\n\s+bareLive\n/);
+  assert.doesNotMatch(task, /progressBar=|progress=\{/);
   assert.match(task, /阶段由 Pi 自报进度（note_progress）与事件归纳得出，不是程序判定/);
-  assert.doesNotMatch(task, /progress=\{/);
 });
