@@ -10,6 +10,8 @@ interface Props {
   onOpenSearch: () => void;
   onOpenSettings: () => void;
   onCollapse: () => void;
+  /** 收起时仍保持挂载以便播放收起动画；inert 让它退出 Tab 顺序与无障碍树。 */
+  open?: boolean;
   loading?: boolean;
   error?: string;
   onRenameDoc: (id: string, name: string) => void;
@@ -160,6 +162,7 @@ export function Shelf({
   onOpenSearch,
   onOpenSettings,
   onCollapse,
+  open = true,
   onRenameDoc,
   onTogglePin,
   onDeleteDocs,
@@ -193,6 +196,18 @@ export function Shelf({
   const [renameValue, setRenameValue] = useState("");
 
   const menuRootRef = useRef<HTMLSpanElement | null>(null);
+
+  /* 收起时清掉临时状态（菜单、多选、弹窗），与以前收起即卸载的行为一致 */
+  useEffect(() => {
+    if (open) {
+      return;
+    }
+    setMenuId(null);
+    setMulti(false);
+    setSelected(new Set());
+    setConfirmIds(null);
+    setRenameId(null);
+  }, [open]);
 
   /* 点击菜单外部 / Esc 时关闭 ⋯ 菜单 */
   useEffect(() => {
@@ -254,7 +269,11 @@ export function Shelf({
   const hasSelection = selected.size > 0;
 
   return (
-    <aside className="ptr-side" aria-label="论文书架">
+    <aside
+      className="ptr-side"
+      aria-label="论文书架"
+      {...(open ? {} : { inert: true, "aria-hidden": true })}
+    >
       <div className="ptr-side-top">
         <div className="brand-row">
           <b className="brand-name">论文书架</b>

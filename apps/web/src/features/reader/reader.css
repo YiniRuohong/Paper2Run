@@ -49,12 +49,15 @@
 
 /* ---------- shell：填满 Paper2Run 主区域（外壳只留侧栏，顶栏由阅读器自己承担） ---------- */
 .ptr {
+  --shelf-w: 280px;
+  --shelf-dur: var(--dur-base);
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: var(--shelf-w) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   overflow: hidden;
   background: var(--bg);
+  transition: grid-template-columns var(--shelf-dur) var(--ease);
 }
 
 .ptr .ptr-load-error,
@@ -82,8 +85,10 @@
   inset: 0;
 }
 
+/* 收起时列宽过渡到 0（两列数量不变，列宽才能插值），书架淡出后再隐藏。
+   做法与应用侧栏（shell.css 的 .side）一致。 */
 .ptr.collapsed {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 0px minmax(0, 1fr);
 }
 
 
@@ -91,9 +96,25 @@
 .ptr .ptr-side {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--side);
   border-right: 1px solid var(--line);
+  transition: opacity var(--shelf-dur) var(--ease), visibility 0s linear 0s;
+}
+
+/* 内容保持书架全宽（减去右边框），列宽收窄时被裁掉而不是挤压换行（弹窗遮罩除外） */
+.ptr .ptr-side > :not(.overlay) {
+  min-width: calc(var(--shelf-w) - 1px);
+}
+
+.ptr.collapsed .ptr-side {
+  opacity: 0;
+  visibility: hidden;
+  border-right-color: transparent;
+  transition: opacity var(--shelf-dur) var(--ease),
+    visibility 0s linear var(--shelf-dur);
 }
 
 .ptr .ptr-side-top {
@@ -537,21 +558,57 @@
   text-overflow: ellipsis;
 }
 
-/* 收起态顶栏：logo + 圆角框（打开侧边栏/搜索/新建）+ 标题 */
+/* 收起态顶栏：圆角框（打开书架/搜索/上传）+ 标题。
+   按钮组常驻挂载，书架展开时宽度收到 0 并淡出，与书架列宽同步过渡。 */
+.ptr .head-frame-slot {
+  --hf-btn: 40px;
+  --hf-gap: 5px;
+  --hf-pad: 5px;
+  display: inline-flex;
+  flex: none;
+  max-width: calc(3 * var(--hf-btn) + 2 * var(--hf-gap) + 2 * var(--hf-pad) + 2px);
+  /* 只在隐藏 / 过渡中裁剪；完全展开后不裁剪——overflow:hidden 会让半像素位置上的图标抗锯齿变样 */
+  overflow: visible;
+  transition: max-width var(--shelf-dur) var(--ease),
+    opacity var(--shelf-dur) var(--ease),
+    margin-right var(--shelf-dur) var(--ease),
+    overflow 0s linear var(--shelf-dur);
+  transition-behavior: allow-discrete;
+}
+
+/* 书架展开：按钮组不占位；负外边距抵掉顶栏的 gap，标题位置与以前一致 */
+.ptr .ptr-head:not(.collapsed-head) .head-frame-slot {
+  max-width: 0;
+  margin-right: -10px;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width var(--shelf-dur) var(--ease),
+    opacity var(--shelf-dur) var(--ease),
+    margin-right var(--shelf-dur) var(--ease),
+    overflow 0s linear 0s;
+}
+
 .ptr .head-frame {
   display: inline-flex;
+  flex: none;
   align-items: center;
-  gap: 2px;
-  padding: 3px;
+  gap: var(--hf-gap);
+  padding: var(--hf-pad);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 17px;
   background: var(--surface);
 }
 
 .ptr .head-frame .head-icon-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 9px;
+  flex: none;
+  width: var(--hf-btn);
+  height: var(--hf-btn);
+  border-radius: 13px;
+}
+
+.ptr .head-frame .head-icon-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
 .ptr .head-title {
@@ -563,10 +620,17 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: margin-left var(--shelf-dur) var(--ease),
+    font-size var(--shelf-dur) var(--ease);
 }
 
 
-/* 收起态：整条顶栏放大、拉开间距 */
+/* 收起态：整条顶栏放大、拉开间距（与书架同步过渡） */
+.ptr .ptr-head {
+  transition: height var(--shelf-dur) var(--ease),
+    padding var(--shelf-dur) var(--ease), gap var(--shelf-dur) var(--ease);
+}
+
 .ptr .ptr-head.collapsed-head {
   height: 68px;
   padding: 0 26px;
@@ -584,24 +648,14 @@
   height: 21px;
 }
 
-.ptr .collapsed-head .head-frame {
-  gap: 5px;
-  padding: 5px;
-  border-radius: 17px;
-}
-
-.ptr .collapsed-head .head-frame .head-icon-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 13px;
-}
-
-.ptr .collapsed-head .head-frame .head-icon-btn svg {
-  width: 18px;
-  height: 18px;
-}
-
 /* 应用侧栏收起时的展开按钮：与旁边圆角框里的按钮同尺寸 */
+.ptr .show-app-side {
+  flex: none;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease,
+    width var(--shelf-dur) var(--ease), height var(--shelf-dur) var(--ease),
+    border-radius var(--shelf-dur) var(--ease);
+}
+
 .ptr .collapsed-head .show-app-side {
   width: 40px;
   height: 40px;

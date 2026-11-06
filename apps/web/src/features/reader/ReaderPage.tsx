@@ -402,23 +402,23 @@ export default function ReaderPage({
 
   return (
     <div className={`ptr${collapsed ? " collapsed" : ""}`} style={hlVars}>
-      {!collapsed ? (
-        <Shelf
-          docs={shelf}
-          currentId={paperId}
-          loading={shelfLoading}
-          error={shelfError}
-          onSelectDoc={selectDoc}
-          onNewPdf={() => setUploadOpen(true)}
-          onOpenSearch={() => setSearchOpen(true)}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onCollapse={() => setCollapsed(true)}
-          onRenameDoc={renameDoc}
-          onTogglePin={togglePin}
-          onDeleteDocs={hideDocs}
-          onReproduce={reproduceDoc}
-        />
-      ) : null}
+      {/* 书架常驻挂载：展开 / 收起由 .ptr 的列宽过渡播放动画 */}
+      <Shelf
+        open={!collapsed}
+        docs={shelf}
+        currentId={paperId}
+        loading={shelfLoading}
+        error={shelfError}
+        onSelectDoc={selectDoc}
+        onNewPdf={() => setUploadOpen(true)}
+        onOpenSearch={() => setSearchOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onCollapse={() => setCollapsed(true)}
+        onRenameDoc={renameDoc}
+        onTogglePin={togglePin}
+        onDeleteDocs={hideDocs}
+        onReproduce={reproduceDoc}
+      />
       <section className="ptr-main" aria-label="PDF 阅读区">
         <header className={`ptr-head drag${collapsed ? " collapsed-head" : ""}`}>
           {onShowSidebar ? (
@@ -434,7 +434,11 @@ export default function ReaderPage({
               <Icon name="sidebar" />
             </button>
           ) : null}
-          {collapsed ? (
+          {/* 书架收起时才显示的按钮组：常驻挂载，宽度与透明度随书架一起过渡 */}
+          <span
+            className="head-frame-slot"
+            {...(collapsed ? {} : { inert: true, "aria-hidden": true })}
+          >
             <span className="head-frame">
               <button
                 type="button"
@@ -500,7 +504,7 @@ export default function ReaderPage({
                 </svg>
               </button>
             </span>
-          ) : null}
+          </span>
           <b className="head-title" title={currentDocName}>
             {currentDocName || "论文阅读"}
           </b>
