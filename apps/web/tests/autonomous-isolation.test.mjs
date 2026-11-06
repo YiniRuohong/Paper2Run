@@ -8,6 +8,7 @@ import * as stages from '../src/features/autonomous/stages.ts';
 import * as errors from '../src/features/autonomous/errors.ts';
 import * as flowTimeline from '../src/features/flow/timeline.ts';
 import * as flowDraft from '../src/features/flow/draft.ts';
+import * as stepDetail from '../src/features/autonomous/stepDetail.ts';
 import * as recovery from '../src/features/autonomous/recovery.ts';
 import { ApiError } from '../src/api-client/client.ts';
 
@@ -17,6 +18,9 @@ import { ApiError } from '../src/api-client/client.ts';
 // isolation of late responses after the task scope changes.
 
 const box = name => function Stub(props) { return { type: name, props: props ?? {}, children: props?.children }; };
+
+const within = node => { const out = []; const visit = n => { if (Array.isArray(n)) return n.forEach(visit); if (n && typeof n === 'object') { out.push(n); visit(n.children); visit(n.props?.children); } }; visit(node); return out; };
+const drawerOf = h => h.nodes().find(n => n.type === 'Workbench').props.drawer;
 
 async function harness(options = {}) {
   const source = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
@@ -74,7 +78,9 @@ async function harness(options = {}) {
     './ApprovalCard': { ApprovalCard: box('ApprovalCard') },
     './CandidateCard': { CandidateCard: box('CandidateCard') },
     './ActivityViews': { ProgressNotes: box('ProgressNotes'), SpecialistCalls: box('SpecialistCalls') },
-    './ReportView': { ReportSummary: box('ReportSummary'), ReportDetails: box('ReportDetails') },
+    './ReportView': { ReportSummary: box('ReportSummary'), ReportDetails: box('ReportDetails'), ReportEvidence: box('ReportEvidence') },
+    './StepDrawer': { ItemDrawerBody: box('ItemDrawerBody'), itemTitle: detail => `title:${detail.kind}` },
+    './stepDetail': stepDetail,
     './FiguresView': { FiguresView: box('FiguresView') },
     './UsageView': { UsageView: box('UsageView') },
     './autonomous.css': {},
@@ -229,7 +235,8 @@ test('a task with an outcome is finished: resume is disabled with the reason and
     const text = h.text();
     assert.doesNotMatch(text, /后台训练作业可能仍在运行|暂停不会停止远端计费|停止任务不会停止远端实例计费/, state);
     assert.match(text, /已暂停|已停止/, 'the lifecycle state stays visible as secondary text');
-    assert.ok(h.nodes().some(n => n.type === 'CandidateCard'), 'the candidate review card is on the page');
+    h.nodes().find(n => n.type === 'Workbench').props.onOpenStage('review'); h.render();
+    assert.ok(within(drawerOf(h).body).some(n => n.type === 'CandidateCard'), 'the candidate review card is in the 候选与复核 drawer');
   }
 });
 
@@ -367,23 +374,45 @@ test('the task page header names the paper like the setup steps, and the objecti
   assert.match(h.text(), /goal ta/, 'the objective is still on the page');
 });
 
-test('the centre column leads with conclusions and figures; process and raw logs stay folded', async () => {
+
+test('the centre column holds only conclusions, figures and actions; process opens in the drawer', async () => {
   const report = { status: 'not_comparable' };
   const error = { code: 'BUDGET_EXHAUSTED', message: 'cumulative task budget exhausted' };
-  const h = await harness({ taskOver: { state: 'stopped', outcome: 'not_comparable', report, error } });
-  const all = h.nodes();
-  const at = type => all.findIndex(n => n.type === type);
-  const details = all.find(n => n.type === 'Disclosure' && /详细记录/.test(n.props.title));
-  assert.ok(details, 'a folded 详细记录 section exists');
-  const inside = [];
-  const visit = n => { if (Array.isArray(n)) return n.forEach(visit); if (n && typeof n === 'object') { inside.push(n); visit(n.children); } };
-  visit(details.children);
-  assert.ok(at('ReportSummary') >= 0 && at('ReportSummary') < all.indexOf(details), 'outcome and conclusion come first');
-  assert.ok(at('FiguresView') >= 0 && at('FiguresView') < all.indexOf(details), 'figures are on the page, not folded');
-  assert.ok(inside.some(n => n.type === 'ReportDetails'), 'gate, observations and narrative are folded');
-  assert.ok(!all.some(n => n.type === 'ReportDetails' && !inside.includes(n)), 'report details appear only inside the fold');
+  const events = [
+    { sequence: 1, type: 'tool_started', payload: { id: 'c1', name: 'execute', arguments: { command: 'python train.py' } }, created_at: '2026-11-06T09:20:21Z' },
+    { sequence: 2, type: 'tool_completed', payload: { id: 'c1', name: 'execute', result: { exit_code: 0, logs: { stdout: 'ok' } }, is_error: false }, created_at: '2026-11-06T09:20:22Z' },
+  ];
+  const h = await harness({ events, taskOver: { state: 'stopped', outcome: 'not_comparable', report, error } });
+  const types = new Set(h.nodes().map(n => n.type));
+  for (const kept of ['ReportSummary', 'FiguresView']) assert.ok(types.has(kept), kept);
+  for (const moved of ['ReportDetails', 'ReportEvidence', 'CandidateCard', 'UsageView', 'ProgressNotes', 'SpecialistCalls']) assert.ok(!types.has(moved), `${moved} is not in the centre column`);
+  assert.ok(!h.nodes().some(n => n.type === 'Disclosure' && /详细记录/.test(n.props.title)), 'no folded 详细记录 block');
   assert.match(h.text(), /任务预算/, 'a known error code reads as a plain sentence');
-  const rawError = all.find(n => n.type === 'Disclosure' && n.props.title === '原始错误');
-  assert.ok(rawError, 'the raw error JSON is folded');
+  assert.ok(h.nodes().some(n => n.type === 'Disclosure' && n.props.title === '原始错误'), 'the raw error JSON is folded');
   assert.equal(h.button('发送指令'), undefined, 'a finished task has no instruction composer');
+  assert.equal(drawerOf(h), null, 'the drawer starts closed');
+
+  const workbench = () => h.nodes().find(n => n.type === 'Workbench');
+  workbench().props.onOpenItem('execute', { id: 't1', label: 'python train.py' }); h.render();
+  assert.equal(workbench().props.selectedItemId, 't1');
+  assert.equal(drawerOf(h).label, '步骤 06 · 编写与执行');
+  assert.equal(drawerOf(h).title, 'title:command');
+  const body = within(drawerOf(h).body).find(n => n.type === 'ItemDrawerBody');
+  assert.equal(body.props.detail.stdout, 'ok');
+
+  workbench().props.onOpenStage('report'); h.render();
+  assert.ok(within(drawerOf(h).body).some(n => n.type === 'ReportDetails'), '09 opens the report process');
+  workbench().props.onOpenStage('execute'); h.render();
+  assert.ok(within(drawerOf(h).body).some(n => n.type === 'ReportDetails'), 'other stage heads only expand the rail');
+
+  const details = workbench().props.actions;
+  details.props.onClick(); h.render();
+  assert.equal(drawerOf(h).title, '任务详情');
+  const inside = new Set(within(drawerOf(h).body).map(n => n.type));
+  for (const type of ['UsageView', 'ProgressNotes', 'SpecialistCalls']) assert.ok(inside.has(type), type);
+  assert.match(JSON.stringify(drawerOf(h).body), /goal ta/, 'the objective is in 任务详情');
+
+  drawerOf(h).onClose(); h.render();
+  assert.equal(drawerOf(h), null);
+  assert.equal(workbench().props.selectedItemId, null);
 });

@@ -3,7 +3,7 @@ import {
   ApiError, createAutonomousApi, type AutonomousApi, type AutonomousEvent, type AutonomousFiles, type AutonomousTask, type Capability, type ModelProfile,
 } from '../../api-client/autonomous';
 import { createPapersApi, type PapersApi } from '../../api-client/papers';
-import { Workbench, type WbContent, type WbFile } from '../../ui/workbench/Workbench';
+import { Workbench, type WbContent, type WbDrawer, type WbFile } from '../../ui/workbench/Workbench';
 import { Badge, Card, CardHeader } from '../../ui/Card';
 import { Disclosure } from '../../ui/Disclosure';
 import { Icon } from '../../ui/Icon';
@@ -18,7 +18,9 @@ import { flowStages, type SetupView } from '../flow/timeline';
 import { ApprovalCard } from './ApprovalCard';
 import { CandidateCard } from './CandidateCard';
 import { FiguresView } from './FiguresView';
-import { ReportDetails, ReportSummary } from './ReportView';
+import { ReportDetails, ReportEvidence, ReportSummary } from './ReportView';
+import { ItemDrawerBody, itemTitle } from './StepDrawer';
+import { itemDetail } from './stepDetail';
 import { UsageView } from './UsageView';
 import { frozenMainProfile, recoveryProfileRequest, recoveryState, type Recovery } from './recovery';
 import '../flow/flow.css';
@@ -39,7 +41,8 @@ function errorSummary(error: unknown): string {
 
 // 任务工作台（#/task/<id>）：阶段时间线 + 当前阶段 + 文件树，与准备阶段同一套版式：
 // 中间栏没有页签栏，内容铺满，标题旁「!」放阶段说明，底部固定操作栏放控制按钮。
-// 中间栏先放结论性内容（结局、结论、指标、图表、候选），过程与日志收进折叠的「详细记录」。
+// 中间栏只放结论性内容（实时 / 结局、结论、指标、图表）和需要动手的卡片；
+// 过程在右侧抽屉里看：点左栏子步骤、第 08 / 09 步标题，或标题旁的「任务详情」。
 // 审批、继续、暂停、停止是四个独立动作；报告的程序判定与模型叙述分区。
 export default function TaskPage({ taskId, api = defaultApi, papers = defaultPapers }: { taskId: string; api?: AutonomousApi; papers?: Pick<PapersApi, 'getProject'> }) {
   const [task, setTask] = useState<AutonomousTask | null>(null);
@@ -57,6 +60,9 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const [notice, setNotice] = useState('');
   const [keyInput, setKeyInput] = useState('');
   const [keysInjected, setKeysInjected] = useState(false);
+  // 抽屉里显示什么：左栏一条子步骤、一个阶段（08 候选与复核 / 09 报告），或任务详情。
+  const [drawerOpen, setDrawerOpen] = useState<{ kind: 'item'; stageId: string; itemId: string } | { kind: 'stage'; stageId: string } | { kind: 'details' } | null>(null);
+  useEffect(() => { setDrawerOpen(null); }, [taskId]);
   // 最近一次操作失败的错误码：CREDENTIAL_REQUIRED 时显示「需要恢复」。
   const [lastControlError, setLastControlError] = useState<string | null>(null);
   const [paperTitle, setPaperTitle] = useState<{ projectId: string; name: string } | null>(null);
@@ -216,8 +222,9 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const paused = task?.state === 'paused';
   const stopped = task ? task.state === 'stopped' || task.state === 'cancelled' : false;
   const budgetExhausted = [...events].reverse().find(e => e.type === 'budget_exhausted');
+  // reason 是 {code, message}（worker.record_budget_cancel）；旧事件可能是字符串。
   const budgetReason = budgetExhausted && budgetExhausted.payload && typeof budgetExhausted.payload === 'object'
-    ? String((budgetExhausted.payload as Record<string, unknown>).reason ?? '') || null : null;
+    ? (() => { const reason = (budgetExhausted.payload as Record<string, unknown>).reason; return typeof reason === 'string' ? reason || null : reason != null ? errorSummary(reason) : null; })() : null;
 
   const mainProfileId = task?.config_snapshot?.model?.provider_profile ?? '';
   const mainProfile = profiles.find(p => p.id === mainProfileId) ?? null;
@@ -245,6 +252,69 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
   const phase = PHASES.find(p => p.id === (activeId === 'launch' ? 'setup' : activeId));
   const guide = `${phase?.idle ? `${phase.idle}。` : ''}${STAGE_NOTE}。`;
 
+  const summaryList = task ? <dl className="flow-summary">
+    {paperTitle && paperTitle.projectId === projectId && <div><dt>论文</dt><dd>{paperTitle.name}</dd></div>}
+    <div><dt>目标</dt><dd>{task.objective}</dd></div>
+    <div><dt>模型</dt><dd>{snapshotProfile ? connectionLabel(snapshotProfile) : snapshotProfileId || '—'}</dd></div>
+    <div><dt>任务</dt><dd className="ui-mono">{task.id}</dd></div>
+  </dl> : null;
+  const stepLabel = (stageId: string) => {
+    const index = stages.findIndex(st => st.id === stageId);
+    return index < 0 ? '' : `步骤 ${String(index + 1).padStart(2, '0')} · ${stages[index].title}`;
+  };
+  const closeDrawer = () => setDrawerOpen(null);
+  let drawer: WbDrawer | null = null;
+  if (task && drawerOpen?.kind === 'item') {
+    const detail = itemDetail(events, drawerOpen.itemId, task);
+    if (detail) drawer = { label: stepLabel(drawerOpen.stageId), title: itemTitle(detail), body: <ItemDrawerBody detail={detail} />, onClose: closeDrawer, openPath: detail.kind === 'artifact' ? detail.path : undefined };
+  } else if (task && drawerOpen?.kind === 'stage' && drawerOpen.stageId === 'review') {
+    drawer = { label: stepLabel('review'), title: '证据与独立复核', onClose: closeDrawer, body: <>
+      {task.report != null && <ReportEvidence report={task.report} />}
+      <CandidateCard task={task} events={events} />
+    </> };
+  } else if (task && drawerOpen?.kind === 'stage' && drawerOpen.stageId === 'report') {
+    drawer = { label: stepLabel('report'), title: '报告过程', onClose: closeDrawer, body: task.report != null
+      ? <ReportDetails report={task.report} />
+      : <p className="ui-help">报告尚未生成；生成后这里显示完成门槛、执行观测、模型叙述与局限。</p> };
+  } else if (task && drawerOpen?.kind === 'details') {
+    drawer = { label: '任务', title: '任务详情', onClose: closeDrawer, body: <>
+      {summaryList}
+      <UsageView usage={(task.usage ?? {}) as Record<string, unknown>} limits={task.config_snapshot?.limits as unknown as Record<string, unknown> | undefined} budgetExhausted={budgetReason} />
+      <ProgressNotes events={events} />
+      <SpecialistCalls events={events} task={task} configured={task.config_snapshot?.specialists?.length ?? 0} />
+      {taskSkills.length > 0 && <Card>
+        <CardHeader icon="spark" title="本任务固定的 Skills 快照" subtitle="运行期间固定使用以下版本，不随后续更新变化。" />
+        <div className="ui-card-section">
+          <ul className="ui-list">
+            {taskSkills.map((id, i) => {
+              const skill = skillSnapshot[i];
+              return <li key={id} className="ui-row">
+                <span className="ui-row-main"><span className="ui-row-title">{skill?.name ?? id}</span>
+                  <span className="ui-row-sub ui-mono">{id}</span></span>
+                <span className="ui-row-end">{skill ? <Badge>{skill.version}</Badge> : <Badge tone="idle">版本未知</Badge>}</span>
+              </li>;
+            })}
+          </ul>
+        </div>
+      </Card>}
+      <Disclosure variant="card" title="任务配置快照">
+        <pre className="ui-code">{pretty(task.config_snapshot)}</pre>
+      </Disclosure>
+      <Disclosure variant="card" title={`原始事件流（${events.length}）`}>
+        {events.length === 0 && <p className="ui-help">等待任务事件…</p>}
+        {events.length > 0 && <ul className="ui-list auto-events" aria-label="任务事件">
+          {events.map(event => <li key={event.sequence} className="ui-row auto-event">
+            <span className="ui-row-main">
+              <span className="ui-row-title ui-mono">#{event.sequence} {event.type}</span>
+              <span className="ui-row-sub"><time>{event.created_at}</time></span>
+            </span>
+            <Disclosure variant="sub" title="payload"><pre className="ui-code">{pretty(event.payload)}</pre></Disclosure>
+          </li>)}
+        </ul>}
+      </Disclosure>
+    </> };
+  }
+
   const controls = task ? <>
     <button type="button" className="btn btn-secondary" disabled={busy || terminal || hasOutcome || !pausable} title={pauseHint} onClick={() => void act(async () => { await controlTask(task.id, 'pause'); })}>暂停</button>
     <button type="button" className={`btn ${canResume ? 'btn-primary' : 'btn-secondary'}`} disabled={busy || terminal || !canResume} title={resumeHint || undefined} onClick={() => void act(async () => { await controlTask(task.id, 'resume'); })}>继续</button>
@@ -262,8 +332,13 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
       tone: !hasOutcome && needsRecovery && display.tone !== 'bad' ? 'warn' : display.tone,
       title: display.caption ?? undefined,
     } : null}
+    actions={task ? <button type="button" className="btn btn-secondary btn-sm" aria-haspopup="dialog" onClick={() => setDrawerOpen({ kind: 'details' })}><Icon name="list" size={14} />任务详情</button> : undefined}
     bareLive
     liveLabel={activeTitle || '当前阶段'}
+    onOpenItem={(stageId, item) => setDrawerOpen({ kind: 'item', stageId, itemId: item.id })}
+    onOpenStage={stageId => { if (stageId === 'review' || stageId === 'report') setDrawerOpen({ kind: 'stage', stageId }); }}
+    selectedItemId={drawerOpen?.kind === 'item' ? drawerOpen.itemId : null}
+    drawer={drawer}
     stages={stages}
     activeStageId={task ? activeId : null}
     files={wbFiles}
@@ -282,11 +357,11 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
         <div className="auto-live-status" role="status">
           <p className="wb-live-head">
             {running && <span className="wb-live-dot" aria-hidden="true" />}
-            <b>{running ? '运行中' : display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {stepNumber} / 9 步 · {toolSteps} 步操作
+            <b>{running ? '运行中' : display?.text}</b>{display?.lifecycle ? `（生命周期：${display.lifecycle}）` : ''} · 第 {stepNumber} / 9 步 · {activeTitle}
             <Badge tone="idle" title={STAGE_NOTE}>按事件归纳</Badge>
           </p>
-          {display?.caption && <p className="ui-help">{display.caption}</p>}
-          {latestNote && <p className="ui-help">{running ? '正在：' : '最近进度：'}{latestNote}</p>}
+          {latestNote && <p className="auto-live-now">{running ? '正在：' : '最近进度：'}{latestNote}</p>}
+          <p className="ui-help">已执行 {toolSteps} 步操作{display?.caption ? ` · ${display.caption}` : ''}</p>
         </div>
 
         {safety && <div className="ui-callout tone-bad" role="alert"><Icon name="shield" />
@@ -345,15 +420,6 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
 
         <FiguresView items={files?.items ?? []} load={(file, signal) => api.fileBlob(task.id, { source: file.source, path: file.path }, signal)} />
 
-        <CandidateCard task={task} events={events} />
-
-        <dl className="flow-summary">
-          {paperTitle && paperTitle.projectId === projectId && <div><dt>论文</dt><dd>{paperTitle.name}</dd></div>}
-          <div><dt>目标</dt><dd>{task.objective}</dd></div>
-          <div><dt>模型</dt><dd>{snapshotProfile ? connectionLabel(snapshotProfile) : snapshotProfileId || '—'}</dd></div>
-          <div><dt>任务</dt><dd className="ui-mono">{task.id}</dd></div>
-        </dl>
-
         {!terminal && !hasOutcome && <div className="ui-form auto-compose">
           <label className="ui-field"><span className="ui-field-label">追加指令</span>
             <textarea rows={2} value={message} onChange={e => setMessage(e.target.value)} placeholder="例如：先用小数据集跑通，再扩大规模" />
@@ -363,45 +429,6 @@ export default function TaskPage({ taskId, api = defaultApi, papers = defaultPap
           </div>
         </div>}
 
-        <Disclosure variant="card" title="详细记录">
-          {task.report != null && <ReportDetails report={task.report} />}
-          <ProgressNotes events={events} />
-          <UsageView usage={(task.usage ?? {}) as Record<string, unknown>} limits={task.config_snapshot?.limits as unknown as Record<string, unknown> | undefined} budgetExhausted={budgetReason} />
-
-          <SpecialistCalls events={events} task={task} configured={task.config_snapshot?.specialists?.length ?? 0} />
-
-          {taskSkills.length > 0 && <Card>
-            <CardHeader icon="spark" title="本任务固定的 Skills 快照" subtitle="运行期间固定使用以下版本，不随后续更新变化。" />
-            <div className="ui-card-section">
-              <ul className="ui-list">
-                {taskSkills.map((id, i) => {
-                  const skill = skillSnapshot[i];
-                  return <li key={id} className="ui-row">
-                    <span className="ui-row-main"><span className="ui-row-title">{skill?.name ?? id}</span>
-                      <span className="ui-row-sub ui-mono">{id}</span></span>
-                    <span className="ui-row-end">{skill ? <Badge>{skill.version}</Badge> : <Badge tone="idle">版本未知</Badge>}</span>
-                  </li>;
-                })}
-              </ul>
-            </div>
-          </Card>}
-
-        <Disclosure variant="card" title="任务配置快照">
-          <pre className="ui-code">{pretty(task.config_snapshot)}</pre>
-        </Disclosure>
-        <Disclosure variant="card" title={`原始事件流（${events.length}）`}>
-          {events.length === 0 && <p className="ui-help">等待任务事件…</p>}
-          {events.length > 0 && <ul className="ui-list auto-events" aria-label="任务事件">
-            {events.map(event => <li key={event.sequence} className="ui-row auto-event">
-              <span className="ui-row-main">
-                <span className="ui-row-title ui-mono">#{event.sequence} {event.type}</span>
-                <span className="ui-row-sub"><time>{event.created_at}</time></span>
-              </span>
-              <Disclosure variant="sub" title="payload"><pre className="ui-code">{pretty(event.payload)}</pre></Disclosure>
-            </li>)}
-          </ul>}
-        </Disclosure>
-        </Disclosure>
       </>}
     </StepFrame>
   </Workbench></div>;

@@ -131,7 +131,8 @@ test('task page continues the nine-step timeline in the full-bleed layout', asyn
   assert.doesNotMatch(page, /项目任务/);
   assert.doesNotMatch(page, /export \{ errorDetail \}/);
   assert.match(page, /auto-live-status/);
-  assert.match(page, /title="详细记录"/);
+  assert.match(page, /drawer=\{drawer\}/);
+  assert.match(page, /onOpenItem=/);
   // Same frame as the setup steps: bare centre column, the stage as the step title, controls in the pinned footer.
   assert.match(page, /\n\s+bareLive\n/);
   assert.match(page, /<StepFrame title=\{task \? activeTitle/);
@@ -149,4 +150,15 @@ test('at 860px and below the app rail is capped like the plain layout so the for
   assert.match(appRail[0], /overflow-y:\s*auto/);
   assert.match(media860[0], /grid-template-areas:\s*"rail"\s*"head"\s*"viewer"\s*"files"/);
   assert.doesNotMatch(media860[0], /\.wb-rail-head\s*\{[^}]*position:\s*static/, 'the rail head stays sticky inside the capped rail');
+});
+
+test('rail sub-steps open the drawer when the page asks for it, and stage heads still expand', async () => {
+  const wb = await readFile(new URL('../src/ui/workbench/Workbench.tsx', import.meta.url), 'utf8');
+  assert.match(wb, /const row = onOpenItem\n\s+\? <button[^\n]*onClick=\{\(\) => onOpenItem\(stageId, item\)\}/);
+  assert.match(wb, /props\.onOpenStage\?\.\(stage\.id\); if \(hasItems/);
+  assert.match(wb, /\{props\.drawer && <Drawer\b/);
+  const drawer = await readFile(new URL('../src/ui/workbench/Drawer.tsx', import.meta.url), 'utf8');
+  assert.match(drawer, /e\.key === 'Escape'/);
+  assert.match(drawer, /wb-drawer-scrim[^\n]*onClick/);
+  assert.match(drawer, /opener\?\.focus/);
 });

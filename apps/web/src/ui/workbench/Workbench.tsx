@@ -2,10 +2,12 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from '
 import { Icon, type IconName } from '../Icon';
 import type { Tone } from '../Card';
 import { CopyButton } from '../Controls';
+import { Drawer, type WbDrawer } from './Drawer';
 import { ancestors, baseName, buildTree, countFolders, fileTone, filterFiles, formatBytes, parseCsv, previewKind, type WbFile, type WbFolderNode, type WbNode, type WbTag } from './tree';
 import './workbench.css';
 
 export type { WbFile, WbTag } from './tree';
+export type { WbDrawer } from './Drawer';
 
 // Three-column task workbench (shared by 新建任务 / 任务详情 / 自主实验):
 //   left   stage timeline — each stage collapses to a header, expands to its sub-steps
@@ -69,6 +71,14 @@ export interface WorkbenchProps {
   filesEmpty?: string;
   onRefreshFiles?: () => void;
   loadFile: (file: WbFile, signal: AbortSignal) => Promise<WbContent>;
+  /** Clicking a sub-step calls this instead of opening its file (the page shows it in the drawer). */
+  onOpenItem?: (stageId: string, item: WbStageItem) => void;
+  /** Called when a stage head is clicked, in addition to expanding or collapsing it. */
+  onOpenStage?: (stageId: string) => void;
+  /** Sub-step shown in the drawer; its row stays highlighted. */
+  selectedItemId?: string | null;
+  /** Right-side drawer over the files column; null or absent when closed. */
+  drawer?: WbDrawer | null;
   /** Live view (the page's own controls). */
   children: ReactNode;
 }
@@ -193,16 +203,19 @@ export function Workbench(props: WorkbenchProps) {
   function toggleItem(key: string) {
     setOpenItems(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   }
-  function renderItem(key: string, item: WbStageItem) {
+  function renderItem(stageId: string, key: string, item: WbStageItem) {
     const target = item.openPath && byPath.has(item.openPath) ? item.openPath : null;
+    const onOpenItem = props.onOpenItem;
     const kids = item.children ?? [];
     const childOpen = openItems.has(key);
     const inner = <>
       <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
       <span className="wb-sub-text"><span className="wb-sub-label">{item.label}</span>{(item.detail || item.time) && <small>{item.detail}{item.detail && item.time ? ' · ' : ''}{item.time && <time>{item.time}</time>}</small>}</span>
-      {target && <Icon name="chevron-right" size={12} className="wb-sub-go" />}
+      {(target || onOpenItem) && <Icon name="chevron-right" size={12} className="wb-sub-go" />}
     </>;
-    const row = target
+    const row = onOpenItem
+      ? <button type="button" className={`wb-sub${props.selectedItemId === item.id ? ' is-on' : ''}`} aria-haspopup="dialog" onClick={() => onOpenItem(stageId, item)}>{inner}</button>
+      : target
       ? <button type="button" className={`wb-sub${active === target ? ' is-on' : ''}`} onClick={() => open(target)} title={`打开 ${baseName(target)}`}>{inner}</button>
       : kids.length > 0
         ? <button type="button" className="wb-sub" onClick={() => toggleItem(key)}>{inner}</button>
@@ -214,7 +227,7 @@ export function Workbench(props: WorkbenchProps) {
         <button type="button" className={`wb-stage-toggle wb-item-toggle${childOpen ? ' is-open' : ''}`} aria-expanded={childOpen}
           aria-label={`${childOpen ? '收起' : '展开'}「${item.label}」的 ${kids.length} 个子步骤`} onClick={() => toggleItem(key)}><Icon name="chevron-down" size={13} /></button>
       </div>
-      {childOpen && <ul className="wb-substeps wb-children">{kids.map(kid => renderItem(`${key}/${kid.id}`, kid))}</ul>}
+      {childOpen && <ul className="wb-substeps wb-children">{kids.map(kid => renderItem(stageId, `${key}/${kid.id}`, kid))}</ul>}
     </li>;
   }
 
@@ -226,7 +239,7 @@ export function Workbench(props: WorkbenchProps) {
   const bar = bare ? undefined : props.progressBar;
   const barDone = bar ? Math.max(0, Math.min(bar.done, bar.total)) : 0;
 
-  return <div className={`wb${props.railHead ? ' is-app' : ''}`}>
+  return <div className={`wb${props.railHead ? ' is-app' : ''}${props.drawer ? ' has-drawer' : ''}`}>
     <header className="wb-head">
       <div className="wb-head-main">
         {props.eyebrow && <p className="wb-eyebrow">{props.eyebrow}</p>}
@@ -255,7 +268,7 @@ export function Workbench(props: WorkbenchProps) {
               <div className="wb-stage-row">
                 <button type="button" className="wb-stage-head" aria-current={isActive ? 'step' : undefined}
                   disabled={stage.disabled || props.stagesBusy || (!props.onSelectStage && !hasItems)}
-                  onClick={() => { if (props.onSelectStage) props.onSelectStage(stage.id); if (hasItems && (!props.onSelectStage || !expanded)) toggleStage(stage.id); }}>
+                  onClick={() => { if (props.onSelectStage) props.onSelectStage(stage.id); props.onOpenStage?.(stage.id); if (hasItems && (!props.onSelectStage || !expanded)) toggleStage(stage.id); }}>
                   <StageMarker mark={stage.mark} index={i} />
                   <span className="wb-stage-text">
                     <span className="wb-stage-title"><span className="wb-stage-num" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span><b>{stage.title}</b></span>
@@ -265,7 +278,7 @@ export function Workbench(props: WorkbenchProps) {
                 {hasItems && <button type="button" className={`wb-stage-toggle${expanded ? ' is-open' : ''}`} aria-expanded={expanded} aria-label={`${expanded ? '收起' : '展开'}「${stage.title}」的子步骤`} onClick={() => toggleStage(stage.id)}><Icon name="chevron-down" size={13} /></button>}
               </div>
               {expanded && <ul className="wb-substeps">
-                {stage.items!.map(item => renderItem(`${stage.id}/${item.id}`, item))}
+                {stage.items!.map(item => renderItem(stage.id, `${stage.id}/${item.id}`, item))}
               </ul>}
               </li>
             </Fragment>;
@@ -339,6 +352,10 @@ export function Workbench(props: WorkbenchProps) {
         {props.filesNote && <div className="wb-files-note">{props.filesNote}</div>}
       </aside>
     </div>
+    {props.drawer && <Drawer key={props.drawer.title} drawer={props.drawer}
+      footer={props.drawer.openPath && byPath.has(props.drawer.openPath)
+        ? <button type="button" className="btn btn-secondary" onClick={() => { const path = props.drawer!.openPath!; props.drawer!.onClose(); open(path); }}><Icon name="doc" size={14} />在中间栏打开文件</button>
+        : undefined} />}
   </div>;
 }
 

@@ -102,3 +102,22 @@
   .auto-conclusion-grid { grid-template-columns: minmax(0, 1fr); }
   .auto-obs-cmd { max-width: 220px; }
 }
+
+/* ---------- 实时卡：中间栏顶部，当前在做什么 ---------- */
+.auto-live-status {
+  display: grid; justify-items: center; gap: 8px; padding: 26px 22px; text-align: center;
+  border: 1.5px dashed var(--line); border-radius: 14px;
+}
+.auto-live-status .wb-live-head { justify-content: center; flex-wrap: wrap; margin: 0; color: var(--accent-text); font: 500 13px/1.6 var(--mono); }
+.auto-live-status .wb-live-head b { font-weight: 600; }
+.auto-live-now { margin: 0; max-width: 64ch; font-size: 17px; font-weight: 550; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+.auto-live-status .ui-help { margin: 0; }
+
+/* ---------- 抽屉内容 ---------- */
+.auto-drawer-block { display: grid; gap: 6px; min-width: 0; }
+.auto-drawer-label { color: var(--muted); font-size: 12px; letter-spacing: 0.04em; }
+.auto-drawer-block .ui-code { margin: 0; max-height: 420px; overflow: auto; }
+.auto-drawer-note { margin: 0; }
+.auto-drawer-text { margin: 0; font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.auto-drawer-sha { overflow-wrap: anywhere; font-size: 12px; }
+.wb-drawer-body .flow-summary { margin: 0; }

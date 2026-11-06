@@ -293,3 +293,32 @@ button.wb-tab.wb-tab-bar { max-width: 360px; gap: 9px; }
 @media (prefers-reduced-motion: reduce) {
   .wb-live-dot, .wb-status-dot, .wb-mark-core, .wb-substeps, .wb-tree-skel span { animation: none !important; }
 }
+
+/* ---------- drawer: over the files column, the rest dimmed ---------- */
+.wb { position: relative; }
+.wb-drawer-scrim {
+  position: absolute; inset: 0; z-index: 20; border-radius: 16px;
+  background: color-mix(in srgb, var(--text) 18%, transparent); animation: wb-fade 160ms var(--ease);
+}
+.wb-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 21; width: min(520px, 92%);
+  display: flex; flex-direction: column; min-height: 0; outline: none;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--text) 18%, transparent);
+  animation: wb-slide-in 200ms var(--ease);
+}
+.wb-drawer-head { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 14px 14px 12px 18px; border-bottom: 1px solid var(--line-soft); }
+.wb-drawer-chip {
+  flex: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 3px 10px; border-radius: 999px; background: var(--accent-soft, var(--tone-soft)); color: var(--accent-text);
+  font: 500 12px/1.5 var(--mono);
+}
+.wb-drawer-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14.5px; font-weight: 600; }
+.wb-drawer-close { flex: none; }
+/* A flex column, not a grid: grid rows would squeeze cards with overflow: hidden to nothing when the content is taller than the drawer. */
+.wb-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.wb-drawer-body > * { flex: none; }
+.wb-drawer-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line-soft); }
+@keyframes wb-slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes wb-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .wb-drawer, .wb-drawer-scrim { animation: none; } }

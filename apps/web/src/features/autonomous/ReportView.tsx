@@ -18,7 +18,7 @@ export function ReportView({ report, onOpenEvent }: { report: unknown; onOpenEve
   </div>;
 }
 
-/** 结论性内容：结局在前、结论在后，然后是指标与证据完备性。 */
+/** 结论性内容：结局在前、结论在后，然后是指标。证据完备性在第 08 步的抽屉里（ReportEvidence）。 */
 export function ReportSummary({ report }: { report: unknown }) {
   const parsed = parseReport(report);
   if (!parsed) {
@@ -36,8 +36,13 @@ export function ReportSummary({ report }: { report: unknown }) {
     <OutcomeCard report={parsed} />
     <ConclusionCard report={parsed} />
     <MetricsCard report={parsed} />
-    <EvidenceCard report={parsed} />
   </div>;
+}
+
+/** 证据完备性（程序判定），放在「候选与复核」的抽屉里。 */
+export function ReportEvidence({ report }: { report: unknown }) {
+  const parsed = parseReport(report);
+  return parsed ? <EvidenceCard report={parsed} /> : null;
 }
 
 /** 过程性内容：完成门槛、逐条执行观测、模型叙述与局限。 */

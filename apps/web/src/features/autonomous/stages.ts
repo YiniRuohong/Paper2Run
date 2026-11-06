@@ -72,7 +72,7 @@ export function toolLabel(name: string, args: Record<string, unknown>): string {
 }
 
 type Label = { label: string; detail: string | null; tone?: WbStageItem['tone'] };
-function eventLabel(e: AutonomousEvent): Label | null {
+export function eventLabel(e: AutonomousEvent): Label | null {
   const p = rec(e.payload);
   switch (e.type) {
     case 'task_created': {
