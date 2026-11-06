@@ -7,6 +7,7 @@ import shutil
 
 from .evidence import (MAX_FILE, artifact_root, link_or_reparse, current_round, ensure_not_under_review, entrypoint_code,
                        entrypoint_executions, round_artifacts, safe_name, store_candidate)
+from . import report_doc
 from .security import digest, fail
 
 REQUIRED_KINDS = ("code", "environment", "data", "result")
@@ -68,11 +69,11 @@ def _fetch_logs(service, target, job_id):
     return service.profiles.clean("".join(chunks).encode()[:MAX_FILE].decode(errors="ignore"), bounded=False)
 
 
-def freeze(service, target, task_id, summary):
+def freeze(service, target, task_id, summary, document=None):
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)
         ensure_not_under_review(row)
-        missing = gate(db, row)
+        missing = gate(db, row) + report_doc.gate(document, round_artifacts(row))
         if missing:
             fail("CANDIDATE_INCOMPLETE", "missing: " + "; ".join(missing), 409)
         run_fact = qualifying_run(db, row)
@@ -86,8 +87,10 @@ def freeze(service, target, task_id, summary):
            "sequence": run_fact["launch_sequence"]}
     if not isinstance(run["job_id"], str) or not run["job_id"].isalnum():
         fail("CANDIDATE_INCOMPLETE", "entrypoint run has no attributable job", 409)
+    frozen_document = report_doc.build(document, artifacts, service.profiles.clean)
     snapshot = digest({"protocol_sha256": protocol_sha, "round": round_, "run": run,
-                       "artifacts": [{k: a[k] for k in ("name", "kind", "sha256")} for a in artifacts]})
+                       "artifacts": [{k: a[k] for k in ("name", "kind", "sha256")} for a in artifacts],
+                       "document_sha256": frozen_document["sha256"]})
     base = task_root / "candidates" / snapshot
     for item in artifacts:
         name = safe_name(item["name"])
@@ -98,6 +101,7 @@ def freeze(service, target, task_id, summary):
     (base / "protocol.json").write_text(json.dumps(frozen_protocol, ensure_ascii=False, sort_keys=True))
     candidate = {"snapshot_sha256": snapshot, "round": round_, "protocol_sha256": protocol_sha, "protocol": frozen_protocol,
                  "artifacts": artifacts, "run": run, "summary": service.profiles.clean(summary),
+                 "document": frozen_document,
                  "review_status": "pending", "attempts": 0}
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)

@@ -26,6 +26,7 @@ import pytest
 from p2r_api.main import create_app
 from p2r_api.auth import IdentityService, csrf_token
 from p2r_artifacts.store import LocalArtifactStore
+from p2r_orchestration.autonomous import report_doc
 from p2r_persistence.models import UserRecord, ProjectRecord, MembershipRecord, PaperRecord, PaperVersionRecord
 from p2r_persistence.autonomous import AutonomousTaskRecord as Task
 _spec = importlib.util.spec_from_file_location("autonomous_acceptance", Path(__file__).resolve().parents[3] / "tools/autonomous_acceptance.py")
@@ -322,7 +323,14 @@ print("actual execution complete")
         [("execute", {"command": "python3 main.py", "timeout_seconds": 20})],
         [("register_artifact", {"path": name, "name": name, "kind": kind}) for name, kind in
             [("environment.json", "environment"), ("data.json", "data"), ("predictions.json", "result"), ("labels.json", "result")]],
-        [("submit_candidate", {"summary": "Actual controlled regression execution; no independent research evidence."})],
+        [("write", {"path": "plot.py", "content": "print('plot')"}),
+         ("write", {"path": "fig.svg", "content": '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'})],
+        [("register_artifact", {"path": "plot.py", "name": "plot.py", "kind": "analysis"}),
+         ("register_artifact", {"path": "fig.svg", "name": "fig.svg", "kind": "figure", "caption": "controlled figure",
+                                "derived_from": ["plot.py", "predictions.json"]})],
+        [("submit_candidate", {"summary": "Actual controlled regression execution; no independent research evidence.",
+                               "report": {**{name: f"{name}." for name in report_doc.SECTIONS},
+                                          "results": "{{figure:fig.svg}}"}})],
         [],
         # Independent review session (same scripted provider, fresh SDK session).
         [("submit_review", {"verdict": "pass", "findings": []})],
@@ -377,7 +385,7 @@ print("actual execution complete")
         assert task["candidate"]["review_status"] == "pass" and task["reviews"][0]["verdict"] == "pass"
         assert task["report"]["evaluation"]["metrics"]["mae"] == .5
         assert task["report"]["verdict"] == "not_comparable"
-        assert task["usage"]["calls"] == 9
+        assert task["usage"]["calls"] == 11
         assert "测试正文" in json.dumps(captured[0], ensure_ascii=False)
         journal = client.get(BASE + f"/tasks/{task_id}/events").json()["data"]
         assert any(e["type"] == "artifact_frozen" for e in journal["events"])

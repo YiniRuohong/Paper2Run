@@ -14,6 +14,7 @@ from p2r_evaluation.reference_verification import verify_reference_values
 from p2r_evaluation.safe_read import is_link_or_reparse
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
 from p2r_orchestration.errors import ServiceError
+from . import report_doc
 from .security import fail, digest
 
 _lstat = os.lstat  # seam: tests simulate Windows reparse points on POSIX
@@ -90,6 +91,7 @@ def register(service, target, task_id, args):
             fail("ARTIFACT_IMMUTABLE", "evidence is immutable within a protocol version and repair round", 409)
         if len(scope) >= 256:
             fail("ARTIFACT_LIMIT", "round artifact count exhausted", 409)
+        figure = report_doc.figure_fields(args, scope) if args["kind"] == "figure" else None
     destination = root / name
     root.mkdir(parents=True, exist_ok=True)
     if not destination.resolve().is_relative_to(root.resolve()) or destination.is_symlink():
@@ -108,6 +110,8 @@ def register(service, target, task_id, args):
             "bytes": len(raw), "protocol_sha256": version, "source_path": args["path"]}
     if round_ is not None:
         info["round"] = round_
+    if figure:
+        info.update(figure)
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)
         ensure_not_under_review(row)
@@ -297,6 +301,8 @@ def report(service, db, row, narrative="", outcome=None, reason=None, outcome_sn
               "outcome_snapshot_sha256": outcome_snapshot,
               "candidate": candidate, "reviews": harness.get("reviews", []),
               "model_narrative": service.profiles.clean(narrative),
+              # Agent-written report document (model interpretation) of the deciding candidate; None for older tasks.
+              "document": (candidate or {}).get("document"),
               "evaluation": calculated, "artifacts": artifacts, "missing_artifacts": missing,
               "missing_evidence_kinds": missing_kinds, "protocol": protocol,
               "reference_values": row.reference_values_json,

@@ -4,7 +4,7 @@ import json
 import pytest
 from sqlalchemy import select
 
-from p2r_orchestration.autonomous import candidate, evidence
+from p2r_orchestration.autonomous import candidate, evidence, report_doc
 from p2r_orchestration.autonomous.tools import SYSTEM_PROMPT, TOOLS
 from p2r_orchestration.autonomous.worker import dispatch
 from p2r_orchestration.errors import ServiceError
@@ -42,13 +42,30 @@ def record_tool_result(service, task_id, name, result):
         db.commit()
 
 
-def complete(service, target, task_id):
+REPORT = {name: f"{name} 内容" for name in report_doc.SECTIONS}
+REPORT["results"] = "准确率见下图。\n\n{{figure:fig.png}}\n"
+
+
+def register_figure(service, target, task_id, name="fig.png", derived_from=("plot.py", "predictions.json"), **extra):
+    target.write(name, f"image {name}")
+    args = {"path": name, "name": name, "kind": "figure", "caption": "测试准确率对比", "derived_from": list(derived_from)}
+    return dispatch(service, target, task_id, "register_artifact", {**args, **extra}, f"r-{name}")
+
+
+def add_figure(service, target, task_id):
+    register(service, target, task_id, "plot.py", "analysis")
+    register_figure(service, target, task_id)
+
+
+def complete(service, target, task_id, figure=True):
     for name, kind in KINDS[:1]:
         register(service, target, task_id, name, kind)
     dispatch_run = run(service, target, task_id, "formal")
     record_tool_result(service, task_id, "execute", dispatch_run)
     for name, kind in KINDS[1:]:
         register(service, target, task_id, name, kind)
+    if figure:
+        add_figure(service, target, task_id)
 
 
 def gate(service, task_id):
@@ -56,8 +73,8 @@ def gate(service, task_id):
         return candidate.gate(db, service.row(db, task_id))
 
 
-def submit(service, target, task_id, summary="done"):
-    return dispatch(service, target, task_id, "submit_candidate", {"summary": summary}, "submit")
+def submit(service, target, task_id, summary="done", report=REPORT):
+    return dispatch(service, target, task_id, "submit_candidate", {"summary": summary, "report": report}, "submit")
 
 
 def test_gate_lists_missing_items(service):
@@ -109,7 +126,9 @@ def test_submit_candidate_freezes_copies(service):
         snap = row.harness_json["candidate"]
         assert snap["snapshot_sha256"] == result["snapshot_sha256"]
         assert snap["review_status"] == "pending" and snap["attempts"] == 0 and snap["summary"] == "my summary"
-        assert {a["kind"] for a in snap["artifacts"]} == {"code", "environment", "data", "result"}
+        assert {a["kind"] for a in snap["artifacts"]} == {"code", "environment", "data", "result", "analysis", "figure"}
+        assert snap["document"]["sections"]["results"] == REPORT["results"]
+        assert [f["name"] for f in snap["document"]["figures"]] == ["fig.png"]
         base = service.task_root(task_id) / "candidates" / snap["snapshot_sha256"]
         for item in snap["artifacts"]:
             raw = (base / "artifacts" / item["name"]).read_bytes()
@@ -326,3 +345,57 @@ def test_initial_prompt_states_max_repair_rounds(service):
     service.launch(task_id)
     service.workers[task_id]["thread"].join(timeout=10)
     assert json.loads(seen[0])["max_repair_rounds"] == 3
+
+
+def test_figure_needs_caption_and_frozen_provenance(service):
+    task_id, target = running(service)
+    register(service, target, task_id, "predictions.json", "result")
+    register(service, target, task_id, "plot.py", "analysis")
+    cases = [({"caption": "   "}, "caption"), ({"derived_from": []}, "derived_from"),
+             ({"derived_from": ["missing.json"]}, "missing.json"),
+             ({"derived_from": ["predictions.json"]}, "plotting script"),
+             ({"derived_from": ["plot.py"]}, "plotted input")]
+    for extra, message in cases:
+        with pytest.raises(ServiceError) as caught:
+            register_figure(service, target, task_id, **extra)
+        assert caught.value.code == "INVALID_ARTIFACT" and message in str(caught.value)
+    with pytest.raises(ServiceError) as caught:
+        register_figure(service, target, task_id, name="fig.txt")
+    assert "figure artifacts must be" in str(caught.value)
+    info = register_figure(service, target, task_id)
+    assert info["caption"] == "测试准确率对比" and info["derived_from"] == ["plot.py", "predictions.json"]
+
+
+def test_submit_requires_report_with_embedded_figure(service):
+    task_id, target = running(service)
+    complete(service, target, task_id, figure=False)
+    with pytest.raises(ValueError, match="invalid tool"):  # report is a required argument
+        dispatch(service, target, task_id, "submit_candidate", {"summary": "done"}, "submit")
+    with service.sessions() as db:
+        assert "report document" in report_doc.gate(None, evidence.round_artifacts(service.row(db, task_id)))
+    with pytest.raises(ServiceError) as caught:
+        submit(service, target, task_id)
+    assert "figure artifact" in str(caught.value)
+    add_figure(service, target, task_id)
+    for report, message in [({**REPORT, "discussion": " "}, "report section discussion"),
+                            ({**REPORT, "method": "x" * 16001}, "report section method"),
+                            ({**REPORT, "results": "无图"}, "figure embedded in the report"),
+                            ({**REPORT, "results": "{{figure:plot.py}}"}, "figure reference plot.py")]:
+        with pytest.raises(ServiceError) as caught:
+            submit(service, target, task_id, report=report)
+        assert caught.value.code == "CANDIDATE_INCOMPLETE" and message in str(caught.value)
+    assert submit(service, target, task_id)["status"] == "candidate_submitted"
+
+
+def test_report_carries_the_frozen_document(service):
+    task_id, target = running(service)
+    complete(service, target, task_id)
+    submit(service, target, task_id)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        result = evidence.report(service, db, row, "narrative")
+    document = result["document"]
+    assert document["author"] == "model" and document["schema_version"] == report_doc.SCHEMA_VERSION
+    figure = document["figures"][0]
+    assert figure["number"] == 1 and figure["caption"] == "测试准确率对比"
+    assert figure["derived_from"] == ["plot.py", "predictions.json"] and len(figure["sha256"]) == 64

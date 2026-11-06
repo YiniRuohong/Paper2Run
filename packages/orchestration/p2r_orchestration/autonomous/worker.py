@@ -111,7 +111,7 @@ def dispatch(service, target, task_id, name, args, request_id):
     if name == "register_artifact":
         return evidence.register(service, target, task_id, args)
     if name == "submit_candidate":
-        candidate = freeze(service, target, task_id, args["summary"])
+        candidate = freeze(service, target, task_id, args["summary"], args.get("report"))
         return {"status": "candidate_submitted", "snapshot_sha256": candidate["snapshot_sha256"],
                 "round": candidate["round"],
                 "next": "End this turn. Evaluation and an independent review run after the turn; findings, if any, arrive in the next message."}

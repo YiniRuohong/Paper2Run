@@ -11,6 +11,7 @@ from p2r_orchestration.autonomous.security import fail
 from p2r_orchestration.errors import ServiceError
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
 
+from .test_candidate import REPORT
 from .test_service import Bridge, Target, create, protocol, service, wait  # noqa: F401
 
 FILES = [("env.json", "environment", "{}"), ("data.json", "data", "{}"),
@@ -30,7 +31,12 @@ def work(tag="r0", files=FILES):
     for name, kind, content in files:
         calls += [("write", {"path": name, "content": content}),
                   ("register_artifact", {"path": name, "name": name, "kind": kind})]
-    return calls + [("submit_candidate", {"summary": f"candidate {tag}"})]
+    calls += [("write", {"path": "plot.py", "content": "plot"}),
+              ("register_artifact", {"path": "plot.py", "name": "plot.py", "kind": "analysis"}),
+              ("write", {"path": "fig.png", "content": f"image {tag}"}),
+              ("register_artifact", {"path": "fig.png", "name": "fig.png", "kind": "figure", "caption": "对比",
+                                     "derived_from": ["plot.py", "predictions.json"]})]
+    return calls + [("submit_candidate", {"summary": f"candidate {tag}", "report": REPORT})]
 
 
 class Main(Bridge):
