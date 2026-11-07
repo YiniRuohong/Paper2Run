@@ -41,3 +41,10 @@ _archive/
 apps/desktop/release/
 apps/desktop/.runtime/
 apps/desktop/.cache/
+
+# Deliverables and media kept out of git (installers, roadshow files, pitch-video project, raw logo)
+apps/desktop/release-win-fixed/
+交付物/
+PPT/
+Ali-Hackthon/
+logo/
