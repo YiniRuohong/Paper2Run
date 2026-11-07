@@ -2,7 +2,7 @@
 
 Every ``p2r_*`` package lives in exactly one source root that is declared in
 ``pyproject.toml`` (setuptools discovery + pytest pythonpath) and mirrored by
-``scripts/launch.py``. Data files shipped inside packages are declared.
+``scripts/launch.py``.
 """
 from __future__ import annotations
 
@@ -40,9 +40,3 @@ def test_no_single_file_modules_or_legacy_service_dirs():
     cfg = _pyproject()["tool"]["setuptools"]
     assert "py-modules" not in cfg
     assert sorted(p.name for p in (PROJECT_ROOT / "services").iterdir() if p.is_dir()) == ["api"]
-
-
-def test_runner_dataset_is_packaged():
-    data = _pyproject()["tool"]["setuptools"]["package-data"]["p2r_runner"]
-    assert "data/*.csv" in data
-    assert (PROJECT_ROOT / "packages/runner/p2r_runner/data/real_cpu_baseline_v1.csv").is_file()

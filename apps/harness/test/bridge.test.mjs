@@ -106,6 +106,15 @@ test('token budget stops extra provider request with queued steer', async t => {
     await b.done;
   }
 });
+test('absent token limit means no token cap', async t => {
+  const s = await server(t, (_body, res) => reply(res, false, 12));
+  const c = config(await temp(), s.url); delete c.limits.max_model_tokens;
+  assert.doesNotThrow(() => validateStart({ type: 'start', prompt: 'hi', config: structuredClone(c) }));
+  assert.doesNotThrow(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: { ...c.limits, max_model_tokens: null } } }));
+  assert.throws(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: { ...c.limits, max_model_tokens: -1 } } }));
+  const b = bridge(); b.send({ type: 'start', config: c, prompt: 'hi' });
+  assert.equal((await b.wait(m => m.type === 'result' || m.type === 'error')).type, 'result'); await b.done;
+});
 test('zero budget blocks even first request', async t => {
   const s = await server(t, (_b, res) => reply(res)); const c = config(await temp(), s.url); c.limits.max_model_calls = 0;
   const b = bridge(); b.send({ type: 'start', config: c, prompt: 'hi' });
@@ -404,4 +413,17 @@ test('pending tool abort, EOF, SIGTERM and wall deadline settle', async t => {
     const err = await b.wait(m => m.type === 'error'); assert.equal(err.code, mode === 'wall' ? 'wall_time_exceeded' : mode === 'eof' ? 'stdin_eof' : 'aborted');
     await b.done; assert.equal(s.calls(), 1);
   }
+});
+
+test('no limits at all: calls, tokens and wall time may all be absent or null', async t => {
+  const s = await server(t, (_body, res) => reply(res, false, 12));
+  const c = config(await temp(), s.url);
+  delete c.limits.max_model_calls; delete c.limits.max_model_tokens; delete c.limits.wall_time_seconds;
+  assert.doesNotThrow(() => validateStart({ type: 'start', prompt: 'hi', config: structuredClone(c) }));
+  assert.doesNotThrow(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: { max_model_calls: null, wall_time_seconds: null } } }));
+  assert.doesNotThrow(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: undefined } }));
+  assert.throws(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: { max_model_calls: -1 } } }));
+  assert.throws(() => validateStart({ type: 'start', prompt: 'hi', config: { ...structuredClone(c), limits: { wall_time_seconds: 0 } } }));
+  const b = bridge(); b.send({ type: 'start', config: c, prompt: 'hi' });
+  assert.equal((await b.wait(m => m.type === 'result' || m.type === 'error')).type, 'result'); await b.done;
 });

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { GuidedApi } from '../../api-client/guided';
+import type { PapersApi } from '../../api-client/papers';
 import { getDesktop } from '../../desktop';
 import type { Health } from '../../shell/hooks';
 import { StatusWord } from '../../ui/Card';
@@ -20,7 +20,7 @@ const THEME_OPTIONS = (['system', 'light', 'dark'] as const).map(value => ({ val
 const HEALTH = { up: { text: '已连接', tone: 'ok' }, down: { text: '未连接', tone: 'bad' }, checking: { text: '正在检查', tone: 'idle' } } as const;
 const PLATFORM: Record<string, string> = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
 
-export default function Settings({ health, host, api }: { health: Health; host: string; api: GuidedApi }) {
+export default function Settings({ health, host, api }: { health: Health; host: string; api: PapersApi }) {
   const { pref, theme, setPref } = useTheme();
   const desktop = getDesktop();
   const address = desktop?.backendUrl?.replace(/\/+$/, '') || `${window.location.protocol}//${host}`;
@@ -40,10 +40,6 @@ export default function Settings({ health, host, api }: { health: Health; host: 
 
     <RemoteSettings />
 
-    <Group title="自主实验" help="模型配置仅保存凭据引用；API Key 在自主实验页的当前内存中输入，不写入浏览器存储。SSH 使用本机预配置别名，实际连接与 GPU 能力以任务事件为准。">
-      <Row label="模型、SSH 与科研 Skills" hint="配置预算、查看能力版本、导入或启用 Skills。"><a className="btn btn-secondary btn-sm" href="#/autonomous">打开自主实验</a></Row>
-    </Group>
-
     {desktop && <Group title="桌面应用">
       <Row label="版本"><span className="ui-mono">{desktop.appVersion}</span><span className="settings-muted">{PLATFORM[desktop.platform] ?? desktop.platform}</span></Row>
       <PathRow label="数据目录" path={desktop.dataDir} onOpen={() => desktop.openPath('data')} />
@@ -52,8 +48,8 @@ export default function Settings({ health, host, api }: { health: Health; host: 
 
     <Group title="关于">
       <div className="settings-about">
-        <p><b>Paper2Run</b> 把一篇论文变成可执行、独立评估的实验：上传论文 → 模型抽取实验方案 → 生成代码 → 本地沙箱或内置 CPU 基线运行 → 独立评估 → 报告与导出。</p>
-        <p className="settings-muted">全部在本机运行；不是“复现任意论文”的通用产品，也不做 GPU 级复现承诺。证据等级由程序判定，不由模型给出。</p>
+        <p><b>Paper2Run</b> 把一篇论文变成可执行、独立评估的实验：上传论文 → AI 规划并生成代码 → 隔离环境运行 → 冻结证据 → 独立评估 → 报告与导出。</p>
+        <p className="settings-muted">结论由程序判定，不由模型给出；不可比较时报告会明说不可比较。全部在本机运行，SSH 远端能力以任务事件为准。</p>
       </div>
     </Group>
   </div>;

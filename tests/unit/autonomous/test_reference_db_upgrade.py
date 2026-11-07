@@ -169,7 +169,7 @@ def test_partial_upgrade_preserves_existing_reference_data(legacy_db, present, s
             assert getattr(task, REFERENCE_COLUMNS[index].name) == expected[index]
 
 
-@pytest.mark.parametrize("factory_name", ["create_app", "create_demo_app"])
+@pytest.mark.parametrize("factory_name", ["create_app", "create_local_app"])
 def test_api_and_desktop_factory_lifespan_on_legacy_database(legacy_db, tmp_path, monkeypatch, factory_name):
     from p2r_api import main
     from p2r_artifacts.store import LocalArtifactStore

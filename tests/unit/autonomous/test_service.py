@@ -13,7 +13,7 @@ from sqlalchemy import select
 from p2r_orchestration.autonomous import AutonomousService
 from p2r_orchestration.autonomous import evidence
 from p2r_orchestration.autonomous.worker import dispatch
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from p2r_persistence.db import create_engine, create_session_factory, init_db
 from p2r_persistence.models import UserRecord, ProjectRecord
 from p2r_persistence.autonomous import AutonomousTaskRecord as Task
@@ -184,7 +184,8 @@ def test_artifacts_are_frozen_exported_and_hash_checked(service):
     for name, content in [("predictions.json", '[{"id":"1","prediction":3}]'), ("labels.json", '[{"id":"1","label":2}]')]:
         target.write(name, content)
         dispatch(service, target, task_id, "register_artifact", {"path": name, "name": name, "kind": "result"}, name)
-    result = dispatch(service, target, task_id, "evaluate", {}, "eval")
+    with service.sessions() as db:
+        result = evidence.evaluation(service, service.row(db, task_id))
     assert result["metrics"]["mae"] == 1 and result["verdict"] == "not_comparable"
     archive = evidence.export_zip(service, task_id)
     verified = evidence.verify_export_zip(archive)
@@ -399,3 +400,174 @@ def test_resume_cannot_reset_exhausted_budget(service):
         row = service.row(db, task_id); row.state = "paused"; row.usage_json = {"calls": 10}
         db.commit()
         with pytest.raises(ServiceError, match="budget"): service.control(db, task_id, "resume")
+
+
+def test_new_task_has_harness_state(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        assert row.harness_json == {"version": 2, "repair_round": 0, "no_progress": 0,
+                                    "fingerprint": None, "candidate": None, "reviews": []}
+        assert row.outcome is None
+        public = service.public(row)
+        assert public["outcome"] is None and public["repair_round"] == 0
+        assert public["candidate"] is None and public["reviews"] == []
+
+
+def test_public_exposes_legacy_task_without_harness_state(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.harness_json = None
+        public = service.public(row)
+        assert public["repair_round"] == 0 and public["candidate"] is None and public["reviews"] == []
+
+
+def _running_task(service, **kwargs):
+    task_id = create(service, **kwargs)
+    with service.sessions() as db:
+        row = service.row(db, task_id); row.state = "running"; db.commit()
+    return task_id
+
+
+def _set_round(service, task_id, round_):
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.harness_json = {**row.harness_json, "repair_round": round_}
+        db.commit()
+
+
+def _register(service, target, task_id, name, content, kind="code"):
+    target.write(name, content)
+    return evidence.register(service, target, task_id, {"path": name, "name": name, "kind": kind})
+
+
+def test_same_name_allowed_in_new_round(service):
+    task_id = _running_task(service, protocol=protocol())
+    target = Target({}, service.root)
+    first = _register(service, target, task_id, "main.py", "print(1)")
+    _set_round(service, task_id, 1)
+    second = _register(service, target, task_id, "main.py", "print(2)")
+    assert (first["round"], second["round"]) == (0, 1)
+    assert second["sequence"] > first["sequence"]
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        r0, r1 = evidence.artifact_root(service, row, 0), evidence.artifact_root(service, row, 1)
+        assert r0.name == "r0" and r1.name == "r1" and r0.parent == r1.parent
+        assert (r0 / "main.py").read_text() == "print(1)" and (r1 / "main.py").read_text() == "print(2)"
+        assert evidence.artifact_root(service, row) == r1
+        assert evidence.current_round(row) == 1
+        assert len(evidence.verified_files(service, row)) == 2
+        assert [a["sha256"] for a in evidence.round_artifacts(row)] == [second["sha256"]]
+    archive = evidence.export_zip(service, task_id)
+    with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+        assert any(n.endswith("/r0/main.py") for n in zipped.namelist())
+        assert any(n.endswith("/r1/main.py") for n in zipped.namelist())
+    evidence.verify_export_zip(archive)
+
+
+def test_same_name_refused_within_round(service):
+    task_id = _running_task(service, protocol=protocol())
+    target = Target({}, service.root)
+    _register(service, target, task_id, "main.py", "print(1)")
+    with pytest.raises(ServiceError) as caught:
+        _register(service, target, task_id, "main.py", "print(2)")
+    assert caught.value.code == "ARTIFACT_IMMUTABLE"
+
+
+def test_artifact_limit_counts_per_round(service):
+    task_id = _running_task(service, protocol=protocol())
+    target = Target({}, service.root)
+    target.write("seed", "x")
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        sha = row.protocol_json["sha256"]
+        row.artifacts_json = [{"name": f"f{i}", "kind": "other", "sha256": "0" * 64, "bytes": 1,
+                               "protocol_sha256": sha, "source_path": "seed", "round": 0, "sequence": 1}
+                              for i in range(256)]
+        db.commit()
+    with pytest.raises(ServiceError) as caught:
+        evidence.register(service, target, task_id, {"path": "seed", "name": "extra", "kind": "other"})
+    assert caught.value.code == "ARTIFACT_LIMIT"
+    _set_round(service, task_id, 1)
+    assert evidence.register(service, target, task_id, {"path": "seed", "name": "extra", "kind": "other"})["round"] == 1
+
+
+def test_verified_files_reads_legacy_layout(service):
+    task_id = _running_task(service, protocol=protocol())
+    target = Target({}, service.root)
+    with service.sessions() as db:
+        row = service.row(db, task_id); row.harness_json = None; db.commit()
+    info = _register(service, target, task_id, "main.py", "print(1)")
+    assert "round" not in info
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        root = evidence.artifact_root(service, row)
+        assert root.name == row.protocol_json["sha256"] and (root / "main.py").is_file()
+        assert evidence.current_round(row) == 0
+        files = evidence.verified_files(service, row)
+        assert files == [(f"artifacts/{row.protocol_json['sha256']}/main.py", b"print(1)")]
+    evidence.verify_export_zip(evidence.export_zip(service, task_id))
+
+
+def test_report_uses_current_round_only(service):
+    task_id = _running_task(service, protocol=protocol())
+    target = Target({}, service.root)
+    _register(service, target, task_id, "old.py", "print(1)")
+    _set_round(service, task_id, 1)
+    _register(service, target, task_id, "new.py", "print(2)")
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        result = evidence.report(service, db, row)
+        assert [a["name"] for a in result["artifacts"]] == ["new.py"]
+
+
+def test_file_listing_and_read_follow_round_layout(service):
+    from p2r_orchestration.autonomous import files
+    task_id = _running_task(service, protocol=protocol())
+    target = Target({}, service.root)
+    _register(service, target, task_id, "main.py", "print(1)")
+    _set_round(service, task_id, 1)
+    _register(service, target, task_id, "main.py", "print(2)")
+    with service.sessions() as db:
+        snap = files.snapshot(service, service.row(db, task_id))
+    items = [i for i in files.list_files(snap)["items"] if i["source"] == "artifact"]
+    assert [i["path"].split("/")[2] for i in items] == ["r0", "r1"] and all(i["modified_at"] for i in items)
+    assert [files.read_file(snap, "artifact", i["path"])[0] for i in items] == [b"print(1)", b"print(2)"]
+
+
+def test_resume_refused_for_legacy_task(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        row = service.row(db, task_id); row.state = "paused"; row.harness_json = None; db.commit()
+        usage = dict(row.usage_json)
+        with pytest.raises(ServiceError) as caught:
+            service.control(db, task_id, "resume")
+        assert caught.value.code == "LEGACY_TASK" and caught.value.status == 409
+        assert "新建任务" in str(caught.value)
+        assert row.state == "paused" and row.usage_json == usage and row.error_json is None  # nothing mutated
+        db.rollback()
+        assert service.row(db, task_id).state == "paused"
+
+
+def test_legacy_task_still_exports(service):
+    task_id = _running_task(service, protocol=protocol())
+    target = Target({}, service.root)
+    with service.sessions() as db:
+        row = service.row(db, task_id); row.harness_json = None; row.state = "paused"; db.commit()
+    _register(service, target, task_id, "main.py", "print(1)")
+    archive = evidence.export_zip(service, task_id)
+    assert "report.json" in zipfile.ZipFile(io.BytesIO(archive)).namelist()
+    evidence.verify_export_zip(archive)
+
+
+def test_blocked_task_cannot_resume(service):
+    task_id = create(service)
+    with service.sessions() as db:
+        row = service.row(db, task_id)
+        row.state, row.outcome = "stopped", "blocked_by_safety"
+        db.commit()
+        with pytest.raises(ServiceError) as caught:
+            service.control(db, task_id, "resume")
+        assert caught.value.code == "TASK_FINISHED" and caught.value.status == 409
+        assert service.row(db, task_id).state == "stopped"

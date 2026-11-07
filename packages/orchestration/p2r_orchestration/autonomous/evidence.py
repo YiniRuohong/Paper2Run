@@ -4,14 +4,31 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import zipfile
 
 from sqlalchemy import select
 from p2r_evaluation.autonomous import evaluate_artifacts
 from p2r_evaluation.reference_verification import verify_reference_values
+from p2r_evaluation.safe_read import is_link_or_reparse
 from p2r_persistence.autonomous import AutonomousEventRecord as Event
+from p2r_orchestration.errors import ServiceError
+from . import report_doc
 from .security import fail, digest
+
+_lstat = os.lstat  # seam: tests simulate Windows reparse points on POSIX
+
+
+def link_or_reparse(path) -> bool:
+    """True for a symlink or a Windows reparse point (junction, mount point), which
+    Path.is_symlink() does not report. A missing path is not a link; callers still
+    check is_file()/is_dir() and refuse it there."""
+    try:
+        return is_link_or_reparse(_lstat(path))
+    except FileNotFoundError:
+        return False
+
 
 def verify_export_zip(raw):
     from p2r_artifacts.archive_verify import verify_export_zip as verify
@@ -32,21 +49,49 @@ def safe_name(name):
     return path.as_posix()
 
 
-def artifact_root(service, row):
+def current_round(row):
+    return int((row.harness_json or {}).get("repair_round", 0))
+
+
+def artifact_root(service, row, round_=None):
     version = row.protocol_json["sha256"] if row.protocol_json else "unversioned"
-    return service.task_root(row.id) / "artifacts" / version
+    root = service.task_root(row.id) / "artifacts" / version
+    if row.harness_json is None:  # legacy task: unversioned-by-round layout
+        return root
+    return root / f"r{current_round(row) if round_ is None else round_}"
+
+
+def round_artifacts(row):
+    """Artifacts of the current protocol version and the current round."""
+    current = row.protocol_json["sha256"] if row.protocol_json else None
+    if row.harness_json is None:
+        return [a for a in row.artifacts_json if a["protocol_sha256"] == current]
+    round_ = current_round(row)
+    return [a for a in row.artifacts_json
+            if a["protocol_sha256"] == current and a.get("round", 0) == round_]
+
+
+def ensure_not_under_review(row):
+    candidate = (row.harness_json or {}).get("candidate")
+    if candidate and candidate.get("review_status") == "pending":
+        fail("CANDIDATE_UNDER_REVIEW", "a candidate is under review; evidence is frozen until it completes", 409)
 
 
 def register(service, target, task_id, args):
     name = safe_name(args["name"])
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)
+        ensure_not_under_review(row)
         root = artifact_root(service, row)
         version = row.protocol_json["sha256"] if row.protocol_json else None
-        if any(a["name"] == name and a["protocol_sha256"] == version for a in row.artifacts_json):
-            fail("ARTIFACT_IMMUTABLE", "register a new protocol version before replacing evidence", 409)
-        if len(row.artifacts_json) >= 256:
-            fail("ARTIFACT_LIMIT", "task artifact count exhausted", 409)
+        round_ = None if row.harness_json is None else current_round(row)
+        scope = [a for a in row.artifacts_json
+                 if a["protocol_sha256"] == version and a.get("round", 0) == (0 if round_ is None else round_)]
+        if any(a["name"] == name for a in scope):
+            fail("ARTIFACT_IMMUTABLE", "evidence is immutable within a protocol version and repair round", 409)
+        if len(scope) >= 256:
+            fail("ARTIFACT_LIMIT", "round artifact count exhausted", 409)
+        figure = report_doc.figure_fields(args, scope) if args["kind"] == "figure" else None
     destination = root / name
     root.mkdir(parents=True, exist_ok=True)
     if not destination.resolve().is_relative_to(root.resolve()) or destination.is_symlink():
@@ -63,11 +108,17 @@ def register(service, target, task_id, args):
             fail("SECRET_IN_ARTIFACT", "artifact contains a runtime credential")
     info = {"name": name, "kind": args["kind"], "sha256": hashlib.sha256(raw).hexdigest(),
             "bytes": len(raw), "protocol_sha256": version, "source_path": args["path"]}
+    if round_ is not None:
+        info["round"] = round_
+    if figure:
+        info.update(figure)
     with service.lock, service.sessions() as db:
         row = service.row(db, task_id)
-        row.artifacts_json = [*row.artifacts_json, info]
+        ensure_not_under_review(row)
         row.report_json = None
         service.event(db, row, "artifact_frozen", info)
+        info["sequence"] = row.event_sequence
+        row.artifacts_json = [*row.artifacts_json, info]
         db.commit()
     return info
 
@@ -78,21 +129,33 @@ def verified_files(service, row):
         name = safe_name(item["name"])
         version = item["protocol_sha256"] or "unversioned"
         root = service.task_root(row.id) / "artifacts" / version
+        prefix = f"artifacts/{version}"
+        if item.get("round") is not None:
+            root = root / f"r{int(item['round'])}"
+            prefix += f"/r{int(item['round'])}"
         path = root / name
         if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or not path.is_file() or path.stat().st_size > MAX_FILE:
             fail("EVIDENCE_INTEGRITY", "frozen artifact is missing or unsafe", 409)
         raw = path.read_bytes()
         if hashlib.sha256(raw).hexdigest() != item["sha256"]:
             fail("EVIDENCE_INTEGRITY", "frozen artifact hash mismatch", 409)
-        result.append((f"artifacts/{version}/{name}", raw))
+        result.append((f"{prefix}/{name}", raw))
     return result
 
 
 def evaluation(service, row):
     verified_files(service, row)
-    if not row.protocol_json:
+    return evaluation_at(service, row, artifact_root(service, row))
+
+
+def evaluation_at(service, row, root, protocol=None):
+    """Program-owned evaluation of the artifacts under root (live round or frozen candidate).
+
+    protocol: the frozen {protocol, sha256} to evaluate under; defaults to the task's current protocol."""
+    protocol = protocol or row.protocol_json
+    if not protocol:
         return {"verdict": "not_comparable", "comparison_eligible": False, "metrics": {}, "reasons": ["No approved protocol."]}
-    result = evaluate_artifacts(row.protocol_json, artifact_root(service, row))
+    result = evaluate_artifacts(protocol, root)
     # API-v1 does not expose independent evaluator custody/attestation. User or
     # agent booleans cannot establish independent labels or absence of leakage.
     result["comparison_eligible"] = False
@@ -102,25 +165,13 @@ def evaluation(service, row):
     return result
 
 
-def report(service, db, row, narrative=""):
-    try:
-        calculated = evaluation(service, row)
-    except (ValueError, OSError) as exc:
-        calculated = {"verdict": "not_comparable", "comparison_eligible": False,
-                      "metrics": {}, "reasons": [str(exc)]}
+def entrypoint_executions(db, row):
+    """Observed execute/status facts, each flagged by whether it ran the protocol entrypoint directly."""
     current = row.protocol_json["sha256"] if row.protocol_json else None
-    artifacts = [a for a in row.artifacts_json if a["protocol_sha256"] == current]
-    expected = row.protocol_json["protocol"]["expected_artifacts"] if row.protocol_json else []
-    names = {a["name"] for a in artifacts}
-    missing = sorted(set(expected) - names)
-    kinds = {a["kind"] for a in artifacts}
-    missing_kinds = sorted({"code", "environment", "data", "result"} - kinds)
     facts = db.scalars(select(Event).where(Event.task_id == row.id, Event.type == "tool_completed").order_by(Event.sequence)).all()
     import shlex
     jobs = {j.get("job_id"): j for j in row.jobs_json.values()}
     entrypoint = row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None
-    frozen_code = next((a for a in artifacts if a["kind"] == "code" and
-                        entrypoint in (a["name"], a["source_path"])), None)
     executions = []
     for fact in facts:
         if fact.payload.get("name") not in ("execute", "status"):
@@ -147,13 +198,94 @@ def report(service, db, row, narrative=""):
                        and not any(char in command for char in ";|&<>($`\n\r\\")
                        and not any(t and all(char in "();<>|&" for char in t) for t in tokens))
         executions.append({"sequence": fact.sequence, "tool": fact.payload.get("name"), "command": command,
+            "launch_sequence": job.get("sequence") if type(job.get("sequence")) is int else None,
             "result": observation, "matches_protocol_entrypoint": matches})
-    observed_success = bool(frozen_code) and any(f["matches_protocol_entrypoint"] and f["result"].get("exit_code") == 0 for f in executions)
-    verification = None
-    if row.reference_values_json is not None and row.protocol_json:
+    return executions
+
+
+def entrypoint_code(artifacts, entrypoint):
+    """The code artifact that is the protocol entrypoint, matched by artifact name or source path."""
+    if not entrypoint:
+        return None
+    return next((a for a in artifacts if a["kind"] == "code" and entrypoint in (a["name"], a.get("source_path"))), None)
+
+
+def store_candidate(harness, candidate):
+    """harness_json with candidate as the current one, also kept under candidates[snapshot_sha256]."""
+    candidates = {**(harness.get("candidates") or {}), candidate["snapshot_sha256"]: candidate}
+    return {**harness, "candidate": candidate, "candidates": candidates}
+
+
+def deciding_candidate(harness, snapshot=None):
+    """The candidate named by snapshot (an outcome's deciding snapshot), else the current candidate."""
+    current = harness.get("candidate")
+    if not snapshot or (current and current["snapshot_sha256"] == snapshot):
+        return current
+    # Candidates frozen before per-snapshot manifests were kept fall back to the current one.
+    return (harness.get("candidates") or {}).get(snapshot) or current
+
+
+def candidate_protocol(row, candidate):
+    """The {protocol, sha256} the candidate was frozen under (older candidates: the task's protocol)."""
+    return candidate.get("protocol") or row.protocol_json
+
+
+def candidate_root(service, row, candidate):
+    """Frozen candidate artifacts, hash-checked against the snapshot manifest."""
+    root = service.task_root(row.id) / "candidates" / candidate["snapshot_sha256"] / "artifacts"
+    for item in candidate["artifacts"]:
+        path = root / safe_name(item["name"])
+        if (path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or not path.is_file()
+                or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]):
+            fail("EVIDENCE_INTEGRITY", "frozen candidate artifact is missing or altered", 409)
+    return root
+
+
+INTEGRITY_FAILED = "frozen candidate integrity check failed"
+
+
+def report(service, db, row, narrative="", outcome=None, reason=None, outcome_snapshot=None):
+    harness = row.harness_json or {}
+    # A candidate report describes the deciding frozen snapshot under its own protocol, never the live round.
+    candidate = deciding_candidate(harness, outcome_snapshot if outcome else None)
+    protocol = candidate_protocol(row, candidate) if candidate else row.protocol_json
+    root, intact = None, True
+    if candidate:
         try:
+            root = candidate_root(service, row, candidate)
+        except ServiceError as exc:
+            if getattr(exc, "code", None) != "EVIDENCE_INTEGRITY":
+                raise
+            intact = False  # still report: an integrity failure is evidence, never a crash at exit
+    try:
+        if not intact:
+            raise ValueError(INTEGRITY_FAILED)
+        calculated = evaluation_at(service, row, root, protocol) if candidate else evaluation(service, row)
+    except (ValueError, OSError) as exc:
+        calculated = {"verdict": "not_comparable", "comparison_eligible": False,
+                      "metrics": {}, "reasons": [str(exc)]}
+    artifacts = [dict(a) for a in candidate["artifacts"]] if candidate else round_artifacts(row)
+    expected = protocol["protocol"]["expected_artifacts"] if protocol else []
+    names = {a["name"] for a in artifacts}
+    missing = sorted(set(expected) - names)
+    kinds = {a["kind"] for a in artifacts}
+    missing_kinds = sorted({"code", "environment", "data", "result"} - kinds)
+    executions = entrypoint_executions(db, row)
+    entrypoint = protocol["protocol"]["entrypoint"] if protocol else None
+    frozen_code = entrypoint_code(artifacts, entrypoint)
+    if candidate:
+        # The candidate's own formal run, checked as a qualifying entrypoint run when it was frozen.
+        observed_success = bool(frozen_code) and candidate["run"].get("exit_code") == 0
+    else:
+        observed_success = bool(frozen_code) and any(f["matches_protocol_entrypoint"] and f["result"].get("exit_code") == 0
+                                                     for f in executions)
+    verification = None
+    if row.reference_values_json is not None and protocol:
+        try:
+            if not intact:
+                raise ValueError(INTEGRITY_FAILED)
             verification = verify_reference_values(
-                row.protocol_json, artifact_root(service, row), row.reference_values_json,
+                protocol, root or artifact_root(service, row), row.reference_values_json,
                 scope=row.reference_scope or "", user_confirmed_sources=row.reference_sources_confirmed,
                 comparison_custody_verified=False,
             )
@@ -165,9 +297,14 @@ def report(service, db, row, narrative=""):
               "execution_observations": executions[-100:], "successful_execution_observed": observed_success,
               "completion_gate": {"entrypoint": entrypoint, "frozen_code_sha256": frozen_code["sha256"] if frozen_code else None,
                   "rule": "Approved entrypoint appears in an observed command with exit_code=0; entrypoint code and code/environment/data/result artifacts are frozen. This does not prove scientific validity or that artifact contents came from that command."},
-              "verdict": "not_comparable", "model_narrative": service.profiles.clean(narrative),
+              "verdict": "not_comparable", "outcome": outcome, "outcome_reason": reason,
+              "outcome_snapshot_sha256": outcome_snapshot,
+              "candidate": candidate, "reviews": harness.get("reviews", []),
+              "model_narrative": service.profiles.clean(narrative),
+              # Agent-written report document (model interpretation) of the deciding candidate; None for older tasks.
+              "document": (candidate or {}).get("document"),
               "evaluation": calculated, "artifacts": artifacts, "missing_artifacts": missing,
-              "missing_evidence_kinds": missing_kinds, "protocol": row.protocol_json,
+              "missing_evidence_kinds": missing_kinds, "protocol": protocol,
               "reference_values": row.reference_values_json,
               "verification": verification,
               "limitations": ["Model narrative is not execution evidence.",

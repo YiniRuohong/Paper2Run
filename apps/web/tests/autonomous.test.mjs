@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAutonomousApi } from '../src/api-client/autonomous.ts';
-import { defaultConfig, validateConfig, parseProtocol, protocolApproval, mergeEvents, stateLabel, terminalState } from '../src/features/autonomous/config.ts';
+import { defaultConfig, validateConfig, parseProtocol, protocolApproval, mergeEvents, STREAM_EVENT_KEEP, stateLabel, terminalState } from '../src/features/autonomous/config.ts';
 const envelope = (data, status = 200) => new Response(JSON.stringify({ data, meta: { request_id: 'req-1' } }), { status });
 function capture(data) {
   const calls = [];
@@ -88,4 +88,37 @@ test('finite budgets, SSH requirements, protocol object and state helpers', () =
   assert.deepEqual(parseProtocol('{"frozen":true}'), { frozen: true });
   assert.equal(stateLabel('blocked'), '已阻塞'); assert.equal(terminalState('running'), false); assert.equal(terminalState('completed'), true);
   assert.deepEqual(mergeEvents([{ sequence: 2, type: 'old' }], [{ sequence: 1 }, { sequence: 2, type: 'new' }]).map(x => x.sequence), [1, 2]);
+});
+test('decisions post an explicit approve or reject to the decision endpoint with csrf and idempotency', async () => {
+  const { api, calls } = capture({ id: 't/1', state: 'queued', pending_decision: null });
+  const task = await api.decide('t/1', 'd/1', 'reject', 'metric is wrong');
+  assert.equal(task.state, 'queued');
+  assert.equal(calls[0].path, '/api/v1/autonomous/tasks/t%2F1/decisions/d%2F1');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { action: 'reject', note: 'metric is wrong' });
+  assert.equal(calls[0].headers.get('X-CSRF-Token'), 'csrf-token');
+  assert.ok(calls[0].headers.get('Idempotency-Key'));
+  await api.decide('t', 'd', 'approve');
+  await api.decide('t', 'd', 'reject', '   ');
+  assert.deepEqual(JSON.parse(calls[1].init.body), { action: 'approve' });
+  assert.deepEqual(JSON.parse(calls[2].init.body), { action: 'reject' }, 'a blank note is not sent');
+  const { api: conflict } = capture(() => new Response(JSON.stringify({ error: { code: 'DECISION_MISMATCH', message: 'stale' }, meta: { request_id: 'req-d' } }), { status: 409 }));
+  await assert.rejects(conflict.decide('t', 'd', 'approve'), e => e.status === 409 && e.code === 'DECISION_MISMATCH' && e.requestId === 'req-d');
+});
+
+test('mergeEvents keeps every milestone and specialist call and caps only the streamed model output', () => {
+  const ev = (sequence, type, payload = {}) => ({ sequence, type, payload, created_at: '' });
+  const events = [
+    ev(1, 'tool_started'), ev(2, 'sdk_event', { type: 'research_delegation_started' }),
+    ...Array.from({ length: 700 }, (_, i) => ev(3 + i, 'sdk_event', { type: 'message_update' })),
+    ev(703, 'tool_completed'),
+  ];
+  const merged = mergeEvents([], events);
+  assert.deepEqual(merged.filter(e => e.type !== 'sdk_event').map(e => e.sequence), [1, 703], 'no milestone is dropped');
+  assert.ok(merged.some(e => e.sequence === 2), 'the specialist call stays');
+  const streamed = merged.filter(e => e.type === 'sdk_event' && e.payload.type === 'message_update');
+  assert.equal(streamed.length, STREAM_EVENT_KEEP);
+  assert.equal(streamed.at(-1).sequence, 702, 'the newest streamed output is the one kept');
+  const many = Array.from({ length: 1500 }, (_, i) => ev(i + 1, 'tool_started'));
+  assert.equal(mergeEvents([], many).length, 1500, 'milestones have no cap');
 });

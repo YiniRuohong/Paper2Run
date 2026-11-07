@@ -23,6 +23,17 @@ test('initial preference: URL override, then stored value, then system', () => {
   assert.equal(initialThemePref('?theme=nope', 'dark'), 'dark');
 });
 
+test('no file under features/flow or features/overview touches browser storage', async () => {
+  const { readdir } = await import('node:fs/promises');
+  const files = [];
+  for (const dir of ['flow', 'overview']) {
+    const root = new URL(`../src/features/${dir}/`, import.meta.url);
+    for (const entry of await readdir(root, { recursive: true })) if (/\.tsx?$/.test(entry)) files.push(new URL(entry, root));
+  }
+  assert.ok(files.some(f => f.pathname.endsWith('/flow/steps/ModelStep.tsx')) && files.some(f => f.pathname.endsWith('/overview/draftSteps.ts')), 'the scan reaches nested and .ts files');
+  for (const file of files) assert.doesNotMatch(await readFile(file, 'utf8'), /localStorage\.|sessionStorage\./, file.pathname);
+});
+
 test('the pre-paint boot script and the theme module agree on the storage key', async () => {
   const boot = await readFile(new URL('../public/theme-boot.js', import.meta.url), 'utf8');
   assert.equal(THEME_STORAGE_KEY, 'p2r.theme');
@@ -32,7 +43,7 @@ test('the pre-paint boot script and the theme module agree on the storage key', 
 });
 
 test('storage stays confined to the theme module: api keys and shell code never persist', async () => {
-  for (const file of ['../src/shell/hooks.ts', '../src/shell/Sidebar.tsx', '../src/features/settings/Settings.tsx', '../src/features/dashboard/tasks.ts', '../src/features/guided/realflow-summary.ts', '../src/desktop.ts']) {
+  for (const file of ['../src/shell/hooks.ts', '../src/shell/Sidebar.tsx', '../src/shell/AppShell.tsx', '../src/features/settings/Settings.tsx', '../src/features/overview/OverviewPage.tsx', '../src/features/autonomous/TaskPage.tsx', '../src/features/flow/DraftPage.tsx', '../src/features/flow/steps/PaperStep.tsx', '../src/features/flow/steps/ObjectiveStep.tsx', '../src/features/flow/steps/ModelStep.tsx', '../src/features/flow/steps/LaunchStep.tsx','../src/api-client/papers.ts', '../src/api-client/autonomous.ts', '../src/desktop.ts']) {
     const source = await readFile(new URL(file, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /localStorage\.|sessionStorage\./, file);
   }

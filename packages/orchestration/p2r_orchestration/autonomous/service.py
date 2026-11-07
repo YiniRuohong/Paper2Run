@@ -13,9 +13,10 @@ from sqlalchemy import select
 from p2r_contracts.autonomous import resolve_project_config
 from p2r_evaluation.autonomous import freeze_protocol
 from p2r_evaluation.reference_verification import validate_reference_values
+from p2r_orchestration import locks
 from p2r_orchestration.research_capabilities import CapabilityRegistry
 from p2r_persistence.autonomous import AutonomousConfigRecord as Config, AutonomousTaskRecord as Task, AutonomousEventRecord as Event
-from p2r_persistence.models import ExtractionRecord, PaperRecord, PaperVersionRecord, PaperTextRecord, utcnow
+from p2r_persistence.models import PaperRecord, PaperVersionRecord, PaperTextRecord, utcnow
 from .bridge import HarnessBridge
 from .control import ControlMixin
 from .security import ProfileStore, digest, fail
@@ -51,12 +52,15 @@ class AutonomousService(ControlMixin):
 
     def public(self, row):
         snapshot = dict(row.config_snapshot)
+        harness = row.harness_json or {}
         # SDK profile endpoint is public metadata; reference values contain no credentials.
         return self.profiles.clean({"id": row.id, "project_id": row.project_id,
             "state": row.state, "objective": row.objective, "config_snapshot": snapshot,
             "usage": row.usage_json, "created_at": row.created_at.isoformat(),
             "updated_at": row.updated_at.isoformat(), "report": row.report_json,
-            "error": row.error_json, "pending_decision": row.pending_decision_json}, bounded=False)
+            "error": row.error_json, "pending_decision": row.pending_decision_json,
+            "outcome": row.outcome, "repair_round": harness.get("repair_round", 0),
+            "candidate": harness.get("candidate"), "reviews": harness.get("reviews", [])}, bounded=False)
 
     def event(self, db, row, kind, payload):
         row.event_sequence += 1
@@ -124,15 +128,8 @@ class AutonomousService(ControlMixin):
                                 "source_characters": len(decoded), "text_limit_characters": 120000})
             except (OSError, ValueError):
                 context["limitations"].append("Parsed paper text could not be verified.")
-        extraction = db.scalar(select(ExtractionRecord).where(ExtractionRecord.paper_id == paper.id,
-            ExtractionRecord.status == "ready").order_by(ExtractionRecord.created_at.desc()))
-        if extraction:
-            payload = extraction.payload_json
-            refs = payload.get("source_refs") or []
-            if refs and all(ref.get("pdf_sha256") == sha for ref in refs if isinstance(ref, dict)):
-                context["extraction"] = payload
-        if not context.get("text") and not context.get("extraction"):
-            context["limitations"].append("No verified parsed or extracted paper content is available; no fixture substituted.")
+        if not context.get("text"):
+            context["limitations"].append("No verified parsed paper content is available; no fixture substituted.")
         return self.profiles.clean(context, bounded=False)
 
     def create_task(self, db, project_id, actor, payload):
@@ -167,6 +164,8 @@ class AutonomousService(ControlMixin):
             config_snapshot=snapshot, context_json=self.paper_context(db, project_id, payload.get("paper_version_id")),
             reference_values_json=reference_values, reference_scope=reference_scope,
             reference_sources_confirmed=references_confirmed,
+            harness_json={"version": 2, "repair_round": 0, "no_progress": 0, "fingerprint": None,
+                          "candidate": None, "reviews": []},
             skills_json=skills, protocol_json=protocol, usage_json={"calls": 0, "input_tokens": 0, "output_tokens": 0,
             "total_tokens": 0, "wall_time_seconds": 0}, jobs_json={}, artifacts_json=[], event_sequence=0)
         db.add(row)
@@ -221,17 +220,11 @@ class AutonomousService(ControlMixin):
         with self.lock:
             if self._lease is None:
                 self.root.mkdir(parents=True, exist_ok=True)
-                lease = (self.root / "runtime.lock").open("a+b")
+                lease = locks.open_lock_file(self.root / "runtime.lock")
                 try:
-                    if os.name == "nt":
-                        import msvcrt
-                        lease.seek(0); lease.write(b"0"); lease.flush(); lease.seek(0)
-                        msvcrt.locking(lease.fileno(), msvcrt.LK_NBLCK, 1)
-                    else:
-                        import fcntl
-                        fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locks.acquire(lease, blocking=False)
                 except OSError:
-                    lease.close()
+                    os.close(lease)
                     fail("RUNTIME_ALREADY_ACTIVE", "another autonomous runtime owns this control directory", 409)
                 self._lease = lease
         with self.lock, self.sessions() as db:
@@ -265,6 +258,17 @@ class AutonomousService(ControlMixin):
             self.workers[task_id] = {"thread": thread, "bridge": bridge, "target": None}
             thread.start()
 
+    def probe_target(self, project_id, config):
+        """C6: observe the saved target without creating a container. Call outside ``self.lock``."""
+        from .target_probe import probe_target
+        if self.target_factory is None:
+            from p2r_sandbox.autonomous import ExecutionTarget
+            factory = ExecutionTarget
+        else:
+            factory = self.target_factory
+        result = probe_target(config, factory, self.root / "target-probes" / digest(project_id)[:24])
+        return self.profiles.clean(result, bounded=False)
+
     def make_target(self, row):
         if self.target_factory is None:
             from p2r_sandbox.autonomous import ExecutionTarget
@@ -284,13 +288,15 @@ class AutonomousService(ControlMixin):
         return factory(config, self.task_root(row.id) / "execution")
 
     def remaining(self, row):
+        # Only limits that are set appear here; an absent or None limit means no limit.
         limits, usage = row.config_snapshot["limits"], row.usage_json
-        remaining = {"max_model_calls": limits["max_model_calls"] - usage.get("calls", 0),
-                     "max_model_tokens": limits["max_model_tokens"] - usage.get("total_tokens", 0),
-                     "wall_time_seconds": limits["wall_time_seconds"] - usage.get("wall_time_seconds", 0)}
+        used = {"max_model_calls": usage.get("calls", 0), "max_model_tokens": usage.get("total_tokens", 0),
+                "wall_time_seconds": usage.get("wall_time_seconds", 0)}
+        remaining = {key: limits[key] - spent for key, spent in used.items() if limits.get(key) is not None}
         if any(value <= 0 for value in remaining.values()):
             fail("BUDGET_EXHAUSTED", "cumulative task budget exhausted", 409)
-        remaining["wall_time_seconds"] = min(remaining["wall_time_seconds"], 2147483)
+        if "wall_time_seconds" in remaining:
+            remaining["wall_time_seconds"] = min(remaining["wall_time_seconds"], 2147483)
         return remaining
 
     def shutdown(self):
@@ -311,5 +317,5 @@ class AutonomousService(ControlMixin):
             worker["thread"].join(timeout=max(0, deadline - time.monotonic()))
         with self.lock:
             if self._lease is not None and not any(w["thread"].is_alive() for _, w in workers):
-                self._lease.close()
+                locks.release(self._lease)
                 self._lease = None

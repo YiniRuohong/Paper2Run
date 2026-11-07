@@ -8,14 +8,15 @@ API and the built web UI from a single local port:
    ``paper2run`` package is installed into it;
 2. ensure ``apps/web/dist`` exists (build with npm when available);
 3. pick a free loopback port starting at 8010;
-4. start uvicorn (``create_demo_app``) with a persistent demo dir;
+4. start uvicorn (``create_local_app``) with a persistent data dir (``.p2r-app``);
 5. open the default browser once the health check passes;
 6. start the ``p2r-tunnel`` sidecar for tablet pairing (built with cargo if
    missing). Without it the app still runs; only tablet remote is off.
 
 Prerequisites: Python 3.11+. Node.js/npm is needed when the prebuilt
 frontend bundle is missing; autonomous mode additionally needs Node >=22.19
-and the Harness dependencies. Missing Docker does not block old workflows.
+and the Harness dependencies. Docker is needed to run experiments; without it
+the app still starts but experiments cannot run.
 """
 from __future__ import annotations
 
@@ -34,15 +35,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VENV_DIR = ROOT / ".venv"
 DIST_INDEX = ROOT / "apps" / "web" / "dist" / "index.html"
-DEMO_DIR = ROOT / ".p2r-app"
+DATA_DIR = ROOT / ".p2r-app"
 BASE_PORT = 8010
 # Python source roots (keep in sync with pyproject.toml [tool.pytest.ini_options]).
 # Putting them on PYTHONPATH means a stale editable install can never shadow them.
 SOURCE_ROOTS = ("services/api", "packages/contracts", "packages/artifacts", "packages/persistence",
-                "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/codegen",
-                "packages/runner", "packages/kernel", "packages/orchestration")
+                "packages/sandbox", "packages/docparse", "packages/evaluation", "packages/orchestration")
 
 WINDOWS = sys.platform == "win32"
+DOCPARSE_MODEL_SOURCE = "modelscope"
 
 TUNNEL_DIR = ROOT / "apps" / "tunnel"
 TUNNEL_BIN = TUNNEL_DIR / "target" / "release" / ("p2r-tunnel.exe" if WINDOWS else "p2r-tunnel")
@@ -83,7 +84,7 @@ def ensure_venv() -> Path:
         message(f"[!] 虚拟环境损坏（缺 {python}）；删除 .venv 目录后重试 / broken venv, remove .venv and retry")
         raise SystemExit(1)
     probe = subprocess.run(
-        [str(python), "-c", "import p2r_api, p2r_runner, p2r_kernel, uvicorn"],
+        [str(python), "-c", "import p2r_api.main, uvicorn"],
         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         env={**os.environ, "PYTHONPATH": source_pythonpath()},
     )
@@ -122,9 +123,8 @@ def ensure_harness() -> dict[str, str]:
     # An explicit absent path stops the backend from silently finding an old Node.
     env = {"P2R_NODE_BINARY": str(Path(candidate).resolve()) if candidate else str(bundled_node),
            "P2R_HARNESS_DIR": str(harness), "P2R_SKILLS_DIR": str(skills)}
-    if WINDOWS:
-        message("[!] 自主模式在 Windows 暂不可用：技能注册表需要 POSIX flock/no-follow；旧流程继续启动。")
-        return env
+    # Same path on Windows (Docker Desktop, WSL2 backend): supported by
+    # construction and unit-tested, not verified on a real Windows machine.
     failure_hint = "找不到可运行的 Node >=22.19；请安装完整 Node/npm"
     try:
         if not candidate:
@@ -170,15 +170,27 @@ def ensure_harness() -> dict[str, str]:
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         # Do not print exception output: npm/Node can echo user credentials.
         message(f"[!] 自主模式未就绪：{failure_hint}。")
-        message("    可运行 python scripts/desktop/build_harness.py 修复桌面运行时；旧模式继续启动。")
-    try:
-        probe = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, timeout=10)
-        docker_ready = probe.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        docker_ready = False
-    if not docker_ready:
-        message("[!] Docker 未就绪：本地自主实验暂不可用；启动 Docker 后可重试，旧模式不受影响。")
+        message("    可运行 python scripts/desktop/build_harness.py 修复桌面运行时；服务仍会启动，但无法开始实验。")
+    docker_hint = docker_status()
+    if docker_hint:
+        message(docker_hint)
     return env
+
+
+def docker_status() -> str | None:
+    """None when Docker runs Linux containers; otherwise a Chinese hint. Never blocks startup."""
+    try:
+        probe = subprocess.run(["docker", "info", "--format", "{{.OSType}}"], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        probe = None
+    if probe is None or probe.returncode != 0:
+        hint = "请安装并启动 Docker Desktop（WSL2 后端）" if WINDOWS else "启动 Docker 后可重试"
+        return f"[!] Docker 未就绪：本地自主实验暂不可用；{hint}。新建实验页会显示执行位置探测结果。"
+    os_type = (getattr(probe, "stdout", None) or b"").decode("utf-8", "replace").strip()
+    if os_type != "linux":
+        return (f"[!] Docker 当前不是 Linux 容器模式（OSType={os_type or '未知'}）：自主实验需要 Linux 容器；"
+                "Windows 上请在 Docker Desktop 托盘菜单选择 Switch to Linux containers。")
+    return None
 
 
 def free_port(base: int) -> int:
@@ -249,6 +261,11 @@ def stop(proc: subprocess.Popen | None) -> None:
         proc.kill()
 
 
+def allowed_origins_env(port: int) -> str:
+    """``P2R_ALLOWED_ORIGINS`` for the served port: the browser may load the UI via either loopback name."""
+    return f"http://127.0.0.1:{port},http://localhost:{port}"
+
+
 def main() -> None:
     if sys.version_info < (3, 11):
         message(f"[!] 需要 Python 3.11+，当前为 {sys.version.split()[0]} / Python 3.11+ required")
@@ -269,16 +286,21 @@ def main() -> None:
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("ELECTRON_") and k.upper() not in ("NODE_OPTIONS", "NODE_PATH")}
     env.update(harness_env)
     env.update({
-        "P2R_DEMO_DIR": str(DEMO_DIR),
+        "P2R_DEMO_DIR": str(DATA_DIR),  # historical variable name; it is the data dir
         "P2R_WEB_DIST": str(DIST_INDEX.parent),
+        # Autonomous writes must carry this exact Origin; it is the port uvicorn is told to bind.
+        "P2R_ALLOWED_ORIGINS": allowed_origins_env(port),
         "PYTHONIOENCODING": "utf-8",
         "PYTHONPATH": source_pythonpath(),
     })
+    # Local PDF parsing downloads its models on first use. Hugging Face (MinerU's default) stalls
+    # for minutes at a time from here, so models come from ModelScope unless the user chose otherwise.
+    env.setdefault("P2R_DOCPARSE_MODEL_SOURCE", DOCPARSE_MODEL_SOURCE)
     message(f"[3/3] 启动服务 / starting server at {url} （数据目录 .p2r-app）")
     message("    停止 / stop: 关闭本窗口或按 Ctrl+C")
     remote = None
     server = subprocess.Popen(
-        [str(python), "-m", "uvicorn", "p2r_api.main:create_demo_app", "--factory",
+        [str(python), "-m", "uvicorn", "p2r_api.main:create_local_app", "--factory",
          "--host", "127.0.0.1", "--port", str(port)],
         cwd=ROOT, env=env,
     )

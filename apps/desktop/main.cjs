@@ -178,11 +178,28 @@ function backendEnv(runtime) {
   };
 }
 
-function checkAutonomousRuntime(runtime) {
-  if (IS_WIN) {
-    writeLog('[desktop] 自主模式在 Windows 暂不可用：技能注册表需要 POSIX flock/no-follow；旧流程可继续使用。Windows Node 资源不代表自主模式已受支持。\n');
-    return;
+// Experiments run in Linux containers on every platform (Windows: Docker
+// Desktop with the WSL2 backend). Returns the log line, or null when ready.
+function dockerMessage(error, stdout) {
+  if (error) {
+    return '[desktop] 未检测到可用的 Docker：本地自主实验暂不可用。请安装并启动 Docker Desktop（Windows 需启用 WSL2 后端），然后在新建实验页重新探测执行位置。\n';
   }
+  const osType = String(stdout).trim();
+  if (osType !== 'linux') {
+    return `[desktop] Docker 当前不是 Linux 容器模式（OSType=${osType || '未知'}）：自主实验需要 Linux 容器。Windows 上请在 Docker Desktop 托盘菜单选择 Switch to Linux containers，然后重新探测。\n`;
+  }
+  return null;
+}
+
+function checkAutonomousRuntime(runtime) {
+  // Same checks on macOS and Windows. Windows is supported by construction
+  // (unit-tested, not verified on a real machine). Nothing here blocks startup.
+  // Docker absence only affects local autonomous experiments; the
+  // new-experiment page shows the target probe result.
+  execFile('docker', ['info', '--format', '{{.OSType}}'], { env: backendEnv(runtime), timeout: 10_000, windowsHide: true }, (error, stdout) => {
+    const message = dockerMessage(error, stdout);
+    if (message) writeLog(message);
+  });
   const missing = [runtime.node, path.join(runtime.harness, 'bridge.mjs'),
     path.join(runtime.harness, 'node_modules', '@earendil-works', 'pi-coding-agent', 'package.json'), runtime.skills]
     .find((file) => !fs.existsSync(file));
@@ -196,10 +213,6 @@ function checkAutonomousRuntime(runtime) {
     if (error || !Number.isInteger(major) || !Number.isInteger(minor) || major < 22 || (major === 22 && minor < 19)) {
       writeLog('[desktop] autonomous mode unavailable: Node >=22.19 required or runtime failed to start\n');
     }
-  });
-  // Docker absence only affects local autonomous experiments, never app startup.
-  execFile('docker', ['info', '--format', '{{.ServerVersion}}'], { env: backendEnv(runtime), timeout: 10_000, windowsHide: true }, (error) => {
-    if (error) writeLog('[desktop] local autonomous experiments unavailable: Docker daemon not ready; start Docker and retry the target probe\n');
   });
 }
 
@@ -242,8 +255,8 @@ function startBackend() {
       // with this process even after SIGKILL or a crash.
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      // POSIX: own process group, so stopping it also reaches kernel workers
-      // and sandbox guests spawned by the backend.
+      // POSIX: own process group, so stopping it also reaches the harness,
+      // Docker CLI and parser processes spawned by the backend.
       detached: !IS_WIN,
     });
   } catch (error) {
@@ -352,7 +365,7 @@ function stopBackend(target = backend) {
   const { child, exited } = target;
   if (child.exitCode !== null || child.signalCode !== null || !child.pid) return exited;
   if (IS_WIN) {
-    // /T also takes down kernel workers and sandbox guests. Full path: never
+    // /T also takes down the backend's child processes. Full path: never
     // resolve taskkill through PATH or the working directory.
     const taskkill = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
     execFile(taskkill, ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, (error) => {

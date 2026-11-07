@@ -142,7 +142,7 @@ def build_profile_payload(profile_id, base_url, model, api, secret, *, anonymous
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--base-url", help="Existing loopback demo API origin; otherwise spawn real factory")
+    parser.add_argument("--base-url", help="Existing loopback local API origin; otherwise spawn real factory")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--output", type=Path, default=ROOT / ".p2r-e2e-autonomous/fullflow")
     parser.add_argument("--pdf", action="store_true", help="Use product online MinerU PDF path (no text fallback)")
@@ -206,7 +206,8 @@ def split_ids(count=442):
 
 def protocol_and_objective(args, source):
     limits = {"wall_time_seconds": max(1, math.ceil(args.timeout)), "max_model_calls": args.max_model_calls,
-              "max_model_tokens": args.max_model_tokens, "storage_bytes": 512 * 1024 * 1024, "gpu_devices": []}
+              "max_model_tokens": args.max_model_tokens, "storage_bytes": 512 * 1024 * 1024, "gpu_devices": [],
+              "max_repair_rounds": 3}
     objective = (
         "Run a real exploratory diabetes regression experiment informed by Least Angle Regression. "
         "Read the supplied full paper context. Inside the isolated Docker target, install numpy and scikit-learn "
@@ -225,7 +226,8 @@ def protocol_and_objective(args, source):
         "and scikit-learn versions, environment.txt with actual Python and pip freeze output, and run.log with "
         "real training output. Register EVERY expected artifact using register_artifact: .py as code, "
         "requirements/environment as environment, dataset/split/provenance/labels as data, predictions as result, "
-        "run.log as log. Then invoke evaluate and report. Do not merely describe work. Do not change the frozen "
+        "run.log as log. submit_candidate accepts a candidate only when the successful entrypoint run comes after "
+        "the latest code registration; end the turn after submitting. Do not merely describe work. Do not change the frozen "
         "protocol; repair code/dependencies as needed within it. Explicitly report exploratory/not_comparable; "
         "there is no paper reference metric and this is not a reproduction of paper results."
     )
@@ -565,7 +567,7 @@ def verify_evidence(files, protocol, source, reference_data, reference_labels):
     require(any(e.get("type") == "target_prepare" and e.get("payload", {}).get("ready") is True
                 and e["payload"].get("container") for e in events), "no ready isolated Docker target observation")
     completed = [e["payload"] for e in events if e.get("type") == "tool_completed" and not e.get("payload", {}).get("is_error")]
-    require({"register_artifact", "evaluate", "report", "background"} <= {e.get("name") for e in completed}, "required actual tools not observed")
+    require({"register_artifact", "submit_candidate", "background"} <= {e.get("name") for e in completed}, "required actual tools not observed")
     starts = {e["payload"]["id"]: e["payload"] for e in events if e.get("type") == "tool_started"}
     jobs = {}
     for event in completed:
@@ -664,7 +666,7 @@ class Runner:
                         code = candidate
                 except (ValueError, AttributeError, AcceptanceError):
                     pass
-                hint = "; server allowed_origin must match actual service port" if code == "CSRF_FAILED" else ""
+                hint = "; the server's P2R_ALLOWED_ORIGINS must include this --base-url" if code == "CSRF_FAILED" else ""
                 raise AcceptanceError(f"{method} {path.split('?')[0]}: HTTP {response.status_code} {code}{hint}")
             return raw
 
@@ -693,10 +695,10 @@ class Runner:
 
     def start(self):
         if not self.args.spawn:
-            self.stage("connecting to existing demo API")
+            self.stage("connecting to existing local API")
             self.raw("GET", "/healthz")
             return
-        self.stage("starting real create_demo_app uvicorn process")
+        self.stage("starting real create_local_app uvicorn process")
         parsed = urlsplit(self.args.base_url)
         with socket.socket() as sock:
             try:
@@ -710,11 +712,13 @@ class Runner:
         env["P2R_DEMO_DIR"] = str(self.output / "runtime")
         env["P2R_DOCPARSE_DIR"] = str(self.output / "runtime/docparse")
         env["P2R_AUTONOMOUS_DIR"] = str(self.output / "runtime/autonomous")
+        # The client sends Origin = base_url (http://127.0.0.1:<--port>); the server must accept exactly that.
+        env["P2R_ALLOWED_ORIGINS"] = self.args.base_url
         # No subprocess command-line secret, request body logging, or raw log file.
         env["PYTHONPATH"] = os.pathsep.join(str(ROOT / p) for p in
             ["services/api", *["packages/" + p for p in ("contracts", "artifacts", "persistence", "sandbox",
-             "docparse", "evaluation", "codegen", "runner", "kernel", "orchestration")]])
-        self.process = subprocess.Popen([sys.executable, "-m", "uvicorn", "p2r_api.main:create_demo_app",
+             "docparse", "evaluation", "orchestration")]])
+        self.process = subprocess.Popen([sys.executable, "-m", "uvicorn", "p2r_api.main:create_local_app",
             "--factory", "--host", "127.0.0.1", "--port", str(parsed.port or 80), "--no-access-log"],
             cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         def drain():
@@ -740,13 +744,13 @@ class Runner:
         self.log_thread.start()
         deadline = time.monotonic() + self.args.startup_timeout
         while time.monotonic() < deadline:
-            require(self.process.poll() is None, "demo API exited during startup; see bounded server log")
+            require(self.process.poll() is None, "local API exited during startup; see bounded server log")
             try:
                 self.raw("GET", "/healthz")
                 return
             except Exception:
                 time.sleep(min(.5, max(0, deadline - time.monotonic())))
-        raise AcceptanceError("demo API startup deadline exceeded")
+        raise AcceptanceError("local API startup deadline exceeded")
 
     def collect_events(self):
         # Drain bounded pages; continuation is retained for the next poll.
@@ -772,9 +776,7 @@ class Runner:
     def run(self):
         reference_dependencies()  # Fail before API/network activity if the oracle cannot run.
         self.start()
-        self.stage("creating demo identity and a separate real-paper project")
-        bootstrap = self.api("POST", "/demo/bootstrap", json={"fixture_id": "offline-smoke-v1", "source_processing_consent": True})
-        self.summary["identity_bootstrap_project_id"] = bootstrap["project_id"]
+        self.stage("creating a real-paper project as the fixed local user")
         project = self.api("POST", "/projects", json={"name": "Autonomous real diabetes LARS acceptance",
             "description": "Real public paper/data; exploratory regression, not comparable to paper results."})
         project_id = project["id"]
@@ -794,14 +796,14 @@ class Runner:
         (self.output / "reference-data.csv.gz").write_bytes(reference_data_raw)
         (self.output / "reference-target.csv.gz").write_bytes(reference_labels_raw)
         source = {"title": "Least Angle Regression", "paper_url": PAPER_SOURCE, "pdf_url": PAPER_URL,
-            "pdf_sha256": digest(pdf), "pages": pdf_pages, "ingestion": "product PDF upload + online MinerU" if self.args.pdf else "external pypdf full-text extraction -> product text upload (NOT product PDF parsing)",
+            "pdf_sha256": digest(pdf), "pages": pdf_pages, "ingestion": "product PDF upload + local MinerU" if self.args.pdf else "external pypdf full-text extraction -> product text upload (NOT product PDF parsing)",
             "reference_data": {"url": DATA_URL, "sha256": digest(reference_data_raw)},
             "reference_labels": {"url": LABEL_URL, "sha256": digest(reference_labels_raw)}}
         self.save("source.json", source)
         self.summary["source"] = source
         self.stage(source["ingestion"])
         if self.args.pdf:
-            self.api("PUT", "/docparse/mode", json={"mode": "online"})
+            self.api("PUT", "/docparse/mode", json={"mode": "offline"})  # only local parsing is offered
             paper = self.api("POST", f"/projects/{project_id}/papers", files={"file": ("least-angle-regression.pdf", pdf, "application/pdf")},
                 data={"source_processing_consent": "true", "title_hint": source["title"]})
             source["uploaded_sha256"] = digest(pdf)
@@ -817,10 +819,10 @@ class Runner:
                 if status["status"] == "ready":
                     verify_complete_pdf_parse(status, pdf_pages)
                     break
-                require(status["status"] not in ("failed", "error"), "online PDF parse failed; no text fallback")
+                require(status["status"] not in ("failed", "error"), "local PDF parse failed; no text fallback")
                 time.sleep(self.args.poll_interval)
             else:
-                raise AcceptanceError("online PDF parse deadline exceeded")
+                raise AcceptanceError("local PDF parse deadline exceeded")
         else:
             text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
             require(len(text) > 10000 and "least angle" in text.lower(), "paper full-text extraction incomplete or unexpected")

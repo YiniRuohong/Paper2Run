@@ -10,13 +10,13 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
+from p2r_contracts.autonomous import DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS
 from p2r_persistence.autonomous import AutonomousTaskRecord as Task
 from p2r_orchestration.autonomous.evidence import export_zip
 from p2r_orchestration.autonomous import files as task_file_access
 from ..auth import require_project_access, validate_origin, validate_csrf, csrf_token
 from ..dependencies import actor_id
-from .papers import _envelope, _error
-from .provider_sessions import _claim, _save
+from .papers import _claim, _envelope, _error, _save
 
 router = APIRouter(prefix="/autonomous")
 
@@ -34,8 +34,8 @@ class Profile(Strict):
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     credential_ref: str | None = Field(default=None, max_length=256)
     reuse_credentials_from: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-    context_window: int = Field(default=128000, gt=0, le=10000000)
-    max_tokens: int = Field(default=4096, gt=0, le=1000000)
+    context_window: int = Field(default=DEFAULT_CONTEXT_WINDOW, gt=0, le=10000000)
+    max_tokens: int = Field(default=DEFAULT_MAX_TOKENS, gt=0, le=1000000)
 
 
 class Configuration(Strict):
@@ -59,6 +59,11 @@ class CreateTask(Strict):
 class Control(Strict):
     action: Literal["pause", "resume", "stop", "message"]
     message: str | None = Field(default=None, max_length=16000)
+
+
+class Decision(Strict):
+    action: Literal["approve", "reject"]
+    note: str | None = Field(default=None, max_length=4000)
 
 
 class ImportCapability(Strict):
@@ -90,7 +95,9 @@ def write_guard(request):
         _error("VALIDATION_ERROR", "Idempotency-Key is required")
     if len(request.headers["idempotency-key"]) > 128:
         _error("VALIDATION_ERROR", "Idempotency-Key exceeds limit")
-    if request.headers.get("sec-fetch-site") == "cross-site":
+    # Same rule as the target probe: another loopback port or a sibling subdomain
+    # is same-site, not same-origin. The launcher page and the Vite proxy send same-origin.
+    if request.headers.get("sec-fetch-site", "").lower() in ("cross-site", "same-site"):
         _error("CSRF_FAILED", "cross-site autonomous mutation refused", status=403)
 
 
@@ -194,6 +201,25 @@ def get_config(project_id: str, request: Request):
         return _envelope(request, {"version": row.version, "config": row.config_json})
 
 
+@router.get("/projects/{project_id}/target/probe")
+def probe_target(project_id: str, request: Request):
+    """C6: capabilities of the latest saved target. Observed facts only; never creates a container."""
+    _strict_query(request, ())
+    # It runs host commands (docker, ssh): another site, including another
+    # loopback port or a sibling subdomain (same-site), must not trigger it blind.
+    if request.headers.get("sec-fetch-site", "").lower() in ("cross-site", "same-site"):
+        _error("CSRF_FAILED", "cross-site target probe refused", status=403)
+    actor, svc = actor_id(request), service(request)
+    with svc.lock, svc.sessions() as db:
+        require_project_access(db, actor, project_id)
+        row = svc.latest_config(db, project_id)
+        if row is None:
+            _error("RESOURCE_NOT_FOUND", "project configuration not found", status=404)
+        config = json.loads(json.dumps(row.config_json))
+    # Docker/SSH calls run outside the service lock (bounded to about 20 s).
+    return _envelope(request, svc.probe_target(project_id, config))
+
+
 @router.put("/projects/{project_id}/config")
 async def put_config(project_id: str, request: Request):
     return await mutate(request, Configuration,
@@ -237,6 +263,13 @@ def events(task_id: str, request: Request, after: int = Query(default=0, ge=0)):
 async def control(task_id: str, request: Request):
     return await mutate(request, Control, lambda s, db, actor, p: s.control(db, task_id, p["action"], p.get("message")),
                         task_id=task_id, access="execute")
+
+
+@router.post("/tasks/{task_id}/decisions/{decision_id}")
+async def decide(task_id: str, decision_id: str, request: Request):
+    return await mutate(request, Decision,
+        lambda s, db, actor, p: s.decide(db, task_id, decision_id, p["action"], p.get("note")),
+        task_id=task_id, access="execute")
 
 
 @router.get("/tasks/{task_id}/export")

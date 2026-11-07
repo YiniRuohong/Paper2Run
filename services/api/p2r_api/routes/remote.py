@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response
 
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 
 router = APIRouter()
 

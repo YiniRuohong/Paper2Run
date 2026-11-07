@@ -10,6 +10,7 @@ from p2r_persistence.repositories import IdempotencyRepository
 
 from ..auth import require_project_access
 from ..dependencies import actor_id
+from ..docparse_mode import local_mode
 from ..paper_text import latest_paper_text
 from .papers import _check_write, _envelope, _error
 
@@ -29,7 +30,7 @@ def _same_site_only(request: Request) -> None:
 
 def _status(request: Request) -> dict:
     service = _service(request)
-    return {"mode": service.mode(), "offline": service.installer.state().to_json(),
+    return {"mode": local_mode(service), "offline": service.installer.state().to_json(),
             "platform": current_platform()}
 
 
@@ -48,8 +49,8 @@ async def set_docparse_mode(request: Request):
     except ValueError:
         body = None
     mode = body.get("mode") if isinstance(body, dict) else None
-    if mode not in ("online", "offline"):
-        _error("VALIDATION_ERROR", "mode must be 'online' or 'offline'")
+    if mode != "offline":
+        _error("VALIDATION_ERROR", "only local parsing is available: mode must be 'offline'")
     _service(request).settings.set_mode(mode)
     return _envelope(request, _status(request))
 
@@ -96,9 +97,9 @@ async def parse_paper(paper_id: str, request: Request):
         if not key: _error("VALIDATION_ERROR", "Idempotency-Key is required")
         if paper.media_type != "application/pdf":
             _error("PAPER_NOT_PDF", "only PDF papers can be parsed", status=409)
-        mode = _service(request).mode()
+        mode = local_mode(_service(request))
         if mode is None:
-            _error("DOCPARSE_MODE_UNSET", "choose online or offline parsing first", status=409)
+            _error("DOCPARSE_OFFLINE_UNSUPPORTED", "local PDF parsing is not supported on this platform", status=409)
         body = await request.body()
         claim = IdempotencyRepository(db).claim(scope=f"paper-parse:{user_id}:{paper_id}", key=key, body=body)
         if claim.conflict: _error("IDEMPOTENCY_CONFLICT", "idempotency key was used with a different request body", status=409)

@@ -13,11 +13,41 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 MAX_OUTPUT = 1_000_000
+# Docker Desktop on Windows runs Linux containers in WSL2; only the host side
+# differs. Windows support is unit-tested, not verified on a real machine.
+CREATE_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+POSIX_WORKSPACE_SCRIPT = 'import os,sys; p=sys.argv[1]; os.makedirs(p,mode=0o700,exist_ok=True); assert os.path.realpath(p)==p; assert os.path.isdir(p)'
+# Windows paths compare case-insensitively and may use either separator; the
+# realpath still has to equal the requested path (no junction or symlink).
+WINDOWS_WORKSPACE_SCRIPT = ('import os,sys; p=sys.argv[1]; os.makedirs(p,mode=0o700,exist_ok=True); '
+                            'n=lambda v: os.path.normcase(os.path.normpath(v)); '
+                            'assert n(os.path.realpath(p))==n(os.path.abspath(p)); assert os.path.isdir(p)')
+
+
+def _host_is_windows() -> bool:
+    return sys.platform == 'win32'
+
+
+def validate_workspace(workspace, kind: str, *, windows: bool) -> None:
+    """A dedicated absolute directory. SSH targets are POSIX; a local Windows host uses drive paths."""
+    if not isinstance(workspace, str) or any(c in workspace for c in ('\n', '\r', '\x00', ',')):
+        raise ExecutionError('workspace must be a dedicated absolute directory', 'invalid_config')
+    if kind == 'local' and windows:
+        path = PureWindowsPath(workspace)
+        if (not re.fullmatch(r'[A-Za-z]:', path.drive) or path.root != '\\' or '..' in path.parts
+                or len(path.parts) < 2):
+            raise ExecutionError('workspace must be an absolute drive path such as C:\\...\\workspace', 'invalid_config')
+        return
+    if not workspace.startswith('/'):
+        raise ExecutionError('kind must be local/ssh and workspace must be absolute', 'invalid_config')
+    if '..' in workspace.split('/') or workspace == '/':
+        raise ExecutionError('workspace must be a dedicated absolute directory', 'invalid_config')
 
 
 class ExecutionError(Exception):
@@ -35,10 +65,9 @@ class ExecutionTarget:
         self.state_dir = Path(state_dir).resolve()
         self.kind = config.get('kind')
         self.workspace = config.get('workspace')
-        if self.kind not in ('local', 'ssh') or not isinstance(self.workspace, str) or not self.workspace.startswith('/'):
+        if self.kind not in ('local', 'ssh'):
             raise ExecutionError('kind must be local/ssh and workspace must be absolute', 'invalid_config')
-        if any(c in self.workspace for c in ('\n', '\x00', ',')) or '..' in self.workspace.split('/') or self.workspace == '/':
-            raise ExecutionError('workspace must be a dedicated absolute directory', 'invalid_config')
+        validate_workspace(self.workspace, self.kind, windows=_host_is_windows())
         self.image = config.get('image', 'paper2run-experiment:1')
         if not isinstance(self.image, str) or self.image.startswith('-'):
             raise ExecutionError('invalid image', 'invalid_config')
@@ -70,8 +99,14 @@ class ExecutionTarget:
             argv += ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
                      '-o', 'ForwardAgent=no', '-o', 'ClearAllForwardings=yes',
                      '-o', 'ConnectTimeout=10', '--', self.config['ssh_alias'], shlex.join(args)]
+        # Docker and SSH speak UTF-8; never decode with a Windows ANSI code page.
+        # errors='replace' is safe only because controller output is ASCII JSON (file
+        # bytes travel base64 and are hash-checked); nothing binary may rely on this text.
+        options = {'encoding': 'utf-8', 'errors': 'replace'}
+        if _host_is_windows():
+            options['creationflags'] = CREATE_NO_WINDOW  # no console window per docker/ssh call
         try:
-            result = subprocess.run(argv, input=input, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(argv, input=input, capture_output=True, timeout=timeout, **options)
         except subprocess.TimeoutExpired as exc:
             raise ExecutionError('transport timed out; reconcile using the same launch_id', 'transport_timeout') from exc
         except OSError as exc:
@@ -87,6 +122,11 @@ class ExecutionTarget:
 
     def _docker(self, *args: str, **kwargs):
         return self._host(['docker', *args], **kwargs)
+
+    def _python(self) -> str:
+        # SSH targets are POSIX by requirement. A local host runs this very
+        # interpreter: Windows has no python3 on PATH by default.
+        return (sys.executable or 'python3') if self.kind == 'local' else 'python3'
 
     def _call(self, op: str, args: dict, *, agent: bool = False, timeout: int = 45) -> dict:
         command = ['exec', '-i', '-u', '0', self.container]
@@ -105,17 +145,32 @@ class ExecutionTarget:
             raise ExecutionError(result.stderr[-16000:], 'execution_error')
         return value
 
-    def probe(self) -> dict:
-        self._docker('info', '--format', '{{.ServerVersion}}')
-        image = self._docker('image', 'inspect', self.image, check=False)
+    def _docker_identity(self, timeout: int) -> dict:
+        # OSType must be linux: Docker Desktop in Windows-container mode cannot run the image.
+        raw = self._docker('info', '--format', '{"os_type":{{json .OSType}},"server_version":{{json .ServerVersion}}}',
+                           timeout=timeout).stdout
+        try:
+            value = json.loads(raw.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        os_type = value.get('os_type') if value.get('os_type') in ('linux', 'windows') else None
+        version = value.get('server_version')
+        return {'docker_os_type': os_type,
+                'docker_server_version': version if isinstance(version, str) and version else None}
+
+    def probe(self, timeout: int = 45) -> dict:
+        identity = self._docker_identity(timeout)
+        image = self._docker('image', 'inspect', self.image, check=False, timeout=timeout)
         report = {'kind': self.kind, 'container': self.container, 'image': self.image,
                   'image_available': image.returncode == 0, 'ready': False,
                   'network_verified': False, 'storage_enforcement': 'observed',
-                  'gpu_devices_requested': self.config.get('gpu_devices', [])}
+                  'gpu_devices_requested': self.config.get('gpu_devices', []), **identity}
         if image.returncode:
             report['blocker'] = 'Image missing. Run: bash scripts/autonomous/build-image.sh (on the Docker target); never auto-pull arbitrary images.'
             return report
-        inspect = self._docker('inspect', self.container, check=False)
+        inspect = self._docker('inspect', self.container, check=False, timeout=timeout)
         if inspect.returncode == 0:
             obj = json.loads(inspect.stdout)[0]
             report['container_running'] = obj['State']['Running']
@@ -127,12 +182,31 @@ class ExecutionTarget:
                 report['ready'] = report['network_verified']
         return report
 
+    def observe_gpus(self, timeout: int = 10) -> list[dict]:
+        """NVIDIA GPUs visible on the target host; [] when none can be observed.
+
+        Host visibility only: this does not prove a container can use them.
+        """
+        try:
+            result = self._host(['nvidia-smi', '--query-gpu=index,name', '--format=csv,noheader'],
+                                check=False, timeout=timeout)
+        except ExecutionError:
+            return []
+        if result.returncode:
+            return []
+        gpus = []
+        for line in result.stdout.splitlines()[:64]:
+            index, _, name = line.partition(',')
+            if index.strip().isdigit() and name.strip():
+                gpus.append({'index': index.strip(), 'name': name.strip()[:128]})
+        return gpus
+
     def _host_addresses(self):
         # getifaddrs covers aliases and additional public management interfaces,
         # including addresses absent from hostname DNS. Run on the Docker target.
-        script = Path(__file__).with_name('_interfaces.py').read_text()
+        script = Path(__file__).with_name('_interfaces.py').read_text(encoding='utf-8')
         try:
-            values = json.loads(self._host(['python3', '-I', '-c', script]).stdout)
+            values = json.loads(self._host([self._python(), '-I', '-c', script]).stdout)
             if not isinstance(values, list) or not values:
                 raise ValueError('no IPv4 interfaces')
             return sorted({str(ipaddress.IPv4Address(x)) for x in values})
@@ -264,8 +338,8 @@ class ExecutionTarget:
             self._prepared = True
             return {'ready': True, 'container': self.container, 'network': network, 'storage_enforcement': 'observed'}
         # Host operations are fixed setup only; no experiment shell runs here.
-        script = 'import os,sys; p=sys.argv[1]; os.makedirs(p,mode=0o700,exist_ok=True); assert os.path.realpath(p)==p; assert os.path.isdir(p)'
-        self._host(['python3', '-c', script, self.workspace])
+        script = WINDOWS_WORKSPACE_SCRIPT if self.kind == 'local' and _host_is_windows() else POSIX_WORKSPACE_SCRIPT
+        self._host([self._python(), '-c', script, self.workspace])
         network_name = self.container + '-net'
         if self._docker('network', 'inspect', network_name, check=False).returncode:
             self._docker('network', 'create', network_name)
@@ -283,7 +357,7 @@ class ExecutionTarget:
             args += ['--gpus', '"device=' + ','.join(devices) + '"']
         args += [self.image, 'sleep', 'infinity']
         self._docker(*args)
-        helper = Path(__file__).with_name('_container.py').read_text()
+        helper = Path(__file__).with_name('_container.py').read_text(encoding='utf-8')
         self._docker('start', self.container)
         # Inject trusted controller via stdin, never mount source/state/credentials.
         self._docker('exec', '-i', '-u', '0', self.container, 'python3', '-c',

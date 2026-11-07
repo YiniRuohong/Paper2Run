@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { ancestors, buildTree, countFolders, filterFiles, formatBytes, parseCsv, previewKind } from '../src/ui/workbench/tree.ts';
 import { artifactPath, buildStages, toolLabel, toWbFiles } from '../src/features/autonomous/stages.ts';
-import { createRealFlowState } from '../src/features/guided/realflow-state.ts';
-import { flowRecords, FLOW_PATHS } from '../src/features/guided/realflow-files.ts';
 
 const f = (path, bytes = 1, mediaType = null) => ({ path, bytes, mediaType });
 
@@ -79,31 +77,102 @@ test('frozen artifacts link to the listing path the backend serves', () => {
   assert.deepEqual(toWbFiles([{ path: 'artifacts/u/x', source: 'artifact', bytes: 1, media_type: 'text/plain', sha256: 'h' }])[0].badge, '证据');
 });
 
-test('real-flow records only contain what the server returned', () => {
-  const empty = flowRecords(createRealFlowState(), null, []);
-  assert.equal(empty.files.length, 0);
-  const s = createRealFlowState();
-  s.paper = { paper_id: 'p1', project_id: 'pr', title: 'T', status: 'ready', sha256: 'a'.repeat(64), page_count: 3, content_available: true, current_extraction_id: null, active_operation_id: null, error: null, created_at: '2026-11-03T00:00:00Z' };
-  s.codegen = { attemptId: 'at', attemptIndex: 0, code: 'print(1)\n', codeSha256: 'c'.repeat(64), notes: null };
-  const exp = [{ id: 'x', run_id: 'r', status: 'succeeded', operation_id: null, report_hash: null, created_at: '', items: [
-    { format: 'report_json', status: 'ready', artifact_id: 'd'.repeat(64), filename: 'report.json', bytes: 10, media_type: 'application/json', sha256: 'd'.repeat(64), error: null },
-    { format: 'report_pdf', status: 'pending', artifact_id: null, filename: null, bytes: null, media_type: null, sha256: null, error: null },
-  ] }];
-  const r = flowRecords(s, null, exp);
-  assert.ok(r.text.has(FLOW_PATHS.paper));
-  assert.equal(r.text.get('代码/attempt-0/reproduce.py'), 'print(1)\n');
-  assert.equal(r.artifacts.get('导出/report.json'), 'd'.repeat(64));
-  assert.equal(r.files.filter(x => x.path.startsWith('导出/')).length, 1, 'pending exports are not listed');
-  assert.ok(!JSON.stringify([...r.text.values()]).includes('api_key'));
-});
-
-test('the three task surfaces share the workbench and keep live controls as children', async () => {
-  for (const file of ['../src/features/guided/RealFlowPanel.tsx', '../src/features/dashboard/TaskDetail.tsx', '../src/features/autonomous/AutonomousPage.tsx']) {
-    const src = await readFile(new URL(file, import.meta.url), 'utf8');
-    assert.match(src, /<Workbench\b/, file);
-    assert.doesNotMatch(src, /live=\{/, `${file}: live view must be children, not a prop`);
-  }
+test('the task page keeps live controls as workbench children and releases blob previews', async () => {
+  const page = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /<Workbench\b/);
+  assert.doesNotMatch(page, /live=\{/, 'live view must be children, not a prop');
   const wb = await readFile(new URL('../src/ui/workbench/Workbench.tsx', import.meta.url), 'utf8');
   assert.match(wb, /URL\.revokeObjectURL/, 'blob previews are released');
   assert.doesNotMatch(wb, /dangerouslySetInnerHTML|localStorage/);
+});
+
+test('workbench supports an app layout with rail head, group separators and expandable items', async () => {
+  const wb = await readFile(new URL('../src/ui/workbench/Workbench.tsx', import.meta.url), 'utf8');
+  assert.match(wb, /railHead\?: ReactNode/);
+  assert.match(wb, /wb-rail-head/);
+  assert.match(wb, /is-app/);
+  assert.match(wb, /className="wb-group"[^>]*role="presentation"|role="presentation"[^>]*className="wb-group"/);
+  assert.match(wb, /aria-expanded=\{childOpen\}/, 'items with children expand via aria-expanded');
+  const css = await readFile(new URL('../src/ui/workbench/workbench.css', import.meta.url), 'utf8');
+  assert.match(css, /\.wb\.is-app\s*\{[^}]*"rail head head"\s*"rail viewer files"/);
+  assert.match(css, /\[data-shell="darwin"\] \.wb\.is-app \.wb-rail-head/);
+  assert.match(css, /82px/);
+});
+
+test('errorDetail lives in errors.ts and the test helper re-exports it', async () => {
+  const errors = await readFile(new URL('../src/features/autonomous/errors.ts', import.meta.url), 'utf8');
+  assert.match(errors, /export const errorDetail/);
+  const helper = await import('./helpers/error-detail.mjs');
+  assert.equal(typeof helper.errorDetail, 'function');
+  const page = await readFile(new URL('../src/features/flow/DraftPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /from '\.\.\/autonomous\/errors'/);
+});
+
+test('app layout keeps the rail spanning every row and its head pinned', async () => {
+  const css = await readFile(new URL('../src/ui/workbench/workbench.css', import.meta.url), 'utf8');
+  const block = (re) => { const m = css.match(re); assert.ok(m, `block ${re} exists`); return m[0]; };
+  const media1240 = block(/@media \(max-width: 1240px\) \{[\s\S]*?\n\}/);
+  const appRail = media1240.match(/\.wb\.is-app \.wb-rail\s*\{[^}]*\}/);
+  assert.ok(appRail, '1240 block styles the app rail');
+  assert.doesNotMatch(appRail[0], /grid-row/, 'the rail must keep spanning rows through grid-area');
+  const head = block(/\.wb\.is-app \.wb-rail-head\s*\{[^}]*\}/);
+  assert.match(head, /position:\s*sticky/);
+  assert.match(head, /top:\s*0/);
+  assert.match(head, /background:/);
+  assert.doesNotMatch(css.replace(/\.wb\.is-app \.wb-rail-head\s*\{[^}]*\}/, ''), /^\.wb-rail-head\s*\{[^}]*sticky/m, 'plain layout stays unchanged');
+});
+
+test('task page continues the nine-step timeline in the full-bleed layout', async () => {
+  const page = await readFile(new URL('../src/features/autonomous/TaskPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /flowStages\(/);
+  assert.match(page, /railHead=/);
+  assert.match(page, /<RailHead\b/);
+  assert.doesNotMatch(page, /auto-taskbar/);
+  assert.doesNotMatch(page, /项目任务/);
+  assert.doesNotMatch(page, /export \{ errorDetail \}/);
+  assert.match(page, /auto-live-status/);
+  assert.match(page, /drawer=\{drawer\}/);
+  assert.match(page, /onOpenItem=/);
+  // Same frame as the setup steps: bare centre column, the stage as the step title, controls in the pinned footer.
+  assert.match(page, /\n\s+bareLive\n/);
+  assert.match(page, /<StepFrame title=\{task \? activeTitle/);
+  assert.match(page, /actions=\{controls\}/);
+  assert.match(page, /阶段由智能体自报进度与事件归纳得出，不是程序判定/);
+});
+
+test('at 860px and below the app rail is capped like the plain layout so the form stays on the first screen', async () => {
+  const css = await readFile(new URL('../src/ui/workbench/workbench.css', import.meta.url), 'utf8');
+  const media860 = css.match(/@media \(max-width: 860px\) \{[\s\S]*?\n\}/);
+  assert.ok(media860, '860 block exists');
+  const appRail = media860[0].match(/\.wb\.is-app \.wb-rail\s*\{[^}]*\}/);
+  assert.ok(appRail, 'the 860 block overrides the 1240 app-rail height (same specificity, later rule)');
+  assert.match(appRail[0], /max-height:\s*340px/);
+  assert.match(appRail[0], /overflow-y:\s*auto/);
+  assert.match(media860[0], /grid-template-areas:\s*"rail"\s*"head"\s*"viewer"\s*"files"/);
+  assert.doesNotMatch(media860[0], /\.wb-rail-head\s*\{[^}]*position:\s*static/, 'the rail head stays sticky inside the capped rail');
+});
+
+test('rail sub-steps open the drawer when the page asks for it, and stage heads still expand', async () => {
+  const wb = await readFile(new URL('../src/ui/workbench/Workbench.tsx', import.meta.url), 'utf8');
+  assert.match(wb, /const row = onOpenItem\n\s+\? <button[^\n]*onClick=\{\(\) => onOpenItem\(stageId, item\)\}/);
+  assert.match(wb, /props\.onOpenStage\?\.\(stage\.id\); if \(hasItems/);
+  assert.match(wb, /\{props\.drawer && <Drawer\b/);
+  const drawer = await readFile(new URL('../src/ui/workbench/Drawer.tsx', import.meta.url), 'utf8');
+  assert.match(drawer, /e\.key === 'Escape'/);
+  assert.match(drawer, /wb-drawer-scrim[^\n]*onClick/);
+  assert.match(drawer, /opener\?\.focus/);
+});
+
+test('rail runs read as the command, without the virtualenv path', async () => {
+  const { commandName } = await import('../src/ui/workbench/tree.ts');
+  assert.equal(commandName('$ /work/.venv/bin/python run_experiment.py --epochs 60'), 'python run_experiment.py --epochs 60');
+  assert.equal(commandName('后台 $ cd /work && /work/.venv/bin/python train.py'), 'python train.py');
+  assert.equal(commandName('$ bash run.sh'), 'bash run.sh');
+});
+
+test('file tree rows carry no evidence/record/version labels; the opened file header still does', async () => {
+  const wb = await readFile(new URL('../src/ui/workbench/Workbench.tsx', import.meta.url), 'utf8');
+  const tree = wb.slice(wb.indexOf('function TreeLevel'), wb.indexOf('function Preview'));
+  assert.doesNotMatch(tree, /FileTag|\.badge|\.tags/);
+  assert.match(wb, /activeFile\.tags\?\.map/);
 });

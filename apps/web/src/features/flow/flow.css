@@ -1,0 +1,136 @@
+/* Guided draft page: rail head, the step frame and its few fields. Tokens only. */
+
+.flow-page { padding: 20px 20px 0; min-width: 0; animation: flow-enter 280ms var(--ease-expo) backwards; }
+@keyframes flow-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .flow-page { animation: none; } }
+
+/* rail head (shared with the task page) */
+.flow-brand { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
+.flow-back { margin-left: auto; padding: 3px 8px; border-radius: var(--r-s); color: var(--muted); font-size: 12.5px; text-decoration: none; }
+.flow-back:hover { background: var(--hover); color: var(--text); }
+.flow-back:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* step frame: title → fields → next. It fills the whole centre column; the
+   next button sits in a footer pinned to the bottom of the column. */
+.flow-step {
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 24px;
+  width: 100%; min-width: 0; min-height: 100%;
+}
+.flow-head { display: flex; align-items: center; gap: 10px; }
+.flow-title { margin: 0; font-size: 22px; font-weight: 650; line-height: 1.35; letter-spacing: -0.015em; color: var(--text); }
+.flow-hint-wrap { position: relative; display: inline-flex; }
+.flow-hint {
+  display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1.5px solid var(--faint); border-radius: 50%;
+  background: transparent; color: var(--muted); font: 700 12px/1 var(--sans); cursor: help;
+}
+.flow-hint:hover, .flow-hint:focus-visible { color: var(--text); border-color: var(--muted); }
+.flow-hint:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.flow-tip {
+  position: absolute; left: 50%; top: calc(100% + 8px); z-index: 5; width: max-content; max-width: min(320px, 70vw); transform: translateX(-12px);
+  padding: 8px 11px; border: 1px solid var(--line); border-radius: var(--r-m); background: var(--surface); color: var(--text);
+  font-size: 13px; font-weight: 400; line-height: 1.55; box-shadow: var(--shadow-pop);
+  visibility: hidden; opacity: 0; pointer-events: none; transition: opacity var(--dur-fast) ease;
+}
+.flow-hint:hover + .flow-tip, .flow-hint:focus-visible + .flow-tip { visibility: visible; opacity: 1; }
+.flow-fields { display: grid; align-content: start; gap: 18px; min-width: 0; }
+.flow-next {
+  position: sticky; bottom: 0; z-index: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+  margin: 0 -40px; padding: 16px 40px 20px; border-top: 1px solid var(--line-soft); background: var(--surface);
+}
+
+/* Larger controls in the centre column: fields, inputs and buttons are scaled up from the compact app defaults. */
+.flow-page .flow-step .btn { height: 38px; padding: 0 18px; font-size: 14px; border-radius: 10px; }
+.flow-page .flow-next .btn-primary { min-width: 132px; }
+.flow-page .flow-step .ui-form { border-radius: 14px; }
+.flow-page .flow-step .ui-field { grid-template-columns: minmax(150px, 26%) minmax(0, 1fr); gap: 8px 24px; padding: 16px 22px; }
+.flow-page .flow-step .ui-field-label { font-size: 14.5px; font-weight: 500; }
+.flow-page .flow-step .ui-field-label small { margin-top: 2px; font-size: 12.5px; font-weight: 400; }
+.flow-page .flow-step .ui-field input:not([type="checkbox"]):not([type="radio"]),
+.flow-page .flow-step .ui-field select { height: 40px; padding: 0 12px; border-radius: 9px; font-size: 14.5px; }
+.flow-page .flow-step .ui-field textarea { padding: 10px 12px; border-radius: 9px; font-size: 14.5px; }
+.flow-page .flow-step .ui-callout { padding: 12px 14px; font-size: 14px; }
+.flow-page .flow-step .ui-disc-sub > .ui-disc-head > .ui-disc-toggle { font-size: 13.5px; }
+.flow-page .flow-step .ui-help { font-size: 13px; }
+/* The same scale for the task page's cards, lists and disclosures (steps 05–09). */
+.flow-page .flow-step .ui-card, .flow-page .flow-step .ui-disc-card, .flow-page .flow-step .ui-list { border-radius: 14px; }
+.flow-page .flow-step .ui-card-head { padding: 18px 22px; }
+.flow-page .flow-step .ui-card-title { font-size: 16px; }
+.flow-page .flow-step .ui-card-sub { font-size: 13.5px; }
+.flow-page .flow-step .ui-card-section { padding: 16px 22px 18px; }
+.flow-page .flow-step .ui-card-section > h3, .flow-page .flow-step .ui-subhead { font-size: 14.5px; }
+.flow-page .flow-step .ui-disc-card > .ui-disc-head > .ui-disc-toggle { padding: 16px 22px; font-size: 15px; }
+.flow-page .flow-step .ui-disc-card > .ui-disc-body { padding: 4px 22px 18px; }
+.flow-page .flow-step .ui-row { min-height: 56px; padding: 12px 20px; }
+.flow-page .flow-step .ui-row-title { font-size: 14.5px; }
+.flow-page .flow-step .ui-row-sub { font-size: 13px; }
+.flow-page .flow-step .ui-kv dt { font-size: 13.5px; }
+.flow-page .flow-step .ui-kv dd { font-size: 14.5px; }
+.flow-page .flow-step .ui-code { font-size: 12.5px; }
+.flow-page .flow-step .wb-live-head { margin: 0 0 4px; font-size: 13.5px; }
+.flow-page .flow-step .wb-live-head .wb-badge, .flow-page .flow-step .wb-live-head .ui-badge { margin-left: 4px; }
+.flow-page .flow-step .ui-empty h3 { font-size: 16px; }
+.flow-page .flow-step .ui-empty p { font-size: 13.5px; }
+.flow-page .flow-step .flow-summary { border-radius: 14px; }
+.flow-page .flow-step .flow-summary > div { grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 12px 20px; }
+.flow-page .flow-step .flow-summary dt { font-size: 14px; }
+.flow-page .flow-step .flow-summary dd { font-size: 14.5px; line-height: 1.6; }
+.flow-page .flow-step .auto-compose .auto-actions { padding: 12px 22px; }
+.flow-next .ui-help, .flow-actions .ui-help { margin: 0; }
+.flow-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.flow-error { margin-bottom: 14px; }
+
+/* 01 */
+.flow-file-pick { position: relative; cursor: pointer; }
+.flow-file-pick:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.flow-file-pick.is-disabled { cursor: not-allowed; opacity: 0.55; }
+.flow-file-input { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+.flow-file-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 14px; }
+.flow-current { margin: 0; color: var(--muted); font-size: 14.5px; }
+/* the PDF pick area: a large panel that takes the step's free height */
+.flow-drop {
+  display: grid; justify-items: center; align-content: center; gap: 10px; min-height: clamp(260px, 46vh, 560px); padding: 40px 24px;
+  border: 1.5px dashed var(--line); border-radius: 16px; background: color-mix(in srgb, var(--surface) 70%, var(--bg)); text-align: center;
+  transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+.flow-drop:hover, .flow-drop:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.flow-drop.has-file { border-style: solid; border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface)); }
+.flow-drop.is-compact { min-height: 200px; padding: 28px 24px; }
+.flow-drop-icon { display: grid; place-items: center; width: 60px; height: 60px; margin-bottom: 6px; border-radius: 16px; background: var(--accent-soft); color: var(--accent-text); }
+.flow-drop-title { font-size: 17px; font-weight: 600; color: var(--text); }
+.flow-drop-sub { color: var(--muted); font-size: 13.5px; }
+.flow-drop .flow-file-name { max-width: min(520px, 100%); font: 500 14px/1.4 var(--mono); }
+.flow-drop-actions { justify-content: center; margin-top: 10px; }
+.flow-current b { color: var(--text); font-weight: 600; }
+
+/* 02 */
+.flow-textarea { display: grid; gap: 6px; }
+.flow-textarea textarea {
+  width: 100%; min-height: clamp(220px, 42vh, 520px); padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--field); color: var(--text); font: 15px/1.7 var(--sans); resize: vertical;
+}
+.flow-textarea textarea::placeholder { color: var(--muted); opacity: 0.8; }
+.flow-textarea textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.flow-count { justify-self: end; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+
+/* 04 */
+.flow-summary { display: grid; gap: 0; margin: 0; border: 1px solid var(--line); border-radius: var(--r-l); background: var(--surface); overflow: hidden; }
+.flow-summary > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; padding: 9px 14px; }
+.flow-summary > div + div { border-top: 1px solid var(--line-soft); }
+.flow-summary dt { color: var(--muted); font-size: 13px; }
+.flow-summary dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.flow-block { display: grid; gap: 10px; min-width: 0; }
+.flow-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; padding: 0 14px; font-size: 13.5px; }
+.flow-row-label { color: var(--muted); font-size: 13px; }
+.flow-block .auto-probe { margin-top: 4px; }
+.flow-block .auto-probe-missing { margin: 0; }
+.flow-budget { margin: 0; padding: 0 14px; color: var(--text); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+
+@container wb-pane (max-width: 560px) {
+  .flow-page .flow-step .ui-field { grid-template-columns: minmax(0, 1fr); align-items: stretch; padding: 14px 16px; }
+}
+@media (max-width: 860px) {
+  .flow-page { padding: 12px 12px 0; }
+  .flow-page .wb-viewer.is-bare > .wb-pane:not(.wb-pane-file) { padding: 20px 20px 0; }
+  .flow-next { margin: 0 -20px; padding: 14px 20px 16px; }
+  .flow-title { font-size: 19px; }
+}

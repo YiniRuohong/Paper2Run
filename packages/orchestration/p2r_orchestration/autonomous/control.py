@@ -26,49 +26,108 @@ class ControlMixin:
         reason = row.context_json.get("cancel_intent", {}).get("reason")
         return {**error, "cause": reason} if error and reason else error or reason
 
+    def active_worker(self, task_id):
+        worker = self.workers.get(task_id)
+        return worker if worker and worker["thread"].is_alive() else None
+
+    def deliver_message(self, db, row, message):
+        """User steering: journaled, kept for the next prompt, and steered into a live turn."""
+        self.event(db, row, "user_message", {"message": message})
+        # Instructions survive a restart; do not mutate the initial paper context.
+        context = dict(row.context_json)
+        context["user_messages"] = [*context.get("user_messages", [])[-31:], message]
+        row.context_json = context
+        worker = self.active_worker(row.id)
+        if worker:
+            worker["bridge"].steer(message)
+
+    def resume(self, db, task_id, settle=None):
+        """The one resume path. `settle(row, pending_decision)` validates without mutating and
+        returns a callable that applies the user's decision, or None when nothing is pending."""
+        row = self.row(db, task_id)
+        if row.outcome is not None:
+            fail("TASK_FINISHED", "task has a final outcome and cannot resume", 409)
+        if row.state != "paused":
+            fail("INVALID_STATE", "only paused tasks can be resumed", 409)
+        if self.active_worker(task_id):
+            fail("TASK_BUSY", "wait for the previous worker to finish pausing", 409)
+        if self.cancel_requested(row):
+            fail("CANCELLATION_PENDING", "task cancellation is irrevocable; reconcile stop instead of resuming", 409)
+        if row.harness_json is None:
+            fail("LEGACY_TASK", "该任务创建于新版 harness 之前，请新建任务", 409)
+        apply = settle(row, row.pending_decision_json) if settle else None
+        if row.pending_decision_json and apply is None:
+            fail("DECISION_PENDING", "approve or reject the pending decision before resuming", 409)
+        self.settle_interrupted_usage(db, row)
+        if row.context_json.get("paper_available") and not row.context_json.get("text"):
+            context = self.paper_context(db, row.project_id, row.context_json.get("paper_version_id"))
+            if not context.get("text"):
+                fail("PAPER_CONTENT_REQUIRED", "finish verified paper parsing before resume", 409)
+            row.context_json = {**row.context_json, **context}
+        if apply:
+            apply()
+        self.remaining(row)
+        self.resolve_models(row)
+        row.state, row.error_json = "queued", None
+        self.event(db, row, "task_resumed", {"jobs_to_reconcile": row.jobs_json})
+        return row
+
+    def withdraw_decision(self, db, row, reason):
+        """Drop a pending decision nobody can answer any more. Idempotent: the
+        event is written only when a decision is actually withdrawn."""
+        decision = row.pending_decision_json
+        if not decision:
+            return
+        row.pending_decision_json = None
+        self.event(db, row, "decision_withdrawn", {"decision_id": decision.get("id"), "reason": reason})
+
+    def approve_decision(self, db, row, decision):
+        # The user approves the precise frozen proposal, not merely a resume.
+        row.protocol_json = decision["proposed"]
+        row.pending_decision_json = None
+        row.reference_sources_confirmed = False
+        self.event(db, row, "protocol_approved", {"decision_id": decision["id"], "protocol": row.protocol_json})
+        row.report_json = None
+
+    def reject_decision(self, db, row, decision, note=None):
+        # The current protocol stays in force; Pi learns of the rejection as a user message.
+        row.pending_decision_json = None
+        self.event(db, row, "protocol_rejected", {"decision_id": decision["id"],
+            "proposed_sha256": decision["proposed"]["sha256"], "changed": decision.get("changed", []), "note": note})
+        text = f"Protocol proposal {decision['id']} was rejected by the user; the current protocol stays in force."
+        self.deliver_message(db, row, f"{text} Note: {note}" if note else text)
+
+    def decide(self, db, task_id, decision_id, action, note=None):
+        """Explicit answer to the pending decision; resumes the task under the resulting protocol."""
+        if action not in ("approve", "reject"):
+            fail("VALIDATION_ERROR", "decision action must be approve or reject")
+
+        def settle(row, decision):
+            if not decision or decision.get("id") != decision_id:
+                fail("DECISION_MISMATCH", "decision_id does not match the pending decision", 409)
+            if action == "approve":
+                return lambda: self.approve_decision(db, row, decision)
+            return lambda: self.reject_decision(db, row, decision, note)
+        return self.resume(db, task_id, settle)
+
     def control(self, db, task_id, action, message=None):
         row = self.row(db, task_id)
-        worker = self.workers.get(task_id)
-        active = bool(worker and worker["thread"].is_alive())
+        worker = self.active_worker(task_id)
+        active = worker is not None
         if action == "message":
             if not message:
                 fail("VALIDATION_ERROR", "message is required")
-            self.event(db, row, "user_message", {"message": message})
-            # Instructions survive a restart; do not mutate the initial paper context.
-            context = dict(row.context_json)
-            context["user_messages"] = [*context.get("user_messages", [])[-31:], message]
-            row.context_json = context
-            if active:
-                worker["bridge"].steer(message)
+            self.deliver_message(db, row, message)
             return row
         if action == "resume":
-            if row.state != "paused":
-                fail("INVALID_STATE", "only paused tasks can be resumed", 409)
-            if active:
-                fail("TASK_BUSY", "wait for the previous worker to finish pausing", 409)
-            if self.cancel_requested(row):
-                fail("CANCELLATION_PENDING", "task cancellation is irrevocable; reconcile stop instead of resuming", 409)
-            self.settle_interrupted_usage(db, row)
-            if row.context_json.get("paper_available") and not row.context_json.get("text"):
-                context = self.paper_context(db, row.project_id, row.context_json.get("paper_version_id"))
-                if not context.get("text"):
-                    fail("PAPER_CONTENT_REQUIRED", "finish verified paper parsing before resume", 409)
-                row.context_json = {**row.context_json, **context}
-            decision = row.pending_decision_json
-            if decision:
-                # The user must approve the precise frozen proposal, not merely resume.
+            def settle(row, decision):
+                # Legacy path: `approve:<pending_decision.id>` as the resume message.
+                if not decision or not message:
+                    return None  # with a pending decision, resume() reports DECISION_PENDING
                 if message != f"approve:{decision['id']}":
                     fail("PROTOCOL_APPROVAL_REQUIRED", "resume message must be approve:<pending_decision.id>", 409)
-                row.protocol_json = decision["proposed"]
-                row.pending_decision_json = None
-                row.reference_sources_confirmed = False
-                self.event(db, row, "protocol_approved", {"decision_id": decision["id"], "protocol": row.protocol_json})
-                row.report_json = None
-            self.remaining(row)
-            self.resolve_models(row)
-            row.state, row.error_json = "queued", None
-            self.event(db, row, "task_resumed", {"jobs_to_reconcile": row.jobs_json})
-            return row
+                return lambda: self.approve_decision(db, row, decision)
+            return self.resume(db, task_id, settle)
         if action == "pause":
             if row.state not in ("queued", "running", "paused"):
                 fail("INVALID_STATE", "task cannot be paused", 409)
@@ -79,6 +138,7 @@ class ControlMixin:
             return row
         if action == "stop":
             self.request_cancel(row)
+            self.withdraw_decision(db, row, "task_stopped")
             if row.state == "stopped":
                 return row
             row.state = "stopping"
@@ -99,6 +159,8 @@ class ControlMixin:
                 self.request_cancel(row)
             if not self.cancel_requested(row):
                 return
+            # A turn still finishing when stop was requested may have left a proposal.
+            self.withdraw_decision(db, row, "task_stopped")
             jobs = dict(row.jobs_json)
             if not jobs:
                 row.state, row.error_json = "stopped", self.cancellation_error(row)

@@ -65,6 +65,31 @@ def test_install_env_allows_network_and_pip(monkeypatch, tmp_path):
     assert env["MINERU_TELEMETRY_DISABLED"] == "1"
 
 
+def test_docparse_proxy_applies_only_to_install_downloads(monkeypatch, tmp_path):
+    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("P2R_DOCPARSE_PROXY", "http://127.0.0.1:7890")
+    env = install_env(tmp_path)
+    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        assert env[key] == "http://127.0.0.1:7890"
+    assert env["NO_PROXY"] == env["no_proxy"] == "127.0.0.1,localhost,::1"
+    # parsing itself stays offline and never gets the proxy
+    assert not any("proxy" in key.lower() for key in offline_env(tmp_path))
+    monkeypatch.setenv("P2R_DOCPARSE_PROXY", "  ")
+    assert "https_proxy" not in install_env(tmp_path)
+
+
+def test_docparse_model_source_reaches_only_the_download(monkeypatch, tmp_path):
+    monkeypatch.delenv("MINERU_MODEL_SOURCE", raising=False)
+    monkeypatch.delenv("P2R_DOCPARSE_MODEL_SOURCE", raising=False)
+    assert "MINERU_MODEL_SOURCE" not in install_env(tmp_path)
+    monkeypatch.setenv("P2R_DOCPARSE_MODEL_SOURCE", " ModelScope ")
+    assert install_env(tmp_path)["MINERU_MODEL_SOURCE"] == "modelscope"
+    assert "MINERU_MODEL_SOURCE" not in offline_env(tmp_path)
+    monkeypatch.setenv("P2R_DOCPARSE_MODEL_SOURCE", "somewhere-else")
+    assert "MINERU_MODEL_SOURCE" not in install_env(tmp_path)
+
+
 def test_windows_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(proc.sys, "platform", "win32")
     assert mineru_kit(tmp_path) == tmp_path / "venv" / "Scripts" / "mineru-kit.exe"

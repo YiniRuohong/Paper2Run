@@ -2,6 +2,8 @@
 rem Paper2Run one-click launcher (Windows): double-click.
 chcp 65001 >nul
 cd /d "%~dp0"
+rem Experiments need Docker Desktop (WSL2 backend, Linux containers); the app starts without it.
+echo Paper2Run: experiments need Docker Desktop with the WSL2 backend in Linux-container mode.
 where py >nul 2>nul
 if %errorlevel%==0 (
   py -3 scripts\launch.py

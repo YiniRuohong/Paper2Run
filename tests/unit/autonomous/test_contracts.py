@@ -3,7 +3,7 @@ import copy
 import pytest
 from pydantic import ValidationError
 
-from p2r_contracts.autonomous import ProjectConfig, canonical_hash, resolve_project_config, safe_config_snapshot
+from p2r_contracts.autonomous import OUTCOMES, ProjectConfig, canonical_hash, resolve_project_config, safe_config_snapshot
 
 
 def config():
@@ -45,6 +45,25 @@ def test_invalid_config(section, key, value):
     data[section][key] = value
     with pytest.raises(ValidationError):
         ProjectConfig.model_validate(data)
+
+
+def test_every_task_budget_is_optional():
+    data = config()
+    for key in ("max_model_calls", "max_model_tokens", "wall_time_seconds"):
+        del data["limits"][key]
+    limits = ProjectConfig.model_validate(data).limits
+    assert (limits.max_model_calls, limits.max_model_tokens, limits.wall_time_seconds) == (None, None, None)
+    for key in ("max_model_calls", "wall_time_seconds"):
+        data["limits"][key] = None
+    assert ProjectConfig.model_validate(data).limits.max_model_calls is None
+
+
+def test_token_limit_is_optional():
+    data = config()
+    del data["limits"]["max_model_tokens"]
+    assert ProjectConfig.model_validate(data).limits.max_model_tokens is None
+    data["limits"]["max_model_tokens"] = None
+    assert ProjectConfig.model_validate(data).limits.max_model_tokens is None
 
 
 @pytest.mark.parametrize("reference", [
@@ -106,3 +125,46 @@ def test_remote_path_not_local_resolved(tmp_path):
         bad["target"]["remote_workspace"] = path
         with pytest.raises(ValidationError):
             ProjectConfig.model_validate(bad)
+
+
+def test_limits_default_repair_rounds():
+    assert ProjectConfig.model_validate(config()).limits.max_repair_rounds == 3
+    for bad in (11, -1):
+        value = config()
+        value["limits"]["max_repair_rounds"] = bad
+        with pytest.raises(ValidationError):
+            ProjectConfig.model_validate(value)
+    for ok in (0, 10):
+        value = config()
+        value["limits"]["max_repair_rounds"] = ok
+        assert ProjectConfig.model_validate(value).limits.max_repair_rounds == ok
+
+
+def test_outcomes_are_fixed():
+    assert OUTCOMES == ("verified", "completed_with_issues", "review_unavailable", "blocked_by_safety")
+
+
+def test_default_output_cap_leaves_room_for_reasoning():
+    from p2r_contracts.autonomous import DEFAULT_MAX_TOKENS
+    # 4096 was used up by a reasoning model's thinking before any tool call.
+    assert DEFAULT_MAX_TOKENS >= 32_768
+
+
+@pytest.mark.parametrize("entrypoint", ["train.py", "src/run_experiment.py", "scripts/run.sh", "main"])
+def test_entrypoint_is_a_script_path(entrypoint):
+    from p2r_contracts.autonomous import ExperimentProtocol
+    from .test_service import protocol
+    ExperimentProtocol.model_validate({**protocol(), "entrypoint": entrypoint})
+
+
+@pytest.mark.parametrize("entrypoint", [
+    "/work/.venv/bin/python run_experiment.py --data-seed 42",  # a whole command: the gate can never match it
+    "python train.py", "train.py --epochs 3", "/work/train.py", "./train.py", "../train.py", "a/../b.py", "run.py; rm -rf x",
+])
+def test_entrypoint_rejects_commands_with_a_hint(entrypoint):
+    from pydantic import ValidationError
+    from p2r_contracts.autonomous import ExperimentProtocol
+    from .test_service import protocol
+    with pytest.raises(ValidationError) as caught:
+        ExperimentProtocol.model_validate({**protocol(), "entrypoint": entrypoint})
+    assert "put the interpreter and arguments in parameters" in str(caught.value)

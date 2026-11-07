@@ -1,0 +1,16 @@
+@import "pdfjs-dist/web/pdf_viewer.css";
+@import "./pdf_viewer.css";
+
+.Highlight__popup {
+  background-color: #ffffff;
+  border: 1px solid #e4e4e8;
+  color: #1d1d1f;
+  padding: 0.5rem 0.75rem;
+  border-radius: 9px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 300px;
+  max-height: 100px;
+  overflow-y: scroll;
+}

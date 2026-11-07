@@ -14,6 +14,8 @@ from pydantic import Field, StringConstraints
 from typing import Annotated
 
 from p2r_contracts.autonomous import Name, StrictModel, Text, canonical_hash
+from p2r_evaluation.safe_read import is_link_or_reparse
+from p2r_orchestration.locks import exclusive_lock
 
 COMPATIBILITY = "paper2run.skills.v1"
 MAX_PACKAGE_BYTES = 2 * 1024 * 1024
@@ -31,13 +33,21 @@ class SkillManifest(StrictModel):
     content_sha256: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")] | None = None
 
 
+def _is_link(path: Path) -> bool:
+    """``is_symlink()`` plus Windows reparse points (junctions), which ``is_symlink()`` misses."""
+    try:
+        return is_link_or_reparse(os.lstat(path))
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        return False
+
+
 def _package(source: Path) -> dict:
-    if source.is_symlink() or not source.is_dir():
+    if _is_link(source) or not source.is_dir():
         raise ValueError("skill source must be a regular directory")
     files: dict[str, str] = {}
     total = 0
     for path in sorted(source.rglob("*")):
-        if path.is_symlink():
+        if _is_link(path):
             raise ValueError("skill symlinks are forbidden")
         if path.is_dir():
             continue
@@ -93,23 +103,14 @@ class CapabilityRegistry:
     def _lock(self):
         # Registry storage is control-owned. All instances/processes coordinate
         # through the same persistent lock file (never unlink a lock inode).
-        try:
-            import fcntl
-        except ImportError as exc:
-            raise ValueError("registry locking requires POSIX flock") from exc
-        if self.imported_root.is_symlink():
+        if _is_link(self.imported_root):
             raise ValueError("unsafe imported skills root")
         self.imported_root.mkdir(parents=True, exist_ok=True)
         key = str(self.imported_root.resolve())
         with _LOCKS_GUARD:
             lock = _LOCKS.setdefault(key, threading.Lock())
-        with lock:
-            fd = os.open(self.imported_root / ".registry.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                yield
-            finally:
-                os.close(fd)
+        with lock, exclusive_lock(self.imported_root / ".registry.lock"):
+            yield
 
     def _listed(self) -> list[dict]:
         return [{k: v for k, v in item.items() if k not in ("files", "content")}
@@ -119,7 +120,7 @@ class CapabilityRegistry:
         path = self.imported_root / "enabled.json"
         if not path.exists():
             return {}
-        if path.is_symlink():
+        if _is_link(path):
             raise ValueError("unsafe skill state path")
         data = json.loads(path.read_text())
         if not isinstance(data, dict) or any(not isinstance(k, str) or type(v) is not bool for k, v in data.items()):
@@ -129,7 +130,7 @@ class CapabilityRegistry:
     def _packages(self) -> dict[str, dict]:
         packages: dict[str, dict] = {}
         for root, origin in ((self.root, "bundled"), (self.imported_root, "local")):
-            if root.is_symlink():
+            if _is_link(root):
                 raise ValueError("unsafe skill registry root")
             if not root.exists():
                 if origin == "bundled":
@@ -139,7 +140,7 @@ class CapabilityRegistry:
             for path in sorted(root.iterdir()):
                 if origin == "local" and (path.name == "enabled.json" or path.name.startswith(".")):
                     continue
-                if path.is_symlink():
+                if _is_link(path):
                     raise ValueError("skill symlinks are forbidden")
                 if not path.is_dir():
                     continue
@@ -189,11 +190,11 @@ class CapabilityRegistry:
                 if package["sha256"] != existing["sha256"]:
                     raise ValueError("same skill version has changed contents")
                 return {k: v for k, v in existing.items() if k not in ("files", "content")}
-        if self.imported_root.is_symlink():
+        if _is_link(self.imported_root):
             raise ValueError("unsafe imported skills root")
         self.imported_root.mkdir(parents=True, exist_ok=True)
         destination = self.imported_root / f"{package['id']}--{package['version']}"
-        if destination.exists() or destination.is_symlink():
+        if destination.exists() or _is_link(destination):
             raise ValueError("skill version destination already exists")
         # A staging directory is never scanned. Failed imports clean up their
         # staging bytes; process death can leave only an ignored hidden directory.

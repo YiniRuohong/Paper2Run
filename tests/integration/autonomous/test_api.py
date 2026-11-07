@@ -26,6 +26,7 @@ import pytest
 from p2r_api.main import create_app
 from p2r_api.auth import IdentityService, csrf_token
 from p2r_artifacts.store import LocalArtifactStore
+from p2r_orchestration.autonomous import report_doc
 from p2r_persistence.models import UserRecord, ProjectRecord, MembershipRecord, PaperRecord, PaperVersionRecord
 from p2r_persistence.autonomous import AutonomousTaskRecord as Task
 _spec = importlib.util.spec_from_file_location("autonomous_acceptance", Path(__file__).resolve().parents[3] / "tools/autonomous_acceptance.py")
@@ -253,6 +254,33 @@ def test_stop_idempotency_replay_reconciles_crash_after_admission(client, monkey
     assert final.json()["data"] == replay.json()["data"]
 
 
+def test_decision_endpoint_wiring_envelope_csrf_and_conflict(client, monkeypatch):
+    setup(client)
+    svc = client.app.state.runtime["autonomous_service"]
+    with svc.sessions() as db:
+        row = svc.create_task(db, "project", "owner", {"objective": "decide", "protocol": protocol(),
+                                                       "authorization": {"confirmed": True}})
+        decision = svc.propose(db, row, {**protocol(), "method": "changed"}, "change")["pending_decision"]
+        db.commit(); task_id = row.id
+    launched = []
+    monkeypatch.setattr(svc, "launch", lambda task_id, message=None: launched.append((task_id, message)))
+    path = f"/tasks/{task_id}/decisions/{decision['id']}"
+    assert write(client, "POST", path, {"action": "reject"}, headers={"X-CSRF-Token": "wrong"}).status_code == 403
+    assert write(client, "POST", path, {"action": "defer"}).status_code == 422
+    assert write(client, "POST", path, {"action": "reject", "note": "x" * 4001}).status_code == 422
+    mismatch = write(client, "POST", f"/tasks/{task_id}/decisions/other", {"action": "approve"})
+    assert mismatch.status_code == 409 and mismatch.json()["error"]["code"] == "DECISION_MISMATCH"
+    rejected = write(client, "POST", path, {"action": "reject", "note": "keep it"}, key="reject-once")
+    assert rejected.status_code == 200, rejected.text
+    task = rejected.json()["data"]
+    assert task["id"] == task_id and task["state"] == "queued" and task["pending_decision"] is None
+    assert launched == [(task_id, None)]
+    replay = write(client, "POST", path, {"action": "reject", "note": "keep it"}, key="reject-once")
+    assert replay.json()["data"] == task and len(launched) == 1
+    with svc.sessions() as db:
+        assert svc.row(db, task_id).protocol_json["protocol"]["method"] == "linear predictions"
+
+
 def test_injected_database_roots_are_isolated_but_same_database_is_locked(tmp_path, monkeypatch):
     monkeypatch.delenv("P2R_AUTONOMOUS_DIR", raising=False)
     monkeypatch.delenv("P2R_DEMO_DIR", raising=False)
@@ -261,7 +289,7 @@ def test_injected_database_roots_are_isolated_but_same_database_is_locked(tmp_pa
     duplicate = create_app(db_url=f"sqlite:///{tmp_path / 'one.sqlite'}")
     a, b = first.state.runtime["autonomous_service"], second.state.runtime["autonomous_service"]
     assert a.root != b.root
-    from p2r_orchestration.service import ServiceError
+    from p2r_orchestration.errors import ServiceError
     with TestClient(first) as one, TestClient(second) as two:
         assert one.get("/healthz").status_code == two.get("/healthz").status_code == 200
         with pytest.raises(ServiceError, match="another autonomous runtime"):
@@ -290,11 +318,22 @@ print("actual execution complete")
     steps = [
         [("background", {"command": "sleep 120", "launch_id": "integration-background", "timeout_seconds": 120})],
         [("write", {"path": "main.py", "content": code})],
+        # Code is registered before the formal run so the run is attributable to it.
+        [("register_artifact", {"path": "main.py", "name": "main.py", "kind": "code"})],
         [("execute", {"command": "python3 main.py", "timeout_seconds": 20})],
         [("register_artifact", {"path": name, "name": name, "kind": kind}) for name, kind in
-            [("main.py", "code"), ("environment.json", "environment"), ("data.json", "data"), ("predictions.json", "result"), ("labels.json", "result")]],
-        [("evaluate", {})],
-        [("report", {"narrative": "Actual controlled regression execution; no independent research evidence."})],
+            [("environment.json", "environment"), ("data.json", "data"), ("predictions.json", "result"), ("labels.json", "result")]],
+        [("write", {"path": "plot.py", "content": "print('plot')"}),
+         ("write", {"path": "fig.svg", "content": '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'})],
+        [("register_artifact", {"path": "plot.py", "name": "plot.py", "kind": "analysis"}),
+         ("register_artifact", {"path": "fig.svg", "name": "fig.svg", "kind": "figure", "caption": "controlled figure",
+                                "derived_from": ["plot.py", "predictions.json"]})],
+        [("submit_candidate", {"summary": "Actual controlled regression execution; no independent research evidence.",
+                               "report": {**{name: f"{name}." for name in report_doc.SECTIONS},
+                                          "results": "{{figure:fig.svg}}"}})],
+        [],
+        # Independent review session (same scripted provider, fresh SDK session).
+        [("submit_review", {"verdict": "pass", "findings": []})],
         [],
     ]
     captured = []
@@ -342,9 +381,11 @@ print("actual execution complete")
                 break
             time.sleep(.2)
         assert task["state"] == "completed", json.dumps({"task": task, "events": client.get(BASE + f"/tasks/{task_id}/events").json()["data"]}, ensure_ascii=False)
+        assert task["outcome"] == "verified" and task["report"]["outcome"] == "verified"
+        assert task["candidate"]["review_status"] == "pass" and task["reviews"][0]["verdict"] == "pass"
         assert task["report"]["evaluation"]["metrics"]["mae"] == .5
         assert task["report"]["verdict"] == "not_comparable"
-        assert task["usage"]["calls"] == 7
+        assert task["usage"]["calls"] == 11
         assert "测试正文" in json.dumps(captured[0], ensure_ascii=False)
         journal = client.get(BASE + f"/tasks/{task_id}/events").json()["data"]
         assert any(e["type"] == "artifact_frozen" for e in journal["events"])
@@ -368,3 +409,19 @@ print("actual execution complete")
         if target and hasattr(target, "container"):
             subprocess.run(["docker", "rm", "-f", target.container], capture_output=True, timeout=20)
             subprocess.run(["docker", "network", "rm", target.container + "-net"], capture_output=True, timeout=20)
+
+
+@pytest.mark.parametrize("site", ["cross-site", "same-site", "Cross-Site", "SAME-SITE"])
+def test_writes_refuse_cross_and_same_site_case_insensitively(client, site):
+    # Same rule as the target probe: another loopback port or sibling subdomain is same-site, not same-origin.
+    refused = write(client, "PUT", "/projects/project/config", {"config": config()}, headers={"Sec-Fetch-Site": site})
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "CSRF_FAILED"
+    assert client.get(BASE + "/projects/project/config").status_code == 404, "nothing was written"
+
+
+@pytest.mark.parametrize("site", ["same-origin", "Same-Origin", "none", None])
+def test_writes_allow_same_origin_launcher_and_vite_proxy(client, site):
+    # The launcher page and the Vite dev proxy both serve the page from the API's own origin,
+    # so the browser sends same-origin; tools send no header at all.
+    headers = {} if site is None else {"Sec-Fetch-Site": site}
+    assert write(client, "PUT", "/projects/project/config", {"config": config()}, headers=headers).status_code == 200

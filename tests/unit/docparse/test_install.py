@@ -133,6 +133,21 @@ def test_base_without_pip_uses_venv_pip(tmp_path):
     assert "--python" not in pip_cmd
 
 
+def test_install_replaces_a_leftover_venv_and_keeps_models(tmp_path):
+    inst, run, root = make(tmp_path)
+    stale = root / "venv" / "lib" / "half-deleted-package"
+    stale.mkdir(parents=True)
+    models = root / "mineru-home" / "models" / "kept.gguf"
+    models.parent.mkdir(parents=True)
+    models.write_bytes(b"x")
+    seen = []
+    run.on(" -m venv ", lambda argv: (seen.append((root / "venv").exists()), venv_python(root).parent.mkdir(parents=True, exist_ok=True), OK)[-1])
+    inst.start()
+    assert inst.wait(10).state == "ready"
+    assert seen == [False], "the old venv is removed before a new one is created"
+    assert not stale.exists() and models.exists()
+
+
 def test_mirror_fallback(tmp_path):
     inst, run, _ = make(tmp_path)
     attempts: list[list[str]] = []

@@ -73,10 +73,6 @@ jobs:
       - name: Smoke-test bundled runtime
         run: python scripts/desktop/smoke_runtime.py --python ${{ matrix.python }} --web-dist apps/web/dist
 
-      - name: Sandbox capabilities under bundled runtime
-        shell: bash
-        run: ${{ matrix.python }} -I -B -m p2r_sandbox capabilities
-
       - uses: actions/upload-artifact@v4
         with:
           name: Paper2Run-${{ matrix.target }}

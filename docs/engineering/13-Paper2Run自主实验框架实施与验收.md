@@ -1,5 +1,7 @@
 # Paper2Run 自主实验框架实施与验收
 
+> 2026-11-05（`feat/v3-integration` 分支）：旧的固定配方 / 引导模式已从代码中删除，本文中“旧模式保留”的约定已被[只保留自主模式的设计说明](../superpowers/specs/2026-11-05-autonomous-only-research-stages-design.md) §5.10 取代；当前结构见[软件架构](../architecture.md)。
+
 > 执行方式：按子系统分工实施，父会话负责集成与最终验收；不自动提交或推送。
 
 **Goal:** 落实 12 号文档的自主实验首版，从论文输入到真实隔离执行、可恢复会话、可信评测和证据导出。
@@ -87,17 +89,19 @@
 
 ## 6. 本地运行与复验
 
-前置条件：POSIX 主机、可运行的 Docker、Python 项目环境、Node >=22.19。macOS 的 Docker 可由 OrbStack/Docker Desktop 提供；Windows 自主模式当前明确不可用，旧引导流程保留。
+前置条件：可运行 Linux 容器的 Docker、Python 项目环境、Node >=22.19。macOS 的 Docker 可由 OrbStack/Docker Desktop 提供；Windows 需要 Docker Desktop（WSL2 后端，Linux 容器模式）。Windows 按构造支持，只有单元测试覆盖，未在真实 Windows 机器上验证（见设计文档 5.11）。新建实验页的"执行位置能力"会显示 Docker、OSType、镜像与 GPU 的探测结果。
 
 ```bash
 uv sync --extra test
 npm --prefix apps/harness ci
 bash scripts/autonomous/build-image.sh
 pnpm --dir apps/web build
-uv run uvicorn p2r_api.main:create_demo_app --factory --host 127.0.0.1 --port 8000
+P2R_ALLOWED_ORIGINS=http://127.0.0.1:8000 uv run uvicorn p2r_api.main:create_local_app --factory --host 127.0.0.1 --port 8000
 ```
 
-访问 `http://127.0.0.1:8000/#/autonomous`。通过现有论文流程创建项目并上传 PDF 或粘贴正文，完成解析后返回自主模式。选择论文版本，配置模型 profile、目标、Skills、预算和实验目标，确认授权后启动。模型密钥只保存在当前控制面内存，服务重启后需重新注入；不能以普通 API 的 `env:` 引用读取任意宿主变量。
+`P2R_ALLOWED_ORIGINS` 必须与浏览器实际打开页面的 Origin 完全一致（逗号分隔，只接受 loopback 地址；未设置时为 `http://127.0.0.1:8000`），否则自主模式的写请求会被拒绝。一键启动 `python scripts/launch.py` 会自动设置它。
+
+访问 `http://127.0.0.1:8000/#/new` 新建实验：在同一页创建项目、上传 PDF 或粘贴正文（PDF 需先完成解析），配置模型 profile、目标、Skills、预算和实验目标，确认授权后启动。启动后进入 `#/task/<id>` 任务工作台；`#/` 总览列出全部任务。模型密钥只保存在当前控制面内存，服务重启后需重新注入；不能以普通 API 的 `env:` 引用读取任意宿主变量。
 
 暂停保留后台训练；应用退出停止 Agent 调度但不表示训练结束。重开后先查看已有作业，补充模型凭据，再显式恢复。协议超授权变更须批准当前决策 ID；普通恢复不能替代批准。停止仅针对任务作业，不释放云实例或终止平台计费。
 
@@ -147,7 +151,10 @@ Apple Silicon macOS 安装包：`apps/desktop/release/Paper2Run-autonomous-mac-a
 - 未提供真实 SSH GPU 目标，不能用本地 sshd/Docker 测试替代远端算力验收。未知或变化的主机指纹拒绝连接。
 - 存储额度目前为观测值；模型 token 用量依据 provider usage 限制后续调用，单次在途响应可能超限。
 - 首版没有独立隐藏标签托管，即使执行完成也保持 `not_comparable`，模型自报 provenance 不构成正式比较证据。
-- macOS arm64 桌面为本机 ad-hoc 签名构建，未 notarize；macOS x64/Windows 未实机验收，Windows 自主模式不受支持。
+- macOS arm64 桌面为本机 ad-hoc 签名构建，未 notarize；macOS x64/Windows 未实机验收。
+- Windows 自主模式按构造支持（Docker Desktop，WSL2 后端），未在真实 Windows 机器上验证。单元测试在 macOS 上强制走 win32 分支，覆盖：跨平台锁（替身 `msvcrt`，含争用、阻塞等待、链接与替换拒绝）、无 `O_NOFOLLOW` 时的安全读取（拒绝符号链接、重解析点、检查后被替换的文件，以及已打开句柄的最终路径越出根目录的情况）、`GetAdaptersAddresses` 网卡枚举（伪造缓冲区）、本地宿主脚本解释器与盘符工作区校验、绑定挂载参数、桌面与脚本启动器的 Docker OSType 检查、Harness 子进程环境。未覆盖：真实 WSL2 绑定挂载、Windows OpenSSH、打包后的 Windows 桌面应用、Windows 上的 GPU。本地工作区只接受盘符路径；放在 OneDrive 等云同步目录中的文件可能是重解析点，会被安全读取拒绝。
+- Windows 路径中的链接：数据目录在服务启动时、工作区在保存配置时各解析一次真实路径，所以数据目录前缀里的目录联接或 `subst` 盘符会被换成目标路径，而不是被拒绝。映射的网络驱动器会被解析成 UNC 路径，本地工作区不接受 UNC，因此被拒绝。解析之后，程序打开的路径上任何一级的符号链接、目录联接、挂载点或云文件占位符都会被拒绝。安全读取的剩余风险是不拒绝硬链接（与 POSIX 相同；容器无法为工作区以外的宿主文件创建硬链接），以及 `GetFinalPathNameByHandleW` 失败时会拒绝读取。详见设计文档 5.11。
+- 执行位置能力探测不创建容器，网络隔离不在探测中标为已验证；它仍由每个任务的 `prepare` 在容器内验证。探测到的 GPU 只代表宿主可见，不代表容器内可用。
 - 能力包原子发布和进程锁已验证；极端掉电后的目录 fsync 持久性不在当前保证范围内。
 
 ## 完成判定

@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from p2r_api.main import create_app, create_demo_app
+from p2r_api.main import create_app, create_local_app
 from p2r_artifacts.store import LocalArtifactStore
 from p2r_docparse.install import OfflineInstaller
 from p2r_docparse.testing import minimal_pdf
@@ -28,14 +28,31 @@ def _service(tmp_path, platform="darwin-x64"):
 @pytest.fixture
 def app(tmp_path):
     return create_app(
-        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(), secure_cookies=False,
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", secure_cookies=False,
         artifact_store=LocalArtifactStore(tmp_path / "store"), development_auth=True,
         docparse_service=_service(tmp_path),
     )
 
 
+def _ready_service(tmp_path):
+    svc = _service(tmp_path, platform="darwin-arm64")
+    svc.root.mkdir(parents=True, exist_ok=True)
+    (svc.root / "install-state.json").write_text(
+        '{"state": "ready", "tier": "basic", "version": "4.1.3"}', encoding="utf-8")
+    return svc
+
+
 @pytest.fixture
-def ids(app):
+def ready_app(tmp_path):
+    """Local parsing with a ready offline component: uploads start a parse at once."""
+    return create_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", secure_cookies=False,
+        artifact_store=LocalArtifactStore(tmp_path / "store"), development_auth=True,
+        docparse_service=_ready_service(tmp_path),
+    )
+
+
+def _owner_project(app):
     with app.state.runtime["session_factory"].begin() as db:
         user = UserRecord(id="owner", display_name="Owner", can_create_project=True)
         db.add(user); db.flush()
@@ -43,6 +60,16 @@ def ids(app):
         db.add(project); db.flush()
         db.add(MembershipRecord(project_id=project.id, user_id=user.id, role="owner"))
         return {"project": project.id}
+
+
+@pytest.fixture
+def ids(app):
+    return _owner_project(app)
+
+
+@pytest.fixture
+def ready_ids(ready_app):
+    return _owner_project(ready_app)
 
 
 def _upload(client, project, pdf, key="up-1", name="p.pdf"):
@@ -91,10 +118,11 @@ def test_invalid_pdf_upload(app, ids):
         assert resp.json()["error"]["code"] == "PDF_INVALID"
 
 
-def test_upload_autoenqueues_when_mode_set(app, ids):
+def test_upload_autoenqueues_when_mode_set(ready_app, ready_ids):
+    app, ids = ready_app, ready_ids
     with TestClient(app) as client:
-        r = client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
-        assert r.status_code == 200 and r.json()["data"]["mode"] == "online"
+        r = client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
+        assert r.status_code == 200 and r.json()["data"]["mode"] == "offline"
         resp = _upload(client, ids["project"], minimal_pdf(["x"]))
         assert resp.status_code == 202
         assert resp.json()["data"]["status"] == "parsing"
@@ -103,20 +131,42 @@ def test_upload_autoenqueues_when_mode_set(app, ids):
         assert db.get(PaperRecord, paper_id).status == "parsing"
     jobs = _jobs(app)
     assert len(jobs) == 1
-    assert jobs[0].payload_ref == f"{paper_id}:online"
+    assert jobs[0].payload_ref == f"{paper_id}:offline"
     assert jobs[0].idempotency_key == f"paper_parse:{paper_id}:upload"
 
 
-def test_upload_waits_when_mode_unset(app, ids):
+def test_local_parsing_is_the_default_and_online_is_ignored(ready_app, ready_ids):
+    app, ids = ready_app, ready_ids
+    service = app.state.runtime["docparse_service"]
     with TestClient(app) as client:
+        # No choice was ever made: local parsing is already the mode.
+        assert service.mode() is None
+        assert client.get("/api/v1/docparse/status", headers=H).json()["data"]["mode"] == "offline"
+        r = client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        assert r.status_code == 422 and r.json()["error"]["code"] == "VALIDATION_ERROR"
+        # A setting saved as online before the switch-off is ignored: the paper is parsed locally.
+        service.settings.set_mode("online")
+        assert client.get("/api/v1/docparse/status", headers=H).json()["data"]["mode"] == "offline"
+        resp = _upload(client, ids["project"], minimal_pdf(["x"]))
+        assert resp.json()["data"]["status"] == "parsing"
+        paper_id = resp.json()["data"]["paper_id"]
+    assert [j.payload_ref for j in _jobs(app)] == [f"{paper_id}:offline"]
+
+
+def test_upload_waits_until_the_local_component_is_installed(tmp_path):
+    app = create_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", secure_cookies=False,
+        artifact_store=LocalArtifactStore(tmp_path / "store"), development_auth=True,
+        docparse_service=_service(tmp_path, platform="darwin-arm64"),
+    )
+    ids = _owner_project(app)
+    with TestClient(app) as client:
+        s = client.get("/api/v1/docparse/status", headers=H).json()["data"]
+        assert s["mode"] == "offline" and s["offline"]["state"] == "not_installed"
         resp = _upload(client, ids["project"], minimal_pdf(["x"]))
         assert resp.json()["data"]["status"] == "uploaded"
         paper_id = resp.json()["data"]["paper_id"]
         assert _jobs(app) == []
-        r = client.post(f"/api/v1/papers/{paper_id}/parse", headers={**H, "Idempotency-Key": "k1"})
-        assert r.status_code == 409
-        assert r.json()["error"]["code"] == "DOCPARSE_MODE_UNSET"
-        client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
         r = client.post(f"/api/v1/papers/{paper_id}/parse", headers=H)
         assert r.status_code == 422
         r = client.post(f"/api/v1/papers/{paper_id}/parse", headers={**H, "Idempotency-Key": "k1"})
@@ -126,9 +176,21 @@ def test_upload_waits_when_mode_unset(app, ids):
     assert _jobs(app)[0].payload_ref == f"{paper_id}:offline"
 
 
+def test_unsupported_platform_has_no_parse_mode(app, ids):
+    with TestClient(app) as client:
+        s = client.get("/api/v1/docparse/status", headers=H).json()["data"]
+        assert s["mode"] is None and s["offline"]["state"] == "unsupported"
+        resp = _upload(client, ids["project"], minimal_pdf(["x"]))
+        assert resp.json()["data"]["status"] == "uploaded"
+        paper_id = resp.json()["data"]["paper_id"]
+        r = client.post(f"/api/v1/papers/{paper_id}/parse", headers={**H, "Idempotency-Key": "k1"})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "DOCPARSE_OFFLINE_UNSUPPORTED"
+    assert _jobs(app) == []
+
+
 def test_parse_rejects_non_pdf(app, ids):
     with TestClient(app) as client:
-        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
         r = client.post(f"/api/v1/projects/{ids['project']}/papers/text", content=b"hello world",
                         headers={**H, "Idempotency-Key": "t1", "Content-Type": "text/plain",
                                  "X-Source-Processing-Consent": "true"})
@@ -146,9 +208,9 @@ def test_status_and_mode_roundtrip(app):
         assert s["mode"] is None
         assert s["offline"]["state"] == "unsupported"
         assert isinstance(s["platform"], str)
+        # Saving offline is still accepted, but an unsupported platform has no mode to use.
         r = client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
-        assert r.json()["data"]["mode"] == "offline"
-        assert client.get("/api/v1/docparse/status", headers=H).json()["data"]["mode"] == "offline"
+        assert r.status_code == 200 and r.json()["data"]["mode"] is None
         bad = client.put("/api/v1/docparse/mode", json={"mode": "cloud"}, headers=H)
         assert bad.status_code == 422
         assert bad.json()["error"]["code"] == "VALIDATION_ERROR"
@@ -212,7 +274,7 @@ def test_docparse_requires_session_without_dev_auth(tmp_path):
                       docparse_service=_service(tmp_path))
     with TestClient(prod) as client:
         assert client.get("/api/v1/docparse/status").status_code == 401
-        assert client.put("/api/v1/docparse/mode", json={"mode": "online"}).status_code == 401
+        assert client.put("/api/v1/docparse/mode", json={"mode": "offline"}).status_code == 401
 
 
 def _finish_parse(app, paper_id, outcome):
@@ -229,9 +291,10 @@ def _start_parse(client, ids, key):
     return paper_id
 
 
-def test_parse_replay_same_key_returns_same_response(app, ids):
+def test_parse_replay_same_key_returns_same_response(ready_app, ready_ids):
+    app, ids = ready_app, ready_ids
     with TestClient(app) as client:
-        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
         paper_id = _start_parse(client, ids, "up")
         _finish_parse(app, paper_id, "ready")
         url = f"/api/v1/papers/{paper_id}/parse"
@@ -251,9 +314,10 @@ def test_parse_replay_same_key_returns_same_response(app, ids):
     assert len(_jobs(app)) == 2
 
 
-def test_parse_new_key_after_failure_starts_new_parse(app, ids):
+def test_parse_new_key_after_failure_starts_new_parse(ready_app, ready_ids):
+    app, ids = ready_app, ready_ids
     with TestClient(app) as client:
-        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
         paper_id = _start_parse(client, ids, "up")
         _finish_parse(app, paper_id, "failed")
         url = f"/api/v1/papers/{paper_id}/parse"
@@ -283,8 +347,8 @@ def test_corrupt_state_file_does_not_fail_startup(tmp_path):
     svc.root.mkdir(parents=True, exist_ok=True)
     (svc.root / "install-state.json").write_text(
         '{"state": "ready", "progress": "oops"}', encoding="utf-8")
-    app = create_demo_app(
-        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(),
+    app = create_local_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}",
         artifact_store=LocalArtifactStore(tmp_path / "store"), docparse_service=svc,
     )
     with TestClient(app) as client:
@@ -296,8 +360,8 @@ def test_shutdown_cancels_installer(tmp_path):
     svc = _service(tmp_path, platform="darwin-arm64")
     called = []
     svc.installer.cancel = lambda: called.append(True)
-    app = create_demo_app(
-        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(),
+    app = create_local_app(
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}",
         artifact_store=LocalArtifactStore(tmp_path / "store"), docparse_service=svc,
     )
     with TestClient(app):
@@ -323,7 +387,7 @@ def test_upload_enqueues_offline_when_component_ready(tmp_path):
         '{"state": "ready", "tier": "basic", "version": "4.1.3"}', encoding="utf-8")
     svc.settings.set_mode("offline")
     app = create_app(
-        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", supervisor=object(), secure_cookies=False,
+        db_url=f"sqlite:///{tmp_path / 'dp.sqlite3'}", secure_cookies=False,
         artifact_store=LocalArtifactStore(tmp_path / "store"), development_auth=True, docparse_service=svc,
     )
     with app.state.runtime["session_factory"].begin() as db:
@@ -340,9 +404,10 @@ def test_upload_enqueues_offline_when_component_ready(tmp_path):
 CROSS = {"Sec-Fetch-Site": "cross-site"}
 
 
-def test_cross_site_requests_are_refused(app, ids):
+def test_cross_site_requests_are_refused(ready_app, ready_ids):
+    app, ids = ready_app, ready_ids
     with TestClient(app) as client:
-        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
         paper_id = _upload(client, ids["project"], minimal_pdf(["x"])).json()["data"]["paper_id"]
         calls = [
             client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers={**H, **CROSS}),
@@ -353,15 +418,16 @@ def test_cross_site_requests_are_refused(app, ids):
         ]
         for resp in calls:
             assert resp.status_code == 403 and resp.json()["error"]["code"] == "CROSS_SITE_REFUSED"
-        assert client.get("/api/v1/docparse/status", headers=H).json()["data"]["mode"] == "online"
+        assert client.get("/api/v1/docparse/status", headers=H).json()["data"]["mode"] == "offline"
         for site in ("same-origin", "same-site", "none"):
-            assert client.put("/api/v1/docparse/mode", json={"mode": "online"},
+            assert client.put("/api/v1/docparse/mode", json={"mode": "offline"},
                               headers={**H, "Sec-Fetch-Site": site}).status_code == 200
 
 
-def test_parse_job_key_is_scoped_to_user_and_request(app, ids):
+def test_parse_job_key_is_scoped_to_user_and_request(ready_app, ready_ids):
+    app, ids = ready_app, ready_ids
     with TestClient(app) as client:
-        client.put("/api/v1/docparse/mode", json={"mode": "online"}, headers=H)
+        client.put("/api/v1/docparse/mode", json={"mode": "offline"}, headers=H)
         paper_id = _start_parse(client, ids, "up")
         _finish_parse(app, paper_id, "failed")
         r = client.post(f"/api/v1/papers/{paper_id}/parse", headers={**H, "Idempotency-Key": "k1"})

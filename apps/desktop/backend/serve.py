@@ -19,7 +19,7 @@ Contract with the parent process:
 * SIGTERM/SIGINT (posix) trigger uvicorn's normal graceful shutdown.
 
 Requests whose ``Host`` is not this loopback address, or whose ``Origin`` (when
-sent) is not this origin, are rejected (421). The demo API runs without
+sent) is not this origin, are rejected (421). The local API runs without
 authentication or CSRF checks, so this blocks DNS-rebinding and cross-origin
 pages in the user's browser from driving it.
 
@@ -29,9 +29,7 @@ Configuration comes from the environment the parent sets: ``P2R_DEMO_DIR``
 is why ``-B`` (never write bytecode into the read-only app bundle) and
 ``-X utf8`` are passed as interpreter flags by the parent.
 
-The kernel supervisor uses ``multiprocessing`` spawn, which re-executes this
-file as ``__mp_main__`` in each worker: keep module import free of side
-effects.
+Keep module import free of side effects: the app is built only in ``main``.
 """
 from __future__ import annotations
 
@@ -79,6 +77,11 @@ def _bind_preferred(host: str, port: int, strict: bool) -> socket.socket:
                 raise
             print(f"[serve] port {port} unavailable ({exc}); using a free port", file=sys.stderr, flush=True)
     return _bind(host, 0)
+
+
+def allowed_origins(port: int) -> tuple[str, ...]:
+    """Origins the app accepts for writes: exactly the ones ``host_guard`` lets through."""
+    return tuple(f"http://{host}:{port}" for host in LOOPBACK_HOSTS)
 
 
 def host_guard(app, port: int):
@@ -154,12 +157,12 @@ def main(argv: list[str] | None = None) -> int:
         os.chdir(data_dir)
 
     import uvicorn
-    from p2r_api.main import create_demo_app
+    from p2r_api.main import create_local_app
 
     sock = _bind_preferred(args.host, args.port, args.strict_port)
     port = sock.getsockname()[1]
     config = uvicorn.Config(
-        host_guard(create_demo_app(), port),
+        host_guard(create_local_app(allowed_origins=allowed_origins(port)), port),
         log_level="info",
         access_log=False,
         server_header=False,

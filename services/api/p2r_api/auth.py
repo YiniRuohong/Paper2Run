@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from p2r_persistence.models import (
     AuditLogRecord, AuthSessionRecord, MembershipRecord,
     ProjectRecord, UserRecord, utcnow,
@@ -51,16 +51,52 @@ def csrf_token(session_secret: str) -> str:
     return hmac.new(session_secret.encode(), b"p2r-csrf-v1", hashlib.sha256).hexdigest()
 
 
-def validate_origin(request_origin: str | None, allowed_origin: str) -> None:
+def _is_origin(value) -> bool:
     try:
-        parsed = urlsplit(allowed_origin)
-        valid = (parsed.scheme in {"http", "https"} and bool(parsed.hostname)
-                 and not parsed.username and not parsed.password
-                 and not parsed.path and not parsed.query and not parsed.fragment)
-    except ValueError:
-        valid = False
-    if not valid or not request_origin or request_origin != allowed_origin:
+        parsed = urlsplit(value)
+        return (parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+                and not parsed.username and not parsed.password
+                and not parsed.path and not parsed.query and not parsed.fragment)
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def validate_origin(request_origin: str | None, allowed_origin: str | tuple[str, ...]) -> None:
+    """Accept the request only when its Origin is exactly one of the configured origins.
+
+    ``allowed_origin`` is one origin or a tuple of them; an empty or invalid configuration rejects everything.
+    """
+    allowed = (allowed_origin,) if isinstance(allowed_origin, str) else tuple(allowed_origin or ())
+    if not allowed or not all(_is_origin(origin) for origin in allowed):
         raise CsrfError("origin rejected")
+    if not request_origin or request_origin not in allowed:
+        raise CsrfError("origin rejected")
+
+
+LOOPBACK_ORIGIN_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def parse_loopback_origins(value: str) -> tuple[str, ...]:
+    """Parse ``P2R_ALLOWED_ORIGINS``: comma-separated exact ``http://<loopback>:<port>`` origins.
+
+    The local runtime only listens on loopback, so anything else is a configuration error.
+    """
+    origins = tuple(item.strip() for item in value.split(","))
+    if not any(origins) or not all(origins):
+        raise ValueError("P2R_ALLOWED_ORIGINS must be a comma-separated list of http://<loopback>:<port> origins")
+    for origin in origins:
+        try:
+            parsed = urlsplit(origin)
+            port = parsed.port
+        except ValueError:
+            port = None
+            parsed = None
+        if (parsed is None or parsed.scheme != "http" or parsed.hostname not in LOOPBACK_ORIGIN_HOSTS
+                or port is None or parsed.username is not None or parsed.password is not None
+                or parsed.path or parsed.query or parsed.fragment or "#" in origin or "?" in origin):
+            raise ValueError(f"P2R_ALLOWED_ORIGINS entry {origin!r} is not an exact loopback origin "
+                             "(http, host 127.0.0.1/localhost/[::1], explicit port, no path, query or credentials)")
+    return origins
 
 
 def validate_csrf(header: str | None, expected: str) -> None:

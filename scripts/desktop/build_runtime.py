@@ -1,9 +1,10 @@
 """Build the relocatable CPython runtime bundled into the Paper2Run desktop app.
 
-Why a real interpreter instead of PyInstaller/Nuitka: ``p2r_sandbox`` launches
-``sys.executable -I ...`` for every probe and guest run (seatbelt on macOS,
-AppContainer/Job Object on Windows). A frozen executable is not a Python
-interpreter, so the backend must ship as a real, relocatable CPython. We use
+Why a real interpreter instead of PyInstaller/Nuitka: the Electron shell starts
+``serve.py`` with interpreter flags, and ``p2r_docparse.install`` runs
+``sys.executable -m pip --python ...`` to install MinerU on demand. A frozen
+executable is not a Python interpreter, so the backend must ship as a real,
+relocatable CPython. We use
 python-build-standalone (PBS) ``install_only_stripped`` builds, pinned below
 by release + SHA-256.
 
@@ -230,8 +231,6 @@ def build_wheel(tool: Path, work: Path) -> Path:
         raise SystemExit(f"expected one paper2run py3-none-any wheel, found {[w.name for w in wheels]}")
     with zipfile.ZipFile(wheels[0]) as zf:
         names = zf.namelist()
-    if not any(n.startswith("p2r_runner/data/") and n.endswith(".csv") for n in names):
-        raise SystemExit("wheel is missing p2r_runner/data/*.csv package data")
     log(f"built {wheels[0].name} ({len(names)} files)")
     return wheels[0]
 
@@ -385,7 +384,7 @@ def dir_size(path: Path) -> int:
 
 def smoke(paths: dict[str, Path]) -> None:
     run([paths["exe"], "-I", "-c",
-         "import p2r_api, p2r_sandbox, p2r_runner, p2r_kernel, uvicorn, sys; print('imports ok', sys.executable)"])
+         "import p2r_api.main, p2r_sandbox.autonomous, uvicorn, sys; print('imports ok', sys.executable)"])
     run([sys.executable, str(SMOKE_SCRIPT), "--python", str(paths["exe"])])
 
 

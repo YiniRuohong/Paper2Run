@@ -6,13 +6,14 @@ import json
 from pathlib import Path
 import time
 
+from p2r_contracts.autonomous import DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS
 from p2r_persistence.models import utcnow
-from . import evidence
+from . import driver, evidence
+from .candidate import freeze
+from .driver import BUDGET_ERRORS, SAFETY_CODES
+from .evidence import ensure_not_under_review
 from .security import fail
-from p2r_orchestration.service import ServiceError
-
-
-BUDGET_ERRORS = {"budget_exceeded", "wall_time_exceeded", "BUDGET_EXHAUSTED"}
+from p2r_orchestration.errors import ServiceError
 from .tools import TOOLS, SYSTEM_PROMPT
 
 
@@ -44,18 +45,22 @@ def dispatch(service, target, task_id, name, args, request_id):
         if row.state != "running" or service.cancel_requested(row):
             fail("TASK_PAUSED", "task is not accepting tool execution", 409)
         remaining = service.remaining(row)
-        deadline = time.monotonic() + remaining["wall_time_seconds"]
+        wall = remaining.get("wall_time_seconds")  # None: no wall-time limit
+        deadline = None if wall is None else time.monotonic() + wall
         service.event(db, row, "tool_started", {"id": request_id, "name": name, "arguments": args})
         if name in ("background", "execute"):
             launch_id = args.get("launch_id") or f"execute-{request_id}"
             if len(launch_id) > 256:
                 raise ValueError("launch_id exceeds 256 characters")
-            timeout = min(args.get("timeout_seconds", 60), max(1, int(remaining["wall_time_seconds"])))
+            timeout = args.get("timeout_seconds", 60)
+            if wall is not None:
+                timeout = min(timeout, max(1, int(wall)))
             job_id = hashlib.sha256(launch_id.encode()).hexdigest()
             previous = row.jobs_json.get(launch_id)
             intent = {"job_id": job_id, "command": args["command"], "timeout_seconds": timeout, "state": "submitting",
                       "protocol_sha256": row.protocol_json["sha256"] if row.protocol_json else None,
-                      "entrypoint": row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None}
+                      "entrypoint": row.protocol_json["protocol"]["entrypoint"] if row.protocol_json else None,
+                      "sequence": row.event_sequence}  # launch sequence; reused intents keep the original
             if previous:
                 if previous["command"] != args["command"]:
                     fail("LAUNCH_CONFLICT", "launch_id belongs to a different command", 409)
@@ -67,18 +72,14 @@ def dispatch(service, target, task_id, name, args, request_id):
         if name in ("status", "logs", "stop") and args["job_id"] not in {j["job_id"] for j in row.jobs_json.values()}:
             fail("JOB_NOT_OWNED", "job does not belong to this task", 403)
         if name == "propose_protocol":
+            ensure_not_under_review(row)
             result = service.propose(db, row, args["protocol"], args["reason"])
             db.commit()
             return result
-        if name == "evaluate":
-            result = evidence.evaluation(service, row)
-            service.event(db, row, "evaluation", result)
+        if name == "note_progress":
+            service.event(db, row, "progress_noted", args)
             db.commit()
-            return result
-        if name == "report":
-            result = evidence.report(service, db, row, args["narrative"])
-            db.commit()
-            return result
+            return {"recorded": True}
         db.commit()
     if name in ("background", "execute"):
         result = target.start(args["command"], launch_id, timeout)
@@ -101,7 +102,7 @@ def dispatch(service, target, task_id, name, args, request_id):
                 with service.lock, service.sessions() as db:
                     if service.row(db, task_id).state != "running":
                         return {**result, "decision_paused": True}
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     fail("BUDGET_EXHAUSTED", "cumulative task wall-time budget exhausted", 409)
                 time.sleep(.1)
                 result = target.status(result["job_id"])
@@ -109,7 +110,24 @@ def dispatch(service, target, task_id, name, args, request_id):
         return result
     if name == "register_artifact":
         return evidence.register(service, target, task_id, args)
+    if name == "submit_candidate":
+        candidate = freeze(service, target, task_id, args["summary"], args.get("report"))
+        return {"status": "candidate_submitted", "snapshot_sha256": candidate["snapshot_sha256"],
+                "round": candidate["round"],
+                "next": "End this turn. Evaluation and an independent review run after the turn; findings, if any, arrive in the next message."}
     return getattr(target, name)(**args)
+
+
+def observe_job(row, observation):
+    """Record a job's latest observed state/exit code on its owned intent (launch facts unchanged)."""
+    if not isinstance(observation, dict) or not observation.get("job_id"):
+        return
+    for launch_id, job in row.jobs_json.items():
+        if job.get("job_id") == observation["job_id"]:
+            observed = {k: observation[k] for k in ("state", "exit_code") if k in observation}
+            if any(job.get(k) != v for k, v in observed.items()):
+                row.jobs_json = {**row.jobs_json, launch_id: {**job, **observed}}
+            return
 
 
 def run_worker(service, task_id, bridge, message):
@@ -119,6 +137,7 @@ def run_worker(service, task_id, bridge, message):
     unverified_tokens = 0
     budget_stopped = False
     last_response = None
+    turn_ended = False  # the main session delivered a terminal result for the current run
 
     def usage(row, incoming=None):
         if incoming:
@@ -160,13 +179,18 @@ def run_worker(service, task_id, bridge, message):
         return False
 
     def stop_for_budget():
-        # Call only after the cancellation transaction commits and releases lock.
+        # Also ends a safety block. Call only after the cancellation transaction commits and releases lock.
         bridge.abort()
+        worker = service.workers.get(task_id) or {}
+        if worker.get("bridge") not in (None, bridge):
+            worker["bridge"].abort()  # a review session is running
         service.finish_stop(task_id)
 
-    def callback(message):
-        nonlocal pending_tokens, unverified_tokens, last_response
+    def callback(message, role="main"):
+        # role="review": charge usage and budget only; never session state, narrative or outcome.
+        nonlocal pending_tokens, unverified_tokens, last_response, turn_ended
         kind = message.get("type")
+        review = role == "review"
         stop_budget = False
         if kind == "tool_request":
             request_id = str(message.get("id", ""))[:256]
@@ -185,9 +209,14 @@ def run_worker(service, task_id, bridge, message):
                 usage(row)
                 if is_error:
                     stop_budget = record_budget_cancel(db, row, result)
+                elif name in ("execute", "status"):
+                    observe_job(row, safe)
                 if row.state == "running":
                     stop_budget = check_budget(db, row) or stop_budget
                 service.event(db, row, "tool_completed", {"id": request_id, "name": name, "result": safe, "is_error": is_error})
+                if row.state == "running" and is_error and safe.get("code") in SAFETY_CODES:
+                    driver.block_for_safety(service, db, row, safe)  # a budget stop above takes precedence
+                    stop_budget = True
                 paused = row.state != "running"
                 db.commit()
             if stop_budget:
@@ -197,7 +226,9 @@ def run_worker(service, task_id, bridge, message):
             return {"type": "tool_result", "id": request_id, "result": safe, "is_error": is_error}
         with service.lock, service.sessions() as db:
             row = service.row(db, task_id)
-            if kind == "ready":
+            if kind == "ready" and review:
+                pass  # the review session lives under task_root/review; row.session_file stays the main one
+            elif kind == "ready":
                 path = Path(message["session_file"]).resolve()
                 if not path.is_relative_to((service.task_root(task_id) / "session").resolve()):
                     raise ValueError("SDK session path escaped task state")
@@ -213,15 +244,16 @@ def run_worker(service, task_id, bridge, message):
                     # If the process dies before provider usage arrives, reserve
                     # conservatively so repeated interruption cannot erase cost.
                     profiles = [row.config_snapshot["model_profile"], *row.config_snapshot.get("specialist_profiles", {}).values()]
-                    reservation = max(p.get("context_window", 128000) + p.get("max_tokens", 4096) for p in profiles)
-                    remaining_tokens = row.config_snapshot["limits"]["max_model_tokens"] - row.usage_json.get("total_tokens", 0)
+                    reservation = max(p.get("context_window", DEFAULT_CONTEXT_WINDOW) + p.get("max_tokens", DEFAULT_MAX_TOKENS) for p in profiles)
+                    token_limit = row.config_snapshot["limits"].get("max_model_tokens")
+                    remaining_tokens = reservation if token_limit is None else token_limit - row.usage_json.get("total_tokens", 0)
                     pending_tokens = max(0, min(remaining_tokens, reservation))
                 if event.get("type") == "message_end" and sdk_message.get("role") == "assistant":
                     content = sdk_message.get("content", [])
                     text = content if isinstance(content, str) else "\n".join(
                         part.get("text", "") for part in content
                         if isinstance(part, dict) and part.get("type") == "text")
-                    if text and not event.get("delegated"):
+                    if text and not event.get("delegated") and not review:
                         last_response = service.profiles.clean(text)
                     values = sdk_message.get("usage") or {}
                     if any(values.get(k, 0) for k in ("input", "output", "totalTokens", "cacheRead", "cacheWrite")):
@@ -234,15 +266,23 @@ def run_worker(service, task_id, bridge, message):
                     observed["total_tokens"] += values.get("totalTokens", sum(values.get(k, 0) or 0 for k in ("input", "cacheRead", "cacheWrite", "output"))) or 0
                 # Store bounded, redacted SDK observations, never raw stream deltas.
                 if event.get("type") != "message_update":
-                    service.event(db, row, "sdk_event", event)
+                    service.event(db, row, "sdk_event", {**event, "session_role": "review"} if review else event)
             elif kind == "result":
-                if isinstance(message.get("text"), str) and message["text"]:
+                if isinstance(message.get("text"), str) and message["text"] and not review:
                     last_response = service.profiles.clean(message["text"])
                 pending_tokens = 0
                 usage(row, message.get("usage") or {})
                 if row.state == "running":
                     stop_budget = check_budget(db, row)
-                if row.state == "running":
+                if review:
+                    pass  # the review verdict comes only from submit_review
+                elif row.harness_json is not None:
+                    # The program decides what follows a turn (driver.after_turn), never the result text.
+                    turn_ended = True
+                    driver.mark_user_messages_delivered(db, row)  # steered into the live turn
+                    service.event(db, row, "turn_ended", {"state": row.state})
+                elif row.state == "running":
+                    # Legacy task (pre-harness): keep the original result -> report path.
                     result = evidence.report(service, db, row, message.get("text", ""))
                     row.state = "incomplete" if result["status"] == "incomplete" else "completed"
                     service.event(db, row, "task_finished", {"state": row.state, "verdict": "not_comparable"})
@@ -250,7 +290,9 @@ def run_worker(service, task_id, bridge, message):
                 usage(row)
                 error = {"code": message.get("code", "sdk_error"), "message": message.get("message", "SDK error")}
                 stop_budget = record_budget_cancel(db, row, error)
-                if row.state == "running":
+                if review:
+                    pass  # a non-budget review error is one failed review attempt (driver), not a pause
+                elif row.state == "running":
                     row.state = "paused"
                     row.error_json = service.profiles.clean(error)
                     service.event(db, row, "task_error", row.error_json)
@@ -289,10 +331,19 @@ def run_worker(service, task_id, bridge, message):
                 if not Path(row.session_file).is_file():
                     fail("SESSION_MISSING", "saved SDK session is missing; cannot safely resume", 409)
                 config["session_file"] = row.session_file
-            prompt = json.dumps(service.profiles.clean({"objective": row.objective,
+            opening = {"objective": row.objective,
+                "max_repair_rounds": row.config_snapshot["limits"].get("max_repair_rounds", 3),
                 "paper": row.context_json, "protocol": row.protocol_json,
                 "skills": [{"id": s["id"], "version": s["version"], "sha256": s["sha256"], "content": s["content"]} for s in row.skills_json],
-                "existing_jobs": row.jobs_json, "instruction": message or "Continue the authorized research task; reconcile existing jobs first."}, bounded=False), ensure_ascii=False)
+                "existing_jobs": row.jobs_json, "instruction": message or "Continue the authorized research task; reconcile existing jobs first."}
+            prompt = json.dumps(service.profiles.clean(opening, bounded=False), ensure_ascii=False)
+            candidate = (row.harness_json or {}).get("candidate")
+            review_pending = bool(candidate and candidate.get("review_status") == "pending")
+            # An issues review recorded while the task was pausing: resume opens its repair round.
+            repair_pending = bool((row.harness_json or {}).get("repair_pending"))
+            # The opening carries context_json.user_messages up to here; it counts as delivered only when sent.
+            opening_messages = driver.user_message_count(db, row)
+            sends_opening = True
             db.commit()
         for action in ("probe", "prepare"):
             with service.lock, service.sessions() as db:
@@ -312,15 +363,22 @@ def run_worker(service, task_id, bridge, message):
         with service.lock, service.sessions() as db:
             jobs = dict(service.row(db, task_id).jobs_json)
         for launch_id, job in jobs.items():
+            unsafe = None
             try:
                 observation = target.status(job["job_id"])
             except Exception as exc:
                 observation = {"state": "unknown", "error": str(exc)}
+                if getattr(exc, "code", None) in SAFETY_CODES:
+                    unsafe = {"code": exc.code, "message": str(exc)}
             with service.lock, service.sessions() as db:
                 row = service.row(db, task_id)
                 usage(row)
                 service.event(db, row, "job_reconciled", {"launch_id": launch_id, "observation": observation})
+                observe_job(row, service.profiles.clean(observation))
                 stop_budget = check_budget(db, row) if row.state == "running" else False
+                if unsafe and row.state == "running":
+                    driver.block_for_safety(service, db, row, unsafe)  # a budget stop above takes precedence
+                    stop_budget = True
                 continue_reconciling = row.state == "running"
                 db.commit()
             if stop_budget:
@@ -328,14 +386,61 @@ def run_worker(service, task_id, bridge, message):
                 return
             if not continue_reconciling:
                 return
-        with service.lock, service.sessions() as db:
-            row = service.row(db, task_id)
-            if row.state != "running":
+
+        def review_account(sdk_message):
+            return callback(sdk_message, role="review")
+
+        def next_turn():
+            # Program-decided follow-up of a turn: review a pending candidate, or continue with facts.
+            # A run that returns without a result is not a turn end; it pauses for explicit resume.
+            if not (turn_ended or review_pending):
+                return None
+            decision, follow = driver.after_turn(service, task_id, service.bridge_factory, model,
+                                                 review_account, narrative=last_response or "")
+            if decision == "finished":
+                return None
+            return continuation(follow)
+
+        def continuation(follow):
+            nonlocal sends_opening
+            with service.lock, service.sessions() as db:
+                session_file = service.row(db, task_id).session_file
+            if session_file:
+                config["session_file"] = session_file
+                sends_opening = False
+                return follow
+            sends_opening = True
+            # No main session yet: the normal opening prompt plus the follow-up facts/findings.
+            return json.dumps(service.profiles.clean({**opening, "continuation": follow}, bounded=False),
+                              ensure_ascii=False)
+
+        if review_pending:
+            # Resume: finish the interrupted review of the same snapshot before the main session.
+            prompt = next_turn()
+            review_pending = False
+        elif repair_pending:
+            with service.lock, service.sessions() as db:
+                row = service.row(db, task_id)
+                follow = driver.start_repair(service, db, row) if row.state == "running" else None
+                db.commit()
+            if follow is None:
                 return
-            usage(row)
-            config["limits"] = service.remaining(row)
-            db.commit()
-        bridge.run(config, prompt, callback)
+            prompt = continuation(follow)
+        while prompt is not None:
+            with service.lock, service.sessions() as db:
+                row = service.row(db, task_id)
+                if row.state != "running":
+                    return
+                usage(row)
+                config["limits"] = service.remaining(row)
+                # Messages that arrived while no main process could take a steer (review, between turns).
+                if sends_opening:
+                    driver.mark_user_messages_delivered(db, row, upto=opening_messages)
+                prompt = driver.with_user_messages(service, db, row, prompt)
+                db.commit()
+            turn_ended = False
+            bridge.run(config, prompt, callback)
+            prompt = next_turn()
     except Exception as exc:
         with service.lock, service.sessions() as db:
             row = service.row(db, task_id)
@@ -345,9 +450,13 @@ def run_worker(service, task_id, bridge, message):
             if row.state == "running":
                 stop_budget = check_budget(db, row) or stop_budget
             if row.state in ("queued", "running"):
-                row.state = "paused"
-                row.error_json = service.profiles.clean(error)
-                service.event(db, row, "task_error", row.error_json)
+                if error["code"] in SAFETY_CODES:
+                    driver.block_for_safety(service, db, row, error)
+                    stop_budget = True
+                else:
+                    row.state = "paused"
+                    row.error_json = service.profiles.clean(error)
+                    service.event(db, row, "task_error", row.error_json)
             db.commit()
         if stop_budget:
             stop_for_budget()
@@ -362,11 +471,38 @@ def run_worker(service, task_id, bridge, message):
                 settled["total_tokens"] = settled.get("total_tokens", 0) + pending_tokens
                 settled["unverified_token_reservation"] = settled.get("unverified_token_reservation", 0) + pending_tokens
             row.usage_json = settled
-            if budget_stopped:
-                # Budget cancellation forbids new work, not the report for the
-                # admitted response. The SDK may emit aborted instead of result.
-                narrative = last_response if last_response is not None else (row.report_json or {}).get("model_narrative", "")
-                evidence.report(service, db, row, narrative)
+            try:
+                outcome, reason, snapshot = (driver.budget_outcome(row) if budget_stopped and row.outcome is None
+                                             else (None, None, None))
+                if outcome:
+                    # A submitted candidate decides the outcome; the lifecycle state stays the budget stop.
+                    candidate = row.harness_json["candidate"]
+                    if candidate.get("review_status") == "pending":
+                        candidate = {**candidate, "review_status": "unavailable"}
+                    row.harness_json = {**evidence.store_candidate(row.harness_json, candidate),
+                                        "outcome_snapshot_sha256": snapshot}
+                    deciding = evidence.deciding_candidate(row.harness_json, snapshot)
+                    evidence.report(service, db, row, deciding["summary"], outcome=outcome, reason=reason,
+                                    outcome_snapshot=snapshot)
+                    row.outcome = outcome
+                    service.event(db, row, "task_finished", {"state": row.state, "outcome": outcome,
+                        "verdict": "not_comparable", "reason": reason, "outcome_snapshot_sha256": snapshot})
+                elif row.outcome == "blocked_by_safety":
+                    harness = row.harness_json or {}
+                    candidate, snapshot = harness.get("candidate"), harness.get("outcome_snapshot_sha256")
+                    reason = (row.context_json.get("cancel_intent", {}).get("reason") or {}).get("code")
+                    evidence.report(service, db, row, candidate["summary"] if candidate else "",
+                                    outcome="blocked_by_safety", reason=reason, outcome_snapshot=snapshot)
+                    service.event(db, row, "task_finished", {"state": row.state, "outcome": "blocked_by_safety",
+                        "verdict": "not_comparable", "reason": reason, "outcome_snapshot_sha256": snapshot})
+                elif budget_stopped and row.outcome is None:
+                    # Budget cancellation forbids new work, not the report for the
+                    # admitted response. The SDK may emit aborted instead of result.
+                    narrative = last_response if last_response is not None else (row.report_json or {}).get("model_narrative", "")
+                    evidence.report(service, db, row, narrative)
+            except Exception as exc:
+                # Settlement and worker_exited below must always commit.
+                service.event(db, row, "report_failed", {"code": getattr(exc, "code", "report_error"), "message": str(exc)})
             if row.state == "running":
                 row.state = "paused"
                 row.error_json = {"code": "recovery_required", "message": "SDK stopped; explicit resume required."}

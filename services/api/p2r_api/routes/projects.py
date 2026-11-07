@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, Body
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from p2r_persistence.models import ProjectRecord, MembershipRecord, UserRecord, AuditLogRecord, utcnow, IdempotencyKey
+from p2r_persistence.autonomous import AutonomousTaskRecord
 from p2r_persistence.repositories import IdempotencyRepository
-from p2r_orchestration.service import ServiceError
+from p2r_orchestration.errors import ServiceError
 from ..auth import require_project_access, ForbiddenError, csrf_token, validate_csrf, validate_origin
 from ..dependencies import actor_id
 
@@ -75,6 +76,15 @@ class ProjectService:
         self.db.add(AuditLogRecord(actor_user_id=user_id, action="project_edited", resource_type="project", resource_id=project_id, details_json={"version": expected_version + 1}))
         self.db.commit(); self.db.refresh(row); return row
 
+    def delete_project(self, user_id: str, project_id: str) -> None:
+        row, _ = self.require_project(user_id, project_id, action="delete")
+        if self.db.scalar(select(AutonomousTaskRecord.id).where(AutonomousTaskRecord.project_id == project_id).limit(1)) is not None:
+            _error("PROJECT_HAS_TASKS", "project has autonomous tasks", 409)
+        new_version = row.version + 1
+        row.deletion_state = "deleted"; row.version = new_version; row.updated_at = utcnow()
+        self.db.add(AuditLogRecord(actor_user_id=user_id, action="project_deleted", resource_type="project", resource_id=project_id, details_json={"version": new_version}))
+        self.db.commit()
+
 
 def _envelope(request: Request, data):
     return {"data": data, "meta": {"request_id": request.state.request_id}}
@@ -119,7 +129,7 @@ def _with_etag(request: Request, payload: dict, version: int):
 def list_projects(request: Request):
     uid = actor_id(request)
     with request.app.state.runtime["session_factory"]() as db:
-        rows = db.execute(select(ProjectRecord, MembershipRecord.role).join(MembershipRecord, MembershipRecord.project_id == ProjectRecord.id).where(MembershipRecord.user_id == uid).order_by(ProjectRecord.created_at, ProjectRecord.id)).all()
+        rows = db.execute(select(ProjectRecord, MembershipRecord.role).join(MembershipRecord, MembershipRecord.project_id == ProjectRecord.id).where(MembershipRecord.user_id == uid, ProjectRecord.deletion_state != "deleted").order_by(ProjectRecord.created_at, ProjectRecord.id)).all()
         return _envelope(request, [_project_json(row, role) for row, role in rows])
 
 
@@ -144,6 +154,15 @@ def get_project(project_id: str, request: Request):
     with request.app.state.runtime["session_factory"]() as db:
         row, membership = ProjectService(db).require_project(actor_id(request), project_id)
         return _with_etag(request, _project_json(row, membership.role), row.version)
+
+
+@router.delete("/projects/{project_id}", status_code=204, response_class=Response)
+def delete_project(project_id: str, request: Request):
+    uid = actor_id(request)
+    with request.app.state.runtime["session_factory"]() as db:
+        _write_check(request, db, None, uid)
+        ProjectService(db).delete_project(uid, project_id)
+    return Response(status_code=204)
 
 
 @router.patch("/projects/{project_id}")

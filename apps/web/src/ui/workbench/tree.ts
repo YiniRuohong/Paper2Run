@@ -1,6 +1,16 @@
 // Pure helpers for the task workbench: file tree building, search filtering,
 // preview classification and size formatting. No React, no DOM — unit tested.
 
+import type { Tone } from '../Card.tsx';
+
+/** Extra label on a file, e.g. 结果 / 第 2 轮 / 旧方案版本. Shown in the file header; `inTree` also shows it in the tree row. */
+export interface WbTag {
+  text: string;
+  tone?: Tone;
+  title?: string;
+  inTree?: boolean;
+}
+
 export interface WbFile {
   /** Posix path, relative; folders are derived from it. Unique per workbench. */
   path: string;
@@ -8,6 +18,7 @@ export interface WbFile {
   mediaType: string | null;
   /** Short tag shown next to the size, e.g. 记录 / 证据. */
   badge?: string;
+  tags?: WbTag[];
   sha256?: string | null;
 }
 
@@ -139,4 +150,9 @@ export function parseCsv(text: string, maxRows = 200, delimiter = ','): { rows: 
   }
   if (cell !== '' || row.length > 0) { row.push(cell); rows.push(row); }
   return { rows, truncated: false };
+}
+
+/** A run as the rail shows it: no "$ " prefix, no leading cd, the virtualenv's bin/ path dropped. */
+export function commandName(label: string): string {
+  return label.replace(/^(后台 )?\$ /, '').replace(/^cd \S+ && /, '').replace(/(^|\s)\S*\/\.venv\/bin\//g, '$1');
 }

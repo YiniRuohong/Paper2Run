@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 from typing_extensions import Annotated
 
 from .common import canonical_json
@@ -75,12 +76,25 @@ class Target(StrictModel):
         return self
 
 
+# Task outcomes are assigned by the control plane only, never by the model.
+OUTCOMES = ("verified", "completed_with_issues", "review_unavailable", "blocked_by_safety")
+
+# Model profile defaults when the user does not set them. Reasoning models spend
+# thousands of output tokens thinking before a tool call; 4096 cut every turn
+# short (stopReason "length") before the first action.
+DEFAULT_CONTEXT_WINDOW = 128_000
+DEFAULT_MAX_TOKENS = 32_768
+
+
 class Limits(StrictModel):
-    wall_time_seconds: int = Field(gt=0, le=31_536_000)
-    max_model_calls: int = Field(gt=0, le=1_000_000)
-    max_model_tokens: int = Field(gt=0, le=10_000_000_000)
+    # Task budgets are optional: None (the default) means no limit. A task runs until it
+    # reaches an outcome or the user stops it; an explicit value is still enforced.
+    wall_time_seconds: int | None = Field(default=None, gt=0, le=31_536_000)
+    max_model_calls: int | None = Field(default=None, gt=0, le=1_000_000)
+    max_model_tokens: int | None = Field(default=None, gt=0, le=10_000_000_000)
     storage_bytes: int = Field(gt=0, le=1_125_899_906_842_624)
     gpu_devices: list[Name] = Field(default_factory=list, max_length=256)
+    max_repair_rounds: int = Field(default=3, ge=0, le=10)
 
 
 class Network(StrictModel):
@@ -163,6 +177,9 @@ class Provenance(StrictModel):
     environment_sha256: Digest | None = None
 
 
+ENTRYPOINT_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-/]{0,255}")
+
+
 class ExperimentProtocol(StrictModel):
     schema_version: Literal["paper2run.protocol.v1"] = "paper2run.protocol.v1"
     objective: Text
@@ -178,6 +195,21 @@ class ExperimentProtocol(StrictModel):
     allowed_changes: list[Text] = Field(default_factory=list)
     budget: Limits
     provenance: Provenance = Field(default_factory=Provenance)
+
+    @field_validator("entrypoint")
+    @classmethod
+    def _entrypoint_is_a_script_path(cls, value: str) -> str:
+        # The candidate gate matches the entrypoint against a registered code artifact
+        # (name or source path) and a run whose first argument after the interpreter is
+        # this path. A whole command can never match either, so a proposal carrying one
+        # would be approved and then reject every submit_candidate. Refuse it here.
+        parts = value.split("/")
+        if not ENTRYPOINT_PATH.fullmatch(value) or value.startswith("./") or ".." in parts or "" in parts:
+            raise ValueError(
+                f"entrypoint must be the script's path relative to /work, e.g. train.py or src/run.py, not a command "
+                f"({value[:80]!r}); put the interpreter and arguments in parameters, and run it as "
+                f"<interpreter> <entrypoint> <arguments>")
+        return value
 
 
 def freeze_protocol(protocol: dict | ExperimentProtocol) -> dict:

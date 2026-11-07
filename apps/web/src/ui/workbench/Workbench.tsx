@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from '../Icon';
 import type { Tone } from '../Card';
-import { ancestors, baseName, buildTree, countFolders, fileTone, filterFiles, formatBytes, parseCsv, previewKind, type WbFile, type WbFolderNode, type WbNode } from './tree';
+import { CopyButton } from '../Controls';
+import { Drawer, type WbDrawer } from './Drawer';
+import { ancestors, baseName, buildTree, commandName, countFolders, fileTone, filterFiles, formatBytes, parseCsv, previewKind, type WbFile, type WbFolderNode, type WbNode, type WbTag } from './tree';
 import './workbench.css';
 
-export type { WbFile } from './tree';
+export type { WbFile, WbTag } from './tree';
+export type { WbDrawer } from './Drawer';
 
 // Three-column task workbench (shared by 新建任务 / 任务详情 / 自主实验):
 //   left   stage timeline — each stage collapses to a header, expands to its sub-steps
 //   centre viewer — a "实时" tab with the page's own live controls (children),
-//          plus closable tabs for opened files; fullscreen and download
+//          plus closable tabs for opened files; download
 //   right  file tree of the task's real files and records, searchable
 // The live content is passed as children on purpose: it stays a normal part of
 // the caller's React tree (forms, focus, tests that walk children).
@@ -23,6 +26,11 @@ export interface WbStageItem {
   tone?: Tone;
   /** Opens this file (by WbFile.path) in the viewer when clicked. */
   openPath?: string;
+  /** Sub-steps nested under this item (e.g. tool calls under an agent progress note). */
+  children?: WbStageItem[];
+  /** How the rail draws it: note = a line of prose, command = a one-line run with a terminal icon,
+   *  tool = an operation kept for the drawer (not drawn as a rail node), pending = italic "still working" line. */
+  variant?: 'note' | 'command' | 'tool' | 'pending';
 }
 export interface WbStage {
   id: string;
@@ -32,6 +40,8 @@ export interface WbStage {
   items?: WbStageItem[];
   /** Selecting a stage calls onSelectStage; locked stages are inert. */
   disabled?: boolean;
+  /** Group heading shown above this stage; consecutive stages with the same group share it. */
+  group?: string;
 }
 
 /** Content returned by a loader: text is rendered directly, a Blob is previewed by type. */
@@ -40,10 +50,16 @@ export type WbContent = { text: string } | { blob: Blob };
 export interface WorkbenchProps {
   eyebrow?: ReactNode;
   title: ReactNode;
-  status?: { text: string; tone: Tone } | null;
+  status?: { text: string; tone: Tone; /** Tooltip, e.g. a caveat that must stay reachable. */ title?: string } | null;
   meta?: ReactNode;
   actions?: ReactNode;
-  progress?: string;
+  progress?: ReactNode;
+  /** Replaces the "实时" tab label with a thin progress bar (and hides `progress`). Clicking it still returns to the live view. */
+  progressBar?: { done: number; total: number; label: string; extra?: ReactNode };
+  /** The live view fills the whole centre column: no tab bar and no download button until a file is opened; then a plain tab leads back. */
+  bareLive?: boolean;
+  /** App layout: the rail runs full height and starts with this (brand, back link); the header moves above the centre and right columns. */
+  railHead?: ReactNode;
   stages: WbStage[];
   activeStageId?: string | null;
   onSelectStage?: (id: string) => void;
@@ -54,9 +70,18 @@ export interface WorkbenchProps {
   files: WbFile[] | null;
   filesError?: string | null;
   filesNote?: ReactNode;
+  /** Empty-listing sentence; '' renders nothing. */
   filesEmpty?: string;
   onRefreshFiles?: () => void;
   loadFile: (file: WbFile, signal: AbortSignal) => Promise<WbContent>;
+  /** Clicking a sub-step calls this instead of opening its file (the page shows it in the drawer). */
+  onOpenItem?: (stageId: string, item: WbStageItem) => void;
+  /** Called when a stage head is clicked, in addition to expanding or collapsing it. */
+  onOpenStage?: (stageId: string) => void;
+  /** Sub-step shown in the drawer; its row stays highlighted. */
+  selectedItemId?: string | null;
+  /** Right-side drawer over the files column; null or absent when closed. */
+  drawer?: WbDrawer | null;
   /** Live view (the page's own controls). */
   children: ReactNode;
 }
@@ -71,9 +96,9 @@ export function Workbench(props: WorkbenchProps) {
   const { stages, files, loadFile } = props;
   const [tabs, setTabs] = useState<string[]>([]);
   const [active, setActive] = useState<string | null>(null); // null = 实时
-  const [full, setFull] = useState(false);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [openItems, setOpenItems] = useState<Set<string>>(() => new Set());
   const [openStages, setOpenStages] = useState<Set<string>>(() => new Set(props.activeStageId ? [props.activeStageId] : []));
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const loadedRef = useRef(loaded); loadedRef.current = loaded;
@@ -117,13 +142,6 @@ export function Workbench(props: WorkbenchProps) {
     for (const c of inflight.current.values()) c.abort();
     for (const item of Object.values(loadedRef.current)) release(item);
   }, []);
-
-  useEffect(() => {
-    if (!full) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFull(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [full]);
 
   function ensureLoaded(file: WbFile, force = false) {
     const current = loadedRef.current[file.path];
@@ -185,37 +203,86 @@ export function Workbench(props: WorkbenchProps) {
     setOpenStages(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   }
 
+  function toggleItem(key: string) {
+    setOpenItems(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  }
+  function renderItem(stageId: string, key: string, item: WbStageItem) {
+    const target = item.openPath && byPath.has(item.openPath) ? item.openPath : null;
+    const onOpenItem = props.onOpenItem;
+    const kids = item.children ?? [];
+    const childOpen = openItems.has(key);
+    const variant = item.variant ? ` is-${item.variant}` : '';
+    // A pending line ("still working") is plain text, never a control.
+    if (item.variant === 'pending') return <li key={item.id}><div className="wb-sub is-pending"><span className="wb-sub-dot tone-run" aria-hidden="true" /><span className="wb-sub-label">{item.label}</span></div></li>;
+    const inner = item.variant === 'note'
+      ? <span className="wb-sub-label">{item.label}</span>
+      : item.variant === 'command'
+      ? <>
+        <Icon name="chevron-right" size={12} className="wb-sub-prompt" />
+        <span className="wb-sub-label">{commandName(item.label)}</span>
+        <Icon name="chevron-right" size={12} className="wb-sub-go" />
+      </>
+      : <>
+        <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
+        <span className="wb-sub-text"><span className="wb-sub-label">{item.label}</span>{(item.detail || item.time) && <small>{item.detail}{item.detail && item.time ? ' · ' : ''}{item.time && <time>{item.time}</time>}</small>}</span>
+        {(target || onOpenItem) && <Icon name="chevron-right" size={12} className="wb-sub-go" />}
+      </>;
+    const row = onOpenItem
+      ? <button type="button" className={`wb-sub${variant}${props.selectedItemId === item.id ? ' is-on' : ''}`} aria-haspopup="dialog" title={item.variant === 'command' ? item.label : undefined} onClick={() => onOpenItem(stageId, item)}>{inner}</button>
+      : target
+      ? <button type="button" className={`wb-sub${active === target ? ' is-on' : ''}`} onClick={() => open(target)} title={`打开 ${baseName(target)}`}>{inner}</button>
+      : kids.length > 0
+        ? <button type="button" className="wb-sub" onClick={() => toggleItem(key)}>{inner}</button>
+        : <div className="wb-sub">{inner}</div>;
+    if (kids.length === 0) return <li key={item.id}>{row}</li>;
+    return <li key={item.id} className="wb-item-parent">
+      <div className="wb-item-row">
+        {row}
+        <button type="button" className={`wb-stage-toggle wb-item-toggle${childOpen ? ' is-open' : ''}`} aria-expanded={childOpen}
+          aria-label={`${childOpen ? '收起' : '展开'}「${item.label}」的 ${kids.length} 个子步骤`} onClick={() => toggleItem(key)}><Icon name="chevron-down" size={13} /></button>
+      </div>
+      {childOpen && <ul className="wb-substeps wb-children">{kids.map(kid => renderItem(stageId, `${key}/${kid.id}`, kid))}</ul>}
+    </li>;
+  }
+
   const activeFile = active !== null ? byPath.get(active) ?? null : null;
   const activeEntry = active !== null ? loaded[active] : undefined;
   const fileCount = files?.length ?? 0;
   const folderCount = countFolders(allTree);
+  const bare = !!props.bareLive;
+  const bar = bare ? undefined : props.progressBar;
+  const barDone = bar ? Math.max(0, Math.min(bar.done, bar.total)) : 0;
 
-  return <div className="wb">
+  return <div className={`wb${props.railHead ? ' is-app' : ''}${props.drawer ? ' has-drawer' : ''}`}>
     <header className="wb-head">
       <div className="wb-head-main">
         {props.eyebrow && <p className="wb-eyebrow">{props.eyebrow}</p>}
         <h1 className="wb-title">{props.title}</h1>
         {(props.status || props.meta) && <div className="wb-meta">
-          {props.status && <span className={`wb-status tone-${props.status.tone}`}><span className="wb-status-dot" aria-hidden="true" />{props.status.text}</span>}
+          {props.status && <span className={`wb-status tone-${props.status.tone}`} title={props.status.title}><span className="wb-status-dot" aria-hidden="true" />{props.status.text}</span>}
           {props.meta}
         </div>}
       </div>
       {props.actions && <div className="wb-head-actions">{props.actions}</div>}
     </header>
 
-    <div className={`wb-grid${full ? ' is-full' : ''}`}>
+    <div className="wb-grid">
       <nav className="wb-rail" aria-label="阶段时间线">
-        {props.progress && <p className="wb-progress">{props.progress}</p>}
+        {props.railHead && <div className="wb-rail-head drag">{props.railHead}</div>}
+        {!props.progressBar && props.progress && <p className="wb-progress">{props.progress}</p>}
         <ol className="wb-stages">
           {stages.map((stage, i) => {
             const isActive = stage.id === props.activeStageId;
             const expanded = openStages.has(stage.id) && (stage.items?.length ?? 0) > 0;
             const hasItems = (stage.items?.length ?? 0) > 0;
-            return <li key={stage.id} className={`wb-stage is-${stage.mark}${isActive ? ' is-active' : ''}`}>
+            const newGroup = stage.group && stage.group !== stages[i - 1]?.group ? stage.group : null;
+            return <Fragment key={stage.id}>
+              {newGroup && <li className="wb-group" role="presentation">{newGroup}</li>}
+              <li className={`wb-stage is-${stage.mark}${isActive ? ' is-active' : ''}`}>
               <div className="wb-stage-row">
                 <button type="button" className="wb-stage-head" aria-current={isActive ? 'step' : undefined}
-                  disabled={stage.disabled || props.stagesBusy || (!props.onSelectStage && !hasItems)}
-                  onClick={() => { if (props.onSelectStage) props.onSelectStage(stage.id); if (hasItems && (!props.onSelectStage || !expanded)) toggleStage(stage.id); }}>
+                  disabled={stage.disabled || props.stagesBusy || (!props.onSelectStage && !props.onOpenStage && !hasItems)}
+                  onClick={() => { if (props.onSelectStage) props.onSelectStage(stage.id); props.onOpenStage?.(stage.id); if (hasItems && (!props.onSelectStage || !expanded)) toggleStage(stage.id); }}>
                   <StageMarker mark={stage.mark} index={i} />
                   <span className="wb-stage-text">
                     <span className="wb-stage-title"><span className="wb-stage-num" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span><b>{stage.title}</b></span>
@@ -225,31 +292,33 @@ export function Workbench(props: WorkbenchProps) {
                 {hasItems && <button type="button" className={`wb-stage-toggle${expanded ? ' is-open' : ''}`} aria-expanded={expanded} aria-label={`${expanded ? '收起' : '展开'}「${stage.title}」的子步骤`} onClick={() => toggleStage(stage.id)}><Icon name="chevron-down" size={13} /></button>}
               </div>
               {expanded && <ul className="wb-substeps">
-                {stage.items!.map(item => {
-                  const target = item.openPath && byPath.has(item.openPath) ? item.openPath : null;
-                  const inner = <>
-                    <span className={`wb-sub-dot${item.tone ? ` tone-${item.tone}` : ''}`} aria-hidden="true" />
-                    <span className="wb-sub-text"><span className="wb-sub-label">{item.label}</span>{(item.detail || item.time) && <small>{item.detail}{item.detail && item.time ? ' · ' : ''}{item.time && <time>{item.time}</time>}</small>}</span>
-                    {target && <Icon name="chevron-right" size={12} className="wb-sub-go" />}
-                  </>;
-                  return <li key={item.id}>
-                    {target
-                      ? <button type="button" className={`wb-sub${active === target ? ' is-on' : ''}`} onClick={() => open(target)} title={`打开 ${baseName(target)}`}>{inner}</button>
-                      : <div className="wb-sub">{inner}</div>}
-                  </li>;
-                })}
+                {stage.items!.map(item => renderItem(stage.id, `${stage.id}/${item.id}`, item))}
               </ul>}
-            </li>;
+              </li>
+            </Fragment>;
           })}
         </ol>
       </nav>
 
-      <section className="wb-viewer" ref={viewer} aria-label="查看器">
-        <div className="wb-tabbar">
+      <section className={`wb-viewer${bare ? ' is-bare' : ''}`} ref={viewer} aria-label="查看器">
+        {(!bare || tabs.length > 0) && <div className="wb-tabbar">
           <div className="wb-tabs" role="tablist" aria-label="已打开">
-            <button type="button" role="tab" aria-selected={active === null} className={`wb-tab wb-tab-live${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
-              <span className="wb-live-dot" aria-hidden="true" />{props.liveLabel ?? '实时'}
-            </button>
+            {bare
+              ? <button type="button" role="tab" aria-selected={active === null} className={`wb-tab wb-tab-live${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
+                <span className="wb-live-dot" aria-hidden="true" />{props.liveLabel ?? '当前步骤'}
+              </button>
+              : bar
+              ? <button type="button" role="tab" aria-selected={active === null} aria-label={`实时 · ${bar.label}`} className={`wb-tab wb-tab-live wb-tab-bar${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
+                <span className="wb-bar-label">{bar.label}</span>
+                <span className="wb-steps" role="progressbar" aria-valuenow={barDone} aria-valuemin={0} aria-valuemax={bar.total} aria-label={`进度 ${barDone} / ${bar.total}`}>
+                  {Array.from({ length: bar.total }, (_, i) => <span key={i} className={`wb-step ${i < barDone ? 'is-done' : i === barDone ? 'is-current' : 'is-todo'}`} />)}
+                </span>
+                <span className="wb-bar-count">{barDone} / {bar.total}</span>
+                {bar.extra}
+              </button>
+              : <button type="button" role="tab" aria-selected={active === null} className={`wb-tab wb-tab-live${active === null ? ' is-on' : ''}`} onClick={() => setActive(null)}>
+                <span className="wb-live-dot" aria-hidden="true" />{props.liveLabel ?? '实时'}
+              </button>}
             {tabs.map(path => <span key={path} className={`wb-tab${active === path ? ' is-on' : ''}`}>
               <button type="button" role="tab" aria-selected={active === path} className="wb-tab-open" title={path} onClick={() => setActive(path)}>
                 <FileGlyph file={byPath.get(path)} size={13} /><span>{baseName(path)}</span>
@@ -259,17 +328,17 @@ export function Workbench(props: WorkbenchProps) {
           </div>
           <div className="wb-tools">
             {activeFile && <button type="button" className="btn btn-icon" aria-label="重新读取" title="重新读取" onClick={() => ensureLoaded(activeFile, true)}><Icon name="refresh" size={15} /></button>}
-            <button type="button" className="btn btn-icon" aria-label={full ? '退出全屏' : '全屏'} title={full ? '退出全屏（Esc）' : '全屏'} aria-pressed={full} onClick={() => setFull(x => !x)}><Icon name={full ? 'minimize' : 'maximize'} size={15} /></button>
-            <button type="button" className="btn btn-icon" aria-label="下载当前文件" title={activeFile ? `下载 ${baseName(activeFile.path)}` : '打开文件后可下载'} disabled={!activeEntry || activeEntry.state !== 'ready'} onClick={download}><Icon name="download" size={15} /></button>
+            {!bare && <button type="button" className="btn btn-icon" aria-label="下载当前文件" title={activeFile ? `下载 ${baseName(activeFile.path)}` : '打开文件后可下载'} disabled={!activeEntry || activeEntry.state !== 'ready'} onClick={download}><Icon name="download" size={15} /></button>}
           </div>
-        </div>
+        </div>}
         <div className="wb-pane" hidden={active !== null}>{props.children}</div>
         {activeFile && <div className="wb-pane wb-pane-file">
           <div className="wb-file-meta">
             <span className="ui-mono" title={activeFile.path}>{activeFile.path}</span>
             <span>{formatBytes(activeFile.bytes)}</span>
-            {activeFile.sha256 && <span className="ui-mono" title={activeFile.sha256}>sha256 {activeFile.sha256.slice(0, 12)}…</span>}
+            {activeFile.sha256 && <span className="wb-file-sha"><span className="ui-mono" title={activeFile.sha256}>sha256 {activeFile.sha256.slice(0, 12)}…</span><CopyButton value={activeFile.sha256} label="复制完整 SHA256" /></span>}
             {activeFile.badge && <span className="wb-badge">{activeFile.badge}</span>}
+            {activeFile.tags?.map(tag => <FileTag key={tag.text} tag={tag} />)}
           </div>
           <Preview file={activeFile} entry={activeEntry} onRetry={() => ensureLoaded(activeFile, true)} />
         </div>}
@@ -288,7 +357,7 @@ export function Workbench(props: WorkbenchProps) {
         {props.filesError && <p className="wb-files-msg tone-bad" role="alert">{props.filesError}</p>}
         <div className="wb-tree" role="tree" aria-label="文件树">
           {files === null && !props.filesError && <div className="wb-tree-skel" aria-hidden="true"><span /><span /><span /><span /></div>}
-          {files !== null && fileCount === 0 && <p className="wb-files-msg">{props.filesEmpty ?? '还没有文件。'}</p>}
+          {files !== null && fileCount === 0 && props.filesEmpty !== '' && <p className="wb-files-msg">{props.filesEmpty ?? '还没有文件。'}</p>}
           {files !== null && fileCount > 0 && shown.length === 0 && <p className="wb-files-msg">没有匹配「{query.trim()}」的文件。</p>}
           <TreeLevel node={tree} depth={0} collapsed={searching ? EMPTY : collapsed} active={active}
             onToggle={path => setCollapsed(prev => { const next = new Set(prev); if (next.has(path)) next.delete(path); else next.add(path); return next; })}
@@ -297,6 +366,10 @@ export function Workbench(props: WorkbenchProps) {
         {props.filesNote && <div className="wb-files-note">{props.filesNote}</div>}
       </aside>
     </div>
+    {props.drawer && <Drawer key={props.drawer.title} drawer={props.drawer}
+      footer={props.drawer.openPath && byPath.has(props.drawer.openPath)
+        ? <button type="button" className="btn btn-secondary" onClick={() => { const path = props.drawer!.openPath!; props.drawer!.onClose(); open(path); }}><Icon name="doc" size={14} />在中间栏打开文件</button>
+        : undefined} />}
   </div>;
 }
 
@@ -312,6 +385,10 @@ function StageMarker({ mark, index }: { mark: StageMark; index: number }) {
     {icon ? <Icon name={icon} size={12} /> : mark === 'running' || mark === 'current' ? <span className="wb-mark-core" /> : <span className="wb-mark-num">{index + 1}</span>}
     <span className="sr-only">{MARK_LABEL[mark]}</span>
   </span>;
+}
+
+function FileTag({ tag }: { tag: WbTag }) {
+  return <span className={`wb-badge${tag.tone ? ` tone-${tag.tone}` : ''}`} title={tag.title}>{tag.text}</span>;
 }
 
 function FileGlyph({ file, size = 15 }: { file: WbFile | undefined; size?: number }) {
@@ -336,7 +413,6 @@ function TreeLevel({ node, depth, collapsed, active, onToggle, onOpen }: { node:
       <button type="button" className={`wb-node wb-node-file${active === child.path ? ' is-on' : ''}`} style={{ paddingLeft: 8 + depth * 14 + 16 }} title={child.path} onClick={() => onOpen(child.path)}>
         <FileGlyph file={child.file} />
         <span className="wb-node-name">{child.name}</span>
-        {child.file.badge && <span className="wb-badge">{child.file.badge}</span>}
         <span className="wb-node-size">{formatBytes(child.file.bytes)}</span>
       </button>
     </div>)}</>;

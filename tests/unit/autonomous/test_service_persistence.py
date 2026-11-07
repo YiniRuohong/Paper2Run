@@ -24,7 +24,7 @@ def test_migration_upgrade_downgrade_and_init_db_discovery(tmp_path):
     tables = set(inspect(engine).get_table_names())
     assert {"autonomous_configs", "autonomous_tasks", "autonomous_events"} <= tables
     with engine.connect() as conn:
-        assert conn.execute(text("select version_num from alembic_version")).scalar() == "0021"
+        assert conn.execute(text("select version_num from alembic_version")).scalar() == "0022"
         triggers = conn.execute(text("select name from sqlite_master where type='trigger' and name like 'p2r_autonomous_events_%'")).scalars().all()
         assert len(triggers) == 2
     command.downgrade(cfg, "0019")
@@ -77,4 +77,29 @@ def test_pdf_context_uses_matching_persisted_parse(tmp_path):
         assert svc.paper_context(db, "p", version.id)["text"] == "# Real parsed content"
         version.sha256 = "b" * 64; db.commit()
         assert "text" not in svc.paper_context(db, "p", version.id)
+    engine.dispose()
+
+
+def test_context_ignores_legacy_extraction_records(tmp_path):
+    """Only verified parsed text reaches the agent; a legacy extraction never does (spec 5.10)."""
+    from p2r_persistence.models import ExtractionRecord
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'db.sqlite'}")
+    init_db(engine)
+    factory = create_session_factory(engine)
+    svc = AutonomousService(factory, tmp_path / "state", artifact_store=LocalArtifactStore(tmp_path / "sources"))
+    sha = "c" * 64
+    with factory() as db:
+        db.add(UserRecord(id="owner", display_name="Owner")); db.flush()
+        db.add(ProjectRecord(id="p", name="P", created_by="owner")); db.flush()
+        paper = PaperRecord(project_id="p", sha256=sha, artifact_key="unused", bytes=100, page_count=1, processing_consent=True)
+        db.add(paper); db.flush()
+        version = PaperVersionRecord(paper_id=paper.id, version=1, sha256=sha, artifact_key="unused", bytes=100, page_count=1)
+        db.add(version)
+        db.add(ExtractionRecord(paper_id=paper.id, content_sha256=sha, status="ready", payload_json={
+            "fields": {"task": {"value": "legacy"}}, "source_refs": [{"pdf_sha256": sha, "quote": "legacy"}]}))
+        db.commit()
+        context = svc.paper_context(db, "p", version.id)
+        assert "extraction" not in context and "text" not in context
+        assert any("No verified parsed" in item for item in context["limitations"])
     engine.dispose()

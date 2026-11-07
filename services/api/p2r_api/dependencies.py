@@ -1,43 +1,61 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy.orm import Session
 
 from p2r_persistence.db import create_engine, create_session_factory, init_db
 from p2r_persistence.models import AuthSessionRecord
-from .auth import IdentityService, SessionRequiredError, csrf_token
+from .auth import IdentityService, SessionRequiredError
+
+# The single local user. The id predates this module (existing local databases
+# own their projects under it, and the web UI sends it as X-Actor-ID), so it
+# must not change.
+LOCAL_ACTOR_ID = "demo-user"
+
+
+def data_dir() -> Path:
+    """Root of the local runtime's data; ``P2R_DEMO_DIR`` keeps its historical name and default."""
+    return Path(os.environ.get("P2R_DEMO_DIR", ".p2r-demo")).resolve()
+
+
+def _ascii_docparse_root() -> Path | None:
+    """Windows only: an all-ASCII root for the MinerU runtime, or None when there is none."""
+    for base in (os.environ.get("PROGRAMDATA"), os.environ.get("SYSTEMDRIVE", "C:") + "\\"):
+        if base and base.isascii():
+            return (Path(base) / "Paper2Run" / "docparse").resolve()
+    return None
 
 
 def docparse_root() -> Path:
     configured = os.environ.get("P2R_DOCPARSE_DIR")
     if configured:
         return Path(configured).resolve()
-    return (Path(os.environ.get("P2R_DEMO_DIR", ".p2r-demo")) / "docparse").resolve()
+    default = data_dir() / "docparse"
+    # mineru-kit's llama.cpp backend fails to load from a venv under a non-ASCII Windows
+    # path (e.g. a Chinese user name): "No mapping for the Unicode character exists in the
+    # target multi-byte code page". Keep the runtime on an ASCII path there.
+    if sys.platform == "win32" and not str(default).isascii():
+        return _ascii_docparse_root() or default
+    return default
 
 
 def build_runtime(*, db_url: str | None = None, session_factory: Any = None,
-                  supervisor: Any = None, artifact_store: Any = None,
+                  artifact_store: Any = None,
                   allowed_origin: str | None = None, secure_cookies: bool = True,
-                  development_auth: bool = False, docparse_service: Any = None) -> dict[str, Any]:
+                  development_auth: bool = False, docparse_service: Any = None,
+                  local_actor: str | None = None) -> dict[str, Any]:
     injected_persistence = session_factory is not None or db_url is not None
     if session_factory is None:
         engine = create_engine(db_url or os.getenv("P2R_DATABASE_URL", "sqlite:///p2r.sqlite3"))
         init_db(engine)
         session_factory = create_session_factory(engine)
-    from p2r_orchestration.provider_sessions import ProviderSecretStore
-    from p2r_orchestration.environment_checker import EnvironmentChecker
-    from p2r_orchestration.session_extraction import SessionExtractionService
-    from p2r_orchestration.ssh_executor import FakeSSHVerifier
-
     if docparse_service is None:
         from p2r_orchestration.docparse_service import DocParseService
         docparse_service = DocParseService(docparse_root())
-    store = ProviderSecretStore()
     from p2r_orchestration.autonomous import AutonomousService
     autonomous_root = None
     if not os.getenv("P2R_AUTONOMOUS_DIR") and not os.getenv("P2R_DEMO_DIR"):
@@ -53,27 +71,11 @@ def build_runtime(*, db_url: str | None = None, session_factory: Any = None,
         elif artifact_store is not None and hasattr(artifact_store, "root"):
             autonomous_root = Path(artifact_store.root).resolve() / "autonomous-control"
     autonomous = AutonomousService(session_factory, autonomous_root, artifact_store=artifact_store)
-    return {"autonomous_service": autonomous, "session_factory": session_factory, "supervisor": supervisor, "artifact_store": artifact_store,
+    return {"autonomous_service": autonomous, "session_factory": session_factory, "artifact_store": artifact_store,
             "allowed_origin": allowed_origin, "secure_cookies": secure_cookies,
             "development_auth": development_auth,
             "docparse_service": docparse_service,
-            # Runtime-only: never persisted, never serialized into DTOs.
-            "provider_secret_store": store,
-            # Real OpenAI-compatible extraction seam; resolves live sessions
-            # from the same runtime-only store instance as above (secrets stay
-            # process-local, transport injectable for tests).
-            "extraction_service": SessionExtractionService(store),
-            "environment_checker": EnvironmentChecker(),
-            # Default fake SSH verifier: no network I/O in this phase; tests
-            # (and later a controlled transport adapter) inject their own.
-            "ssh_verifier": FakeSSHVerifier()}
-
-
-def get_service(request: Request):
-    from p2r_orchestration.service import OrchestrationService
-    runtime = request.app.state.runtime
-    with runtime["session_factory"]() as db:
-        yield OrchestrationService(db, supervisor=runtime.get("supervisor"), artifact_store=runtime.get("artifact_store"))
+            "local_actor": local_actor}
 
 
 def get_identity(request: Request) -> IdentityService:
@@ -95,15 +97,13 @@ def current_auth(request: Request) -> tuple[IdentityService, AuthSessionRecord, 
 
 
 def actor_id(request: Request) -> str:
-    if request.app.state.runtime.get("demo_enabled"):
+    local = request.app.state.runtime.get("local_actor")
+    if local:
         from .auth import ResourceNotFoundError
-        if request.headers.get("X-Actor-ID", "demo-user") != "demo-user":
+        if request.headers.get("X-Actor-ID", local) != local:
             raise ResourceNotFoundError("resource not found")
-        return "demo-user"
+        return local
     if request.app.state.runtime.get("development_auth"):
         return request.headers.get("X-Actor-ID", "dev-user")
     _, row, _ = current_auth(request)
     return row.user_id
-
-
-import os

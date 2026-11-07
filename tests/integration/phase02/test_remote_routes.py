@@ -70,7 +70,7 @@ def control(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(db_url=f"sqlite:///{tmp_path / 'r.sqlite3'}", supervisor=object(), secure_cookies=False,
+    app = create_app(db_url=f"sqlite:///{tmp_path / 'r.sqlite3'}", secure_cookies=False,
                      artifact_store=LocalArtifactStore(tmp_path / "store"))
     return TestClient(app)
 

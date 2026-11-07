@@ -1,8 +1,7 @@
-"""Article entry (TXT/paste text) and Provider session HTTP integration tests."""
+"""Article entry (TXT/paste text, PDF upload, source content) HTTP integration tests."""
 from __future__ import annotations
 
 import hashlib
-import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +11,7 @@ from p2r_api.main import create_app
 from p2r_artifacts.store import LocalArtifactStore
 from p2r_docparse.testing import minimal_pdf
 from p2r_persistence.models import (
-    IdempotencyKey, PaperRecord, PaperVersionRecord, ProjectRecord,
+    PaperRecord, PaperVersionRecord, ProjectRecord,
     UserRecord, MembershipRecord,
 )
 
@@ -24,7 +23,7 @@ TEXT_BODY = "Paper2Run pasted article text.\nSecond line with details.\n"
 def app(tmp_path):
     return create_app(
         db_url=f"sqlite:///{tmp_path / 'entry.sqlite3'}",
-        supervisor=object(),
+        development_auth=True,
         secure_cookies=False,
         artifact_store=LocalArtifactStore(tmp_path / "store"),
     )
@@ -196,6 +195,26 @@ def test_invalid_utf8_text_rejected(seeded):
         assert resp.json()["error"]["code"] == "TEXT_INVALID_UTF8"
 
 
+def test_paper_json_reports_source_kind_and_media_type(seeded):
+    """The frontend decides whether parsing applies from these fields, not from text status."""
+    app, ids = seeded
+    with TestClient(app) as client:
+        text_id = post_text(client, ids["project"], key="kind-text").json()["data"]["paper_id"]
+        pdf = client.post(
+            f"/api/v1/projects/{ids['project']}/papers",
+            headers=headers("kind-pdf"),
+            files={"file": ("paper.pdf", minimal_pdf(["Kind"]), "application/pdf")},
+            data={"source_processing_consent": "true"},
+        )
+        pdf_id = pdf.json()["data"]["paper_id"]
+        text = client.get(f"/api/v1/papers/{text_id}", headers={"X-Actor-ID": "owner"}).json()["data"]
+        assert (text["source_kind"], text["media_type"]) == ("text", "text/plain")
+        paper = client.get(f"/api/v1/papers/{pdf_id}", headers={"X-Actor-ID": "owner"}).json()["data"]
+        assert (paper["source_kind"], paper["media_type"]) == ("pdf", "application/pdf")
+        listed = client.get(f"/api/v1/projects/{ids['project']}/papers", headers={"X-Actor-ID": "owner"}).json()["data"]
+        assert {row["paper_id"]: row["source_kind"] for row in listed} == {text_id: "text", pdf_id: "pdf"}
+
+
 def test_pdf_upload_still_works(seeded):
     app, ids = seeded
     pdf = minimal_pdf(["Real PDF text"]) + b"\r\n\r\n"
@@ -212,157 +231,3 @@ def test_pdf_upload_still_works(seeded):
                              headers={"X-Actor-ID": "owner"})
         assert content.content == pdf
         assert content.headers["content-type"] == "application/pdf"
-
-
-# ---------------------------------------------------------------- Provider sessions
-
-SAFE_PROVIDER_BODY = {
-    "base_url": "https://provider.example/v1",
-    "endpoint_alias": "my-provider",
-    "model_id": "model-a",
-    "display_name": "My Provider",
-    "revision": "1",
-    "api_key": "sk-live-secret-abcdef123456",
-}
-
-
-def post_provider(client, body, key):
-    return client.post(
-        "/api/v1/provider-sessions",
-        headers={"X-Actor-ID": "owner", "Idempotency-Key": key},
-        json=body,
-    )
-
-
-def test_provider_session_returns_only_safe_projection(seeded):
-    app, ids = seeded
-    with TestClient(app) as client:
-        resp = post_provider(client, SAFE_PROVIDER_BODY, "prov-1")
-        assert resp.status_code == 201, resp.text
-        data = resp.json()["data"]
-        assert "provider_session_id" in data
-        assert SAFE_PROVIDER_BODY["api_key"] not in resp.text
-        assert "api_key" not in data
-        assert data["secret_configured"] is True
-        assert data["endpoint_alias"] == "my-provider"
-        assert data["model_id"] == "model-a"
-
-        # GET is idempotent-safe read-back of projection only
-        readback = client.get(
-            f"/api/v1/provider-sessions/{data['provider_session_id']}",
-            headers={"X-Actor-ID": "owner"},
-        )
-        assert readback.status_code == 200
-        assert SAFE_PROVIDER_BODY["api_key"] not in readback.text
-
-        # replay same key+body returns same id
-        replay = post_provider(client, SAFE_PROVIDER_BODY, "prov-1")
-        assert replay.json()["data"]["provider_session_id"] == data["provider_session_id"]
-
-        # same key different body -> conflict
-        other = {**SAFE_PROVIDER_BODY, "model_id": "model-b"}
-        conflict = post_provider(client, other, "prov-1")
-        assert conflict.status_code == 409
-        assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
-
-        # missing key
-        no_key = client.post("/api/v1/provider-sessions",
-                             headers={"X-Actor-ID": "owner"},
-                             json=SAFE_PROVIDER_BODY)
-        assert no_key.status_code == 422
-        assert no_key.json()["error"]["code"] == "VALIDATION_ERROR"
-
-
-@pytest.mark.parametrize("bad_url", [
-    "http://provider.example/v1",
-    "https://user:pass@provider.example/v1",
-    "https://provider.example/v1?x=1",
-    "https://provider.example/v1#frag",
-    "ftp://provider.example/v1",
-])
-def test_provider_session_rejects_unsafe_endpoint(seeded, bad_url):
-    app, ids = seeded
-    with TestClient(app) as client:
-        resp = post_provider(client, {**SAFE_PROVIDER_BODY, "base_url": bad_url}, "prov-bad")
-        assert resp.status_code == 422, resp.text
-        assert resp.json()["error"]["code"] == "PROVIDER_ENDPOINT_REJECTED"
-
-
-def test_provider_session_capabilities_are_passed_through_and_validated(seeded):
-    """Regression: capabilities field must reach store.put, not be dropped (F2)."""
-    app, ids = seeded
-    with TestClient(app) as client:
-        # valid capabilities are accepted (and stored on the ProviderConfig)
-        ok = post_provider(client, {**SAFE_PROVIDER_BODY,
-                                    "capabilities": {"text": "supported",
-                                                     "structured_output": "supported"}},
-                           "prov-caps-ok")
-        assert ok.status_code == 201, ok.text
-
-        # invalid capability value -> validation error, not silently dropped
-        bad = post_provider(client, {**SAFE_PROVIDER_BODY,
-                                     "capabilities": {"text": "sometimes"}},
-                            "prov-caps-bad")
-        assert bad.status_code == 422, bad.text
-        assert bad.json()["error"]["code"] == "VALIDATION_ERROR"
-
-        # unknown capability key -> rejected by extra=forbid
-        unknown = post_provider(client, {**SAFE_PROVIDER_BODY,
-                                         "capabilities": {"text": "supported", "telepathy": "on"}},
-                                "prov-caps-unknown")
-        assert unknown.status_code == 422
-        assert unknown.json()["error"]["code"] == "VALIDATION_ERROR"
-
-        # unknown top-level field -> rejected by extra=forbid
-        extra = post_provider(client, {**SAFE_PROVIDER_BODY, "surprise": 1}, "prov-extra")
-        assert extra.status_code == 422
-        assert extra.json()["error"]["code"] == "VALIDATION_ERROR"
-
-    # verify the stored config actually carries the declared capabilities
-    store = app.state.runtime["provider_secret_store"]
-    summary = store.public_summary(ok.json()["data"]["provider_session_id"])
-    config = store.config(summary["provider_session_id"])
-    assert config.capabilities.text == "supported"
-    assert config.capabilities.structured_output == "supported"
-
-
-def test_provider_secret_never_persisted_to_database_or_artifacts(seeded, tmp_path):
-    app, ids = seeded
-    with TestClient(app) as client:
-        resp = post_provider(client, SAFE_PROVIDER_BODY, "prov-persist")
-        assert resp.status_code == 201
-        session_id = resp.json()["data"]["provider_session_id"]
-
-    # scan every table row for the secret
-    factory = app.state.runtime["session_factory"]
-    from sqlalchemy import inspect as sa_inspect
-    with factory() as db:
-        engine = db.get_bind()
-        for table in sa_inspect(engine).get_table_names():
-            rows = db.execute(
-                __import__("sqlalchemy").text(f'SELECT * FROM "{table}"')
-            ).mappings().all()
-            for row in rows:
-                blob = json.dumps(dict(row), default=str, ensure_ascii=False)
-                assert SAFE_PROVIDER_BODY["api_key"] not in blob, f"leak in table {table}"
-
-    # scan artifact store files
-    store_root = tmp_path / "store"
-    if store_root.exists():
-        for path in store_root.rglob("*"):
-            if path.is_file():
-                assert SAFE_PROVIDER_BODY["api_key"] not in path.read_bytes()
-
-    # clearing the session removes the runtime secret
-    with TestClient(app) as client:
-        cleared = client.delete(
-            f"/api/v1/provider-sessions/{session_id}",
-            headers={"X-Actor-ID": "owner", "Idempotency-Key": "prov-clear"},
-        )
-        assert cleared.status_code in (200, 204), cleared.text
-        after = client.get(
-            f"/api/v1/provider-sessions/{session_id}",
-            headers={"X-Actor-ID": "owner"},
-        )
-        assert after.status_code in (404, 410)
-        assert SAFE_PROVIDER_BODY["api_key"] not in after.text

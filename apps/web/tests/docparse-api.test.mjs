@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGuidedApi, GuidedApiError, GUIDED_PATHS, validateDocParseStatus, validatePaperText } from '../src/api-client/guided.ts';
+import { ApiError } from '../src/api-client/client.ts';
+import { createPapersApi, validateDocParseStatus, validatePaperText } from '../src/api-client/papers.ts';
 
 // Api-client tests for the MinerU PDF parsing endpoints (docparse), against a
-// mock fetch. Focus: exact paths/methods, Idempotency-Key only on parsePaper,
-// X-Actor-ID on every call, bodies carrying only allow-listed fields, and
-// validators that refuse unknown enum values or wrong types.
+// mock fetch. Focus: exact paths/methods, Idempotency-Key only where required,
+// X-Actor-ID on every call, and validators that refuse unknown enum values or
+// wrong types.
 
 function envelope(data, status = 200) {
   return new Response(JSON.stringify({ data, meta: { request_id: 'req-ok' } }), {
@@ -46,19 +47,9 @@ const readyText = {
   warnings: ['pages 21-30 missing'], error_code: null, preview: '<!-- p2r:pages 1-20 -->\n# Title',
 };
 
-test('docparse paths are the backend routes', () => {
-  assert.equal(GUIDED_PATHS.docparseStatus, '/docparse/status');
-  assert.equal(GUIDED_PATHS.docparseMode, '/docparse/mode');
-  assert.equal(GUIDED_PATHS.docparseOfflineInstall, '/docparse/offline/install');
-  assert.equal(GUIDED_PATHS.docparseOfflineCancel, '/docparse/offline/cancel');
-  assert.equal(GUIDED_PATHS.docparseOffline, '/docparse/offline');
-  assert.equal(GUIDED_PATHS.paperParse('p/1'), '/papers/p%2F1/parse');
-  assert.equal(GUIDED_PATHS.paperText('p/1'), '/papers/p%2F1/text');
-});
-
 test('getDocParseStatus is a plain GET with the actor header and no idempotency key', async () => {
   const t = capture(async () => envelope(statusDto()));
-  const api = createGuidedApi('demo-user', t.fetcher);
+  const api = createPapersApi('demo-user', t.fetcher);
   const value = await api.getDocParseStatus();
   assert.deepEqual(value, statusDto());
   assert.equal(t.calls.length, 1);
@@ -70,7 +61,7 @@ test('getDocParseStatus is a plain GET with the actor header and no idempotency 
 
 test('setDocParseMode PUTs exactly {mode} without an idempotency key', async () => {
   const t = capture(async () => envelope(statusDto({ mode: 'online' })));
-  const api = createGuidedApi('demo-user', t.fetcher);
+  const api = createPapersApi('demo-user', t.fetcher);
   const value = await api.setDocParseMode('online');
   assert.equal(value.mode, 'online');
   const call = t.calls[0];
@@ -84,14 +75,14 @@ test('setDocParseMode PUTs exactly {mode} without an idempotency key', async () 
 
 test('setDocParseMode refuses a mode outside online/offline before any request', async () => {
   const t = capture(async () => envelope(statusDto()));
-  const api = createGuidedApi('demo-user', t.fetcher);
-  await assert.rejects(api.setDocParseMode('auto'), (error) => error instanceof GuidedApiError);
+  const api = createPapersApi('demo-user', t.fetcher);
+  await assert.rejects(api.setDocParseMode('auto'), (error) => error instanceof ApiError);
   assert.equal(t.calls.length, 0);
 });
 
 test('offline install/cancel/uninstall hit their routes without idempotency keys or bodies', async () => {
   const t = capture(async (path) => envelope(statusDto({ offline: { ...statusDto().offline, state: path.endsWith('/install') ? 'installing' : 'not_installed' } }), path.endsWith('/install') ? 202 : 200));
-  const api = createGuidedApi('demo-user', t.fetcher);
+  const api = createPapersApi('demo-user', t.fetcher);
   assert.equal((await api.startOfflineInstall()).offline.state, 'installing');
   assert.equal((await api.cancelOfflineInstall()).offline.state, 'not_installed');
   assert.equal((await api.uninstallOffline()).offline.state, 'not_installed');
@@ -109,9 +100,9 @@ test('offline install/cancel/uninstall hit their routes without idempotency keys
 
 test('offline install on an unsupported platform surfaces DOCPARSE_OFFLINE_UNSUPPORTED as a proven rejection', async () => {
   const t = capture(async () => errorEnvelope(409, 'DOCPARSE_OFFLINE_UNSUPPORTED', 'offline parsing is not supported on this platform'));
-  const api = createGuidedApi('demo-user', t.fetcher);
+  const api = createPapersApi('demo-user', t.fetcher);
   await assert.rejects(api.startOfflineInstall(), (error) => {
-    assert.ok(error instanceof GuidedApiError);
+    assert.ok(error instanceof ApiError);
     assert.equal(error.status, 409);
     assert.equal(error.code, 'DOCPARSE_OFFLINE_UNSUPPORTED');
     assert.equal(error.unknown, false);
@@ -121,7 +112,7 @@ test('offline install on an unsupported platform surfaces DOCPARSE_OFFLINE_UNSUP
 
 test('parsePaper posts an empty JSON body with the caller key', async () => {
   const t = capture(async () => envelope({ paper_id: 'paper_1', job_id: 'job_1', status: 'parsing' }, 202));
-  const api = createGuidedApi('demo-user', t.fetcher);
+  const api = createPapersApi('demo-user', t.fetcher);
   const accepted = await api.parsePaper('paper_1', 'parse-key');
   assert.deepEqual(accepted, { paper_id: 'paper_1', job_id: 'job_1', status: 'parsing' });
   const call = t.calls[0];
@@ -135,34 +126,60 @@ test('parsePaper posts an empty JSON body with the caller key', async () => {
 
 test('parsePaper refuses an empty key without sending anything', async () => {
   const t = capture(async () => envelope({ paper_id: 'paper_1', job_id: 'job_1', status: 'parsing' }, 202));
-  const api = createGuidedApi('demo-user', t.fetcher);
-  await assert.rejects(api.parsePaper('paper_1', ''), (error) => error instanceof GuidedApiError);
+  const api = createPapersApi('demo-user', t.fetcher);
+  await assert.rejects(api.parsePaper('paper_1', ''), (error) => error instanceof ApiError);
   assert.equal(t.calls.length, 0);
 });
 
-test('parsePaper maps DOCPARSE_MODE_UNSET and treats a mismatched accept as an unknown outcome', async () => {
+test('parsePaper maps DOCPARSE_MODE_UNSET and rejects an accept for another paper', async () => {
   const unset = capture(async () => errorEnvelope(409, 'DOCPARSE_MODE_UNSET', 'choose online or offline parsing first'));
-  await assert.rejects(createGuidedApi('demo-user', unset.fetcher).parsePaper('paper_1', 'k'), (error) => {
+  await assert.rejects(createPapersApi('demo-user', unset.fetcher).parsePaper('paper_1', 'k'), (error) => {
     assert.equal(error.code, 'DOCPARSE_MODE_UNSET');
     assert.equal(error.unknown, false);
     return true;
   });
   const other = capture(async () => envelope({ paper_id: 'someone-else', job_id: 'job_1', status: 'parsing' }, 202));
-  await assert.rejects(createGuidedApi('demo-user', other.fetcher).parsePaper('paper_1', 'k'), (error) => {
-    assert.ok(error instanceof GuidedApiError);
-    assert.equal(error.unknown, true, 'a 2xx we cannot validate is an unknown outcome, not a success');
+  await assert.rejects(createPapersApi('demo-user', other.fetcher).parsePaper('paper_1', 'k'), (error) => {
+    assert.ok(error instanceof ApiError, 'a 202 for another paper must not be treated as success');
     return true;
   });
 });
 
 test('getPaperText reads the paper text route and validates parsing and ready shapes', async () => {
   const t = capture(async (path) => envelope(path.includes('p1') ? parsingText : readyText));
-  const api = createGuidedApi('demo-user', t.fetcher);
+  const api = createPapersApi('demo-user', t.fetcher);
   assert.deepEqual(await api.getPaperText('p1'), parsingText);
   assert.deepEqual(await api.getPaperText('p2'), readyText);
   assert.deepEqual(t.calls.map(c => `${c.init.method} ${c.path}`), ['GET /api/v1/papers/p1/text', 'GET /api/v1/papers/p2/text']);
   assert.equal(t.calls[0].headers.get('Idempotency-Key'), null);
   assert.equal(t.calls[0].headers.get('X-Actor-ID'), 'demo-user');
+});
+
+test('uploadPaperPdf posts multipart with consent, title hint and an idempotency key', async () => {
+  const t = capture(async () => envelope({ paper_id: 'p1', operation_id: null, status: 'uploaded' }, 202));
+  const api = createPapersApi('demo-user', t.fetcher);
+  const file = new File(['%PDF-1.4'], 'paper.pdf', { type: 'application/pdf' });
+  const accepted = await api.uploadPaperPdf('proj', file, { titleHint: 'My Paper', key: 'upload-key' });
+  assert.equal(accepted.paper_id, 'p1');
+  const call = t.calls[0];
+  assert.equal(call.path, '/api/v1/projects/proj/papers');
+  assert.equal(call.init.method, 'POST');
+  assert.equal(call.headers.get('Idempotency-Key'), 'upload-key');
+  assert.equal(call.headers.get('Content-Type'), null, 'multipart boundary is set by the runtime, not the client');
+  const form = call.init.body;
+  assert.equal(form.get('title_hint'), 'My Paper');
+  assert.equal(form.get('source_processing_consent'), 'true');
+  assert.equal(form.get('file').name, 'paper.pdf');
+});
+
+test('createTextPaper posts JSON with consent and a generated key when none is given', async () => {
+  const t = capture(async () => envelope({ paper_id: 'p2', operation_id: null, status: 'uploaded' }, 202));
+  const api = createPapersApi('demo-user', t.fetcher);
+  await api.createTextPaper('proj', { text: '# Title\nbody', titleHint: 'T' });
+  const call = t.calls[0];
+  assert.equal(call.path, '/api/v1/projects/proj/papers/text');
+  assert.ok(call.headers.get('Idempotency-Key'), 'a key is generated per call');
+  assert.deepEqual(JSON.parse(call.init.body), { text: '# Title\nbody', title_hint: 'T', source_processing_consent: true });
 });
 
 test('validatePaperText refuses unknown status/backend and wrong types', () => {
@@ -184,7 +201,7 @@ test('validatePaperText refuses unknown status/backend and wrong types', () => {
     null,
     [],
   ];
-  for (const value of bad) assert.throws(() => validatePaperText(value), GuidedApiError, JSON.stringify(value));
+  for (const value of bad) assert.throws(() => validatePaperText(value), ApiError, JSON.stringify(value));
 });
 
 test('validateDocParseStatus refuses unknown mode/offline.state and wrong types', () => {
@@ -203,5 +220,31 @@ test('validateDocParseStatus refuses unknown mode/offline.state and wrong types'
     statusDto({ offline: null }),
     statusDto({ platform: 3 }),
   ];
-  for (const value of bad) assert.throws(() => validateDocParseStatus(value), GuidedApiError, JSON.stringify(value));
+  for (const value of bad) assert.throws(() => validateDocParseStatus(value), ApiError, JSON.stringify(value));
+});
+
+test('paper and docparse writes carry X-CSRF-Token when a session token exists; reads do not need it', async () => {
+  const accepted = { paper_id: 'p1', operation_id: 'op', status: 'uploaded' };
+  const { calls, fetcher } = capture(path => {
+    if (path.endsWith('/parse')) return envelope({ paper_id: 'p1', job_id: 'j', status: 'parsing' }, 202);
+    if (path.includes('/docparse/')) return envelope(statusDto());
+    if (path === '/api/v1/projects') return envelope({ id: 'pr', name: 'n', role: 'owner', version: 1, created_at: 't' }, 201);
+    if (path === '/api/v1/papers/p1/text') return envelope(parsingText);
+    return envelope(accepted, 202);
+  });
+  const api = createPapersApi('owner', fetcher, () => 'csrf-1');
+  await api.createProject('n');
+  await api.uploadPaperPdf('pr', new File([new Uint8Array([37, 80, 68, 70, 45])], 'p.pdf', { type: 'application/pdf' }));
+  await api.createTextPaper('pr', { text: 'body' });
+  await api.parsePaper('p1', 'k1');
+  await api.setDocParseMode('online');
+  await api.startOfflineInstall();
+  for (const call of calls) assert.equal(call.headers.get('X-CSRF-Token'), 'csrf-1', `${call.init.method} ${call.path}`);
+  await api.getPaperText('p1');
+  assert.equal(calls.at(-1).init.method, 'GET');
+
+  // No token (local single-user runtime): the header is simply absent.
+  const bare = capture(() => envelope(accepted, 202));
+  await createPapersApi('owner', bare.fetcher, () => undefined).createTextPaper('pr', { text: 'body' });
+  assert.equal(bare.calls[0].headers.has('X-CSRF-Token'), false);
 });
