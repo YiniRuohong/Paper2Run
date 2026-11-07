@@ -452,8 +452,11 @@ def main(op, args):
     if op in ('read', 'write', 'collect'):
         return file_op(op, args)
     if op == 'resources':
-        total = 0
+        total, partial, stop_at = 0, False, time.monotonic() + 60
         for root, dirs, files in os.walk('/work', followlinks=False):
+            if time.monotonic() > stop_at:  # an observation, not enforcement: report what was counted
+                partial = True
+                break
             dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
             for name in files:
                 try:
@@ -461,7 +464,7 @@ def main(op, args):
                 except FileNotFoundError:
                     pass
         gpu = subprocess.run(['sh', '-c', 'command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=index,name --format=csv,noheader'], capture_output=True, text=True)
-        return {'storage_bytes_used': total, 'storage_enforcement': 'observed', 'gpu_observation': gpu.stdout.strip(), 'gpu_exit_code': gpu.returncode}
+        return {'storage_bytes_used': total, 'storage_count_partial': partial, 'storage_enforcement': 'observed', 'gpu_observation': gpu.stdout.strip(), 'gpu_exit_code': gpu.returncode}
     job = args['job_id']
     directory = job_path(job)
     if op == 'start':

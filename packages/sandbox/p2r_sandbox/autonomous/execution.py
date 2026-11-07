@@ -19,6 +19,8 @@ import uuid
 from pathlib import Path, PureWindowsPath
 
 MAX_OUTPUT = 1_000_000
+# Sizing /work stats every file; over Docker Desktop's Windows (9p) mount that exceeded 45 s on resume.
+RESOURCES_TIMEOUT = 180
 # Docker Desktop on Windows runs Linux containers in WSL2; only the host side
 # differs. Windows support is unit-tested, not verified on a real machine.
 CREATE_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
@@ -181,7 +183,7 @@ class ExecutionTarget:
             report['container_running'] = obj['State']['Running']
             if obj['State']['Running']:
                 self._check_address_identity(obj)
-                report.update(self._call('resources', {}))
+                report.update(self._call('resources', {}, timeout=RESOURCES_TIMEOUT))
                 verified = self._network()
                 report.update(network=verified, network_verified=self._network_ok(verified))
                 report['ready'] = report['network_verified']
@@ -298,7 +300,7 @@ class ExecutionTarget:
                 'ipv6_policy_verified': ':OUTPUT DROP' in ipv6_rules and '-A OUTPUT' not in ipv6_rules}
 
     def _network(self):
-        result = self._call('network_probe', {'host_addresses': self._addresses()}, agent=True)
+        result = self._call('network_probe', {'host_addresses': self._addresses()}, agent=True, timeout=90)
         result.update(self._policy_status())
         result['private_denied'] = result['private_denied'] and result['policy_verified'] and result['ipv6_policy_verified']
         return result
@@ -386,7 +388,7 @@ class ExecutionTarget:
         self._prepared = True
         return {'ready': True, 'container': self.container, 'workspace': self.workspace,
                 'network': network, 'storage_enforcement': 'observed',
-                'storage_bytes_requested': self.config.get('storage_bytes'), **self._call('resources', {})}
+                'storage_bytes_requested': self.config.get('storage_bytes'), **self._call('resources', {}, timeout=RESOURCES_TIMEOUT)}
 
     def _ready(self):
         # Docker restarts reset network rules without changing this Python object.

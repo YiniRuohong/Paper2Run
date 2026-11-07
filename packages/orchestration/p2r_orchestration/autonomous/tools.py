@@ -17,7 +17,7 @@ LIMIT = {"type": "integer", "minimum": 1, "maximum": 16000}
 TOOLS = [
     tool("read", "Read a workspace file; paths never refer to the host.", {"path": PATH, "offset": OFFSET, "limit": LIMIT}, ["path"]),
     tool("write", "Write a workspace file.", {"path": PATH, "content": {"type": "string", "maxLength": 1000000}}, ["path", "content"]),
-    tool("execute", "Run a short shell command inside the isolated target. Network/code search uses this shell.", {"command": S, "timeout_seconds": TIME}, ["command"]),
+    tool("execute", "Run a short shell command inside the isolated target. Network/code search uses this shell. It answers within 240 s; run longer work with background and poll status/logs, and never sleep inside execute to wait for a job.", {"command": S, "timeout_seconds": TIME}, ["command"]),
     tool("background", "Start a bounded background job. Reuse launch_id to reconcile lost responses, never resubmit with a fresh ID.", {"command": S, "launch_id": S, "timeout_seconds": TIME}, ["command", "launch_id", "timeout_seconds"]),
     tool("status", "Inspect an existing job.", {"job_id": S}, ["job_id"]),
     tool("logs", "Read an existing job's bounded log cursor.", {"job_id": S, "offset": OFFSET, "limit": LIMIT}, ["job_id"]),
