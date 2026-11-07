@@ -13,6 +13,18 @@ export function applyShell(): void {
   if (desktop) document.documentElement.dataset.shell = desktop.platform;
 }
 
+// While a full-window reader is open: on Windows the shell goes full screen so the caption
+// buttons cannot cover the reader's own toolbar. <html data-report-mode> drops the space the
+// toolbar otherwise keeps free for them. Returns the undo.
+export function enterReportMode(): () => void {
+  const desktop = getDesktop();
+  if (!desktop?.setReportMode || desktop.platform !== 'win32') return () => {};
+  const root = document.documentElement;
+  root.dataset.reportMode = 'full';
+  desktop.setReportMode(true);
+  return () => { delete root.dataset.reportMode; desktop.setReportMode?.(false); };
+}
+
 // host:port of the local backend, for display only.
 export function backendHost(desktopUrl: string | null | undefined, locationHost: string): string {
   if (desktopUrl) {

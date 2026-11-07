@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import threading
 import time
+import uuid
 
 from p2r_contracts.autonomous import DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS
 from p2r_persistence.models import utcnow
@@ -15,6 +17,68 @@ from .evidence import ensure_not_under_review
 from .security import fail
 from p2r_orchestration.errors import ServiceError
 from .tools import TOOLS, SYSTEM_PROMPT
+
+# The bridge fails a tool call after 300 s without a response; execute answers before that and
+# leaves a longer job running (the agent polls it with status/logs).
+EXECUTE_WAIT_SECONDS = 240
+# Faults that pass on their own (rate limits, a slow Docker host, a lost tool response) resume
+# without a person: the demo must run unattended. Bounded, with backoff.
+TRANSIENT_CODES = frozenset({"model_error", "transport_timeout", "transport_error", "transport_unavailable",
+                             "protocol_error", "tool_timeout", "recovery_required"})
+_PERMANENT_MARKERS = ("401", "403", "unauthorized", "forbidden", "invalid api key", "invalid_api_key",
+                      "authentication", "model budget exhausted")
+AUTO_RESUME_LIMIT = 20
+AUTO_RESUME_DELAYS = (15, 30, 60, 120)
+AUTO_RESUME_MESSAGE = ("The previous run was interrupted by a transient fault ({code}) and resumed automatically. "
+                       "Reconcile existing jobs first. For long work use background and poll status/logs; "
+                       "never sleep longer than 120 seconds inside one execute call.")
+
+
+def transient(error) -> bool:
+    if not isinstance(error, dict) or error.get("code") not in TRANSIENT_CODES:
+        return False
+    text = str(error.get("message", "")).lower()
+    return not any(marker in text for marker in _PERMANENT_MARKERS)
+
+
+def schedule_auto_resume(service, db, row):
+    """After a transient pause, record a resume ticket and return its delay; None when not applicable."""
+    harness = row.harness_json or {}
+    count = harness.get("auto_resumes", 0)
+    if row.state != "paused" or service.closing or not transient(row.error_json) or count >= AUTO_RESUME_LIMIT:
+        return None
+    ticket = uuid.uuid4().hex
+    delay = AUTO_RESUME_DELAYS[min(count, len(AUTO_RESUME_DELAYS) - 1)]
+    row.harness_json = {**harness, "auto_resumes": count + 1, "auto_resume": {"ticket": ticket, "delay": delay}}
+    service.event(db, row, "auto_resume_scheduled", {"attempt": count + 1, "delay_seconds": delay,
+                                                     "code": row.error_json["code"]})
+    return ticket, delay
+
+
+def _auto_resume(service, task_id, ticket, delay):
+    deadline = time.monotonic() + delay
+    while time.monotonic() < deadline:
+        if service.closing:
+            return
+        time.sleep(min(0.5, max(0.01, deadline - time.monotonic())))
+    for _ in range(200):  # the exiting worker thread may still be alive for a moment
+        try:
+            with service.lock, service.sessions() as db:
+                row = service.row(db, task_id)
+                pending = (row.harness_json or {}).get("auto_resume") or {}
+                if service.closing or row.state != "paused" or pending.get("ticket") != ticket:
+                    return  # stopped, paused by a person, or already resumed
+                code = (row.error_json or {}).get("code")
+                service.resume(db, task_id)
+                row.harness_json = {k: v for k, v in row.harness_json.items() if k != "auto_resume"}
+                service.event(db, row, "auto_resumed", {"code": code, "attempt": row.harness_json.get("auto_resumes")})
+                db.commit()
+            service.launch(task_id, AUTO_RESUME_MESSAGE.format(code=code))
+            return
+        except ServiceError as exc:
+            if exc.code != "TASK_BUSY":
+                return
+            time.sleep(0.1)
 
 
 def _arguments(name, args):
@@ -98,12 +162,18 @@ def dispatch(service, target, task_id, name, args, request_id):
             service.finish_stop(task_id)
             result = target.status(result["job_id"])
         if name == "execute":
+            answer_by = time.monotonic() + EXECUTE_WAIT_SECONDS
             while result.get("state") in ("starting", "pending", "running", "submitted"):
                 with service.lock, service.sessions() as db:
                     if service.row(db, task_id).state != "running":
                         return {**result, "decision_paused": True}
                 if deadline is not None and time.monotonic() >= deadline:
                     fail("BUDGET_EXHAUSTED", "cumulative task wall-time budget exhausted", 409)
+                if time.monotonic() >= answer_by:
+                    return {**result, "still_running": True,
+                            "note": f"execute returned after {EXECUTE_WAIT_SECONDS:g} s; the job keeps running. "
+                                    "Poll it with status and logs (job_id above) instead of sleeping.",
+                            "logs": target.logs(result["job_id"], offset=0, limit=16000)}
                 time.sleep(.1)
                 result = target.status(result["job_id"])
             result = {**result, "logs": target.logs(result["job_id"], offset=0, limit=16000)}
@@ -508,4 +578,8 @@ def run_worker(service, task_id, bridge, message):
                 row.error_json = {"code": "recovery_required", "message": "SDK stopped; explicit resume required."}
             service.event(db, row, "worker_exited", {"state": row.state,
                 "background_jobs_retained": row.state != "stopped"})
+            auto_resume = schedule_auto_resume(service, db, row)
             db.commit()
+        if auto_resume:
+            threading.Thread(target=_auto_resume, args=(service, task_id, *auto_resume), daemon=True,
+                             name=f"auto-resume-{task_id[:8]}").start()

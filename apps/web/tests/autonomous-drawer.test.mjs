@@ -102,9 +102,24 @@ test('every rail sub-step the stages builder makes resolves to a detail', () => 
   for (const id of ids) assert.ok(itemDetail(events, id), id);
 });
 
-test('figures show each image once, preferring the frozen evidence copy', async () => {
+const fig = (path, source, sha) => ({ path, source, bytes: 10, media_type: 'image/png', modified_at: null, sha256: sha, kind: null, protocol_sha256: null });
+
+test('once the agent froze figures, only those key figures are shown', async () => {
   const { pickFigures } = await import('../src/features/autonomous/figures.ts');
-  const f = (path, source, sha) => ({ path, source, bytes: 10, media_type: 'image/png', modified_at: null, sha256: sha, kind: null, protocol_sha256: null });
-  const picked = pickFigures([f('outputs/a.png', 'workspace', null), f('artifacts/x/r0/a.png', 'artifact', 's1'), f('outputs/b.png', 'workspace', null)]);
-  assert.deepEqual(picked.map(p => p.path), ['artifacts/x/r0/a.png', 'outputs/b.png']);
+  const picked = pickFigures([fig('outputs/a.png', 'workspace', null), fig('artifacts/x/r0/a.png', 'artifact', 's1'), fig('outputs/b.png', 'workspace', null)]);
+  assert.deepEqual(picked.map(p => p.path), ['artifacts/x/r0/a.png']);
+});
+
+test('before any figure is frozen, dependency and hidden folders never show images', async () => {
+  const { pickFigures } = await import('../src/features/autonomous/figures.ts');
+  const picked = pickFigures([
+    fig('vendor/fastText/website/static/img/logo.png', 'workspace', null),
+    fig('.venv/lib/python3.12/site-packages/matplotlib/mpl-data/images/home.png', 'workspace', null),
+    fig('node_modules/pkg/icon.svg', 'workspace', null),
+    fig('.cache/thumb.png', 'workspace', null),
+    fig('third_party/x/doc.png', 'workspace', null),
+    fig('results/accuracy.png', 'workspace', null),
+    fig('figure_1.png', 'workspace', null),
+  ]);
+  assert.deepEqual(picked.map(p => p.path), ['figure_1.png', 'results/accuracy.png']);
 });

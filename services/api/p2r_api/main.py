@@ -70,6 +70,30 @@ def _install_autonomous_lifespan(app: FastAPI) -> None:
     app.router.lifespan_context = autonomous_lifespan
 
 
+def _install_image_autoload(app: FastAPI) -> None:
+    """Desktop installer: import the bundled experiment image into Docker when the app starts.
+
+    Only active when the shell sets P2R_IMAGE_ARCHIVE. The import runs in a background thread,
+    so startup never waits for Docker.
+    """
+    import os
+    from contextlib import asynccontextmanager
+
+    archive = os.environ.get('P2R_IMAGE_ARCHIVE')
+    if not archive:
+        return
+    previous = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def image_lifespan(fastapi_app):
+        async with previous(fastapi_app):
+            from p2r_sandbox.autonomous.envcheck import IMAGE_LOADER
+            IMAGE_LOADER.start(archive)
+            yield
+
+    app.router.lifespan_context = image_lifespan
+
+
 def create_app(*, db_url: str | None = None, session_factory=None, artifact_store=None, allowed_origin: str | tuple[str, ...] | None = None, secure_cookies: bool = True, development_auth: bool = False, docparse_service=None, local_actor: str | None = None) -> FastAPI:
     """API app with the kept routers (auth, projects, papers, docparse, autonomous).
 
@@ -149,6 +173,7 @@ def create_local_app(*, db_url=None, session_factory=None, artifact_store=None, 
     )
     _ensure_local_user(app.state.runtime['session_factory'])
     _install_docparse_worker_lifespan(app)
+    _install_image_autoload(app)
     _mount_web_dist(app)
     return app
 

@@ -9,6 +9,7 @@ import { useTheme } from '../../ui/useTheme';
 import { THEME_PREF_LABELS, type ThemePref } from '../../theme';
 import DocParseSettings from '../docparse/DocParseSettings';
 import RemoteSettings from './RemoteSettings';
+import EnvCheckSettings from './EnvCheckSettings';
 import { Group, Row } from './SettingsParts';
 import './settings.css';
 
@@ -39,6 +40,8 @@ export default function Settings({ health, host, api }: { health: Health; host: 
     <DocParseSettings api={api} />
 
     <RemoteSettings />
+
+    <EnvCheckSettings />
 
     {desktop && <Group title="桌面应用">
       <Row label="版本"><span className="ui-mono">{desktop.appVersion}</span><span className="settings-muted">{PLATFORM[desktop.platform] ?? desktop.platform}</span></Row>

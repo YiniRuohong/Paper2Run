@@ -84,7 +84,7 @@ def probe_target(config: dict, factory, state_dir, *, platform: str | None = Non
             missing.append("无法读取 Docker 的 OSType，不能确认使用 Linux 容器")
         if not present:
             detail = detail or f"缺少实验镜像 {image}"
-            missing.append(f"缺少实验镜像 {image}：请在执行目标上运行 bash scripts/autonomous/build-image.sh")
+            missing.append(f"缺少实验镜像 {image}：请在执行目标上运行 bash scripts/autonomous/build-image.sh（桌面安装版启动时会自动导入内置镜像，也可在环境检测里重试导入）")
         if docker["os_type"] == "linux":
             gpus = target.observe_gpus(timeout=GPU_TIMEOUT_SECONDS)
     # Only a GPU probe that actually ran can say the requested GPUs are absent.

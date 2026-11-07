@@ -62,6 +62,7 @@
         { "from": ".runtime/win32-${arch}/harness", "to": "harness", "filter": ["*.mjs", "package*.json"] },
         { "from": ".runtime/win32-${arch}/harness/node_modules", "to": "harness/node_modules", "filter": ["**/*"] },
         { "from": ".runtime/win32-${arch}/research-skills", "to": "research-skills", "filter": ["**/*"] },
+        { "from": ".runtime/win32-${arch}/image", "to": "image", "filter": ["*.tar.gz"] },
         { "from": ".runtime/win32-${arch}/harness-runtime.json", "to": "harness-runtime.json" }
       ]
     },

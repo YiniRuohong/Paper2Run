@@ -7,6 +7,12 @@ from uuid import uuid4
 from .security import fail
 
 
+def drop_auto_resume(row):
+    """Invalidate a scheduled automatic resume (worker.schedule_auto_resume); the attempt count stays."""
+    if row.harness_json and "auto_resume" in row.harness_json:
+        row.harness_json = {k: v for k, v in row.harness_json.items() if k != "auto_resume"}
+
+
 class ControlMixin:
     @staticmethod
     def cancel_requested(row):
@@ -69,6 +75,7 @@ class ControlMixin:
         self.remaining(row)
         self.resolve_models(row)
         row.state, row.error_json = "queued", None
+        drop_auto_resume(row)
         self.event(db, row, "task_resumed", {"jobs_to_reconcile": row.jobs_json})
         return row
 
@@ -132,6 +139,7 @@ class ControlMixin:
             if row.state not in ("queued", "running", "paused"):
                 fail("INVALID_STATE", "task cannot be paused", 409)
             row.state = "paused"
+            drop_auto_resume(row)  # a person's pause wins over a scheduled automatic resume
             self.event(db, row, "task_paused", {"background_jobs_retained": True})
             if active:
                 worker["bridge"].abort()

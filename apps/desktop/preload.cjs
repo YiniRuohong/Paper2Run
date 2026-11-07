@@ -16,5 +16,6 @@ if (info) {
     backendUrl: info.backendUrl,
     openPath: (kind) => ipcRenderer.invoke('p2r:open-path', kind),
     setTheme: (theme) => ipcRenderer.send('p2r:set-theme', theme),
+    setReportMode: (on) => ipcRenderer.send('p2r:report-mode', on === true),
   });
 }

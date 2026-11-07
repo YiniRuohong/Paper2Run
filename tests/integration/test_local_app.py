@@ -118,6 +118,7 @@ KEPT_ROUTES = {
     # Tablet remote: proxy to the p2r-tunnel sidecar's control API.
     ("GET", "/api/v1/remote/status"), ("GET", "/api/v1/remote/pairing"), ("POST", "/api/v1/remote/pairing"),
     ("DELETE", "/api/v1/remote/devices/{device_id}"),
+    ("GET", "/api/v1/env/check"), ("POST", "/api/v1/env/image/load"),
 }
 
 
@@ -192,3 +193,58 @@ def test_data_dir_env_is_honoured(tmp_path, monkeypatch):
     monkeypatch.setenv("P2R_DEMO_DIR", str(tmp_path / "custom"))
     create_local_app(docparse_service=_docparse(tmp_path))
     assert (tmp_path / "custom" / "demo.sqlite3").is_file()
+
+
+class _FakeLoader:
+    def __init__(self):
+        self.started = []
+
+    def start(self, archive, wait=False):
+        self.started.append(archive)
+        return {"state": "loading", "error": None}
+
+    def state(self):
+        return {"state": "idle", "error": None}
+
+
+def test_env_check_lists_the_rows_and_fails_without_docker(app, monkeypatch):
+    from p2r_sandbox.autonomous import envcheck
+    monkeypatch.setattr(envcheck, "run", lambda argv, timeout=15: None)
+    monkeypatch.setattr(envcheck, "_reach", lambda url: True)
+    monkeypatch.delenv("P2R_IMAGE_ARCHIVE", raising=False)
+    with TestClient(app) as client:
+        response = client.get("/api/v1/env/check", headers=LOCAL)
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    statuses = {row["key"]: row["status"] for row in data["checks"]}
+    assert {"docker", "image", "disk", "network"} <= set(statuses)
+    assert statuses["docker"] == "bad" and data["ok"] is False
+
+
+def test_env_image_load_starts_the_import_and_refuses_cross_site(app, monkeypatch):
+    from p2r_api.routes import envcheck as route
+    fake = _FakeLoader()
+    monkeypatch.setattr(route, "IMAGE_LOADER", fake)
+    monkeypatch.setenv("P2R_IMAGE_ARCHIVE", "C:/x/image.tar.gz")
+    with TestClient(app) as client:
+        ok = client.post("/api/v1/env/image/load", headers=LOCAL)
+        blocked = client.post("/api/v1/env/image/load", headers={**LOCAL, "Sec-Fetch-Site": "cross-site"})
+    assert ok.status_code == 202 and ok.json()["data"]["state"] == "loading"
+    assert fake.started == ["C:/x/image.tar.gz"]
+    assert blocked.status_code == 403
+
+
+def test_bundled_image_is_imported_at_startup_only_when_the_shell_provides_it(tmp_path, monkeypatch):
+    from p2r_sandbox.autonomous import envcheck
+    fake = _FakeLoader()
+    monkeypatch.setattr(envcheck, "IMAGE_LOADER", fake)
+    monkeypatch.delenv("P2R_IMAGE_ARCHIVE", raising=False)
+    with TestClient(_local_app(tmp_path)):
+        pass
+    assert fake.started == []
+    monkeypatch.setenv("P2R_IMAGE_ARCHIVE", "C:/x/image.tar.gz")
+    second = tmp_path / "second"
+    second.mkdir()
+    with TestClient(_local_app(second)):
+        pass
+    assert fake.started == ["C:/x/image.tar.gz"]

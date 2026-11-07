@@ -128,6 +128,29 @@ def test_windows_prepare_argv(tmp_path, monkeypatch):
     assert all(kwargs.get("creationflags") == execution.CREATE_NO_WINDOW for _, kwargs in recorder.calls)
 
 
+def test_host_commands_never_inherit_stdin(tmp_path, monkeypatch):
+    # The desktop backend's stdin is the Electron watchdog pipe, and a thread is blocked
+    # reading it. On Windows a child that inherits that synchronous pipe hangs during
+    # interpreter start-up (seen on a real machine: prepare's workspace script timed out).
+    recorder = Recorder(stop_at=" start ")
+    monkeypatch.setattr(subprocess, "run", recorder)
+    target = windows_target(tmp_path, monkeypatch)
+    with pytest.raises(RuntimeError, match="stop"):
+        target.prepare()
+    assert recorder.calls
+    assert all(kwargs.get("stdin") is subprocess.DEVNULL for _, kwargs in recorder.calls)
+
+
+def test_host_commands_with_input_keep_their_pipe(tmp_path, monkeypatch):
+    recorder = Recorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+    target = ExecutionTarget(config(tmp_path), tmp_path / "state")
+    target._host(["docker", "exec", "-i", "c", "cat"], input="payload")
+    _, kwargs = recorder.calls[-1]
+    assert kwargs["input"] == "payload"
+    assert "stdin" not in kwargs  # subprocess.run refuses input= together with stdin=
+
+
 def test_posix_prepare_keeps_strict_realpath_script(tmp_path, monkeypatch):
     recorder = Recorder(stop_at=" start ")
     monkeypatch.setattr(subprocess, "run", recorder)
