@@ -80,15 +80,18 @@ class TunnelService : Service() {
             Log.e("p2r", "no free port", e); return stopSelf()
         }
         store.port = port
-        _port.value = port
+        // Status first: the page loads on (Connected, new port), and a stale Connected from the
+        // previous process must never pair with a port nothing listens on yet.
         _status.value = TunnelStatus.Connecting
+        _port.value = port
         val proc = try { Tunnel.connect(this, desktop, port) } catch (e: Exception) {
             Log.e("p2r", "cannot start tunnel", e); scheduleRestart(); return
         }
         process = proc
         Thread({ ProcessLines.drain(proc.errorStream) { Log.i("p2r-tunnel", it) } }, "tunnel-stderr").start()
         Thread({
-            ProcessLines.drain(proc.inputStream) { line -> TunnelStatus.parse(line)?.let { _status.value = it } }
+            // Only the current process may report: a destroyed one can still flush a late line.
+            ProcessLines.drain(proc.inputStream) { line -> TunnelStatus.parse(line)?.let { if (proc === process) _status.value = it } }
             val exit = proc.waitFor()
             onExit(proc, exit)
         }, "tunnel-stdout").start()

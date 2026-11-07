@@ -14,6 +14,7 @@ import android.view.ViewGroup
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -190,21 +191,35 @@ class MainActivity : ComponentActivity() {
         var loadedPort by remember { mutableIntStateOf(0) }
         var confirmUnpair by remember { mutableStateOf(false) }
         var canGoBack by remember { mutableStateOf(false) }
+        // Main-frame load retries (LoadRetry): the tunnel port may not accept connections yet.
+        var retrying by remember { mutableStateOf(false) }
+        var loadAttempts by remember { mutableIntStateOf(0) }
+        var loadFailed by remember { mutableStateOf(false) }
 
         // The web UI is a hash-routed SPA served at "/" by the desktop backend.
-        // Reload only when the local tunnel port changes (tunnel restarted elsewhere).
+        // Load when the local tunnel port changes; reload once when the tunnel reconnects on the same
+        // port, because the page's reads failed while it was down and it does not retry them itself.
+        var wasConnected by remember { mutableStateOf(false) }
         LaunchedEffect(status, port, web) {
             val w = web ?: return@LaunchedEffect
-            if (status is TunnelStatus.Connected && port != 0 && port != loadedPort) {
+            val connected = status is TunnelStatus.Connected
+            if (connected && port != 0 && port != loadedPort) {
                 w.visibility = android.view.View.VISIBLE
+                loadFailed = false
+                loadAttempts = 0
                 w.loadUrl("http://127.0.0.1:$port/")
                 loadedPort = port
+            } else if (connected && !wasConnected && port != 0 && port == loadedPort) {
+                loadFailed = false
+                loadAttempts = 0
+                w.reload()
             }
+            wasConnected = connected
         }
         BackHandler(enabled = canGoBack) { web?.goBack() }
 
         Column(Modifier.fillMaxSize()) {
-            TopBar(status, onReload = { web?.reload() }, onUnpair = { confirmUnpair = true })
+            TopBar(status, onReload = { loadFailed = false; loadAttempts = 0; web?.reload() }, onUnpair = { confirmUnpair = true })
             Box(Modifier.weight(1f).fillMaxWidth().background(p.bg)) {
                 AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
                     WebView(ctx).apply {
@@ -226,6 +241,30 @@ class MainActivity : ComponentActivity() {
                             }
                             override fun onPageFinished(view: WebView, url: String?) {
                                 view.evaluateJavascript(bridgeJs, null)
+                                if (!loadFailed) {
+                                    loadAttempts = 0
+                                    retrying = false
+                                    view.visibility = android.view.View.VISIBLE
+                                }
+                            }
+                            // Just after pairing (or while the tunnel restarts) the local port may refuse
+                            // the first load: retry it with backoff instead of showing the error page.
+                            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                                if (!request.isForMainFrame) return
+                                val attempt = loadAttempts + 1
+                                val delay = LoadRetry.delayMs(error.errorCode, attempt)
+                                if (delay == null) {
+                                    // Give up: show the error page; the top bar's reload button still works.
+                                    retrying = false
+                                    view.visibility = android.view.View.VISIBLE
+                                    return
+                                }
+                                loadFailed = true
+                                loadAttempts = attempt
+                                retrying = true
+                                view.visibility = android.view.View.INVISIBLE
+                                val url = request.url.toString()
+                                view.postDelayed({ loadFailed = false; view.loadUrl(url) }, delay)
                             }
                             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                                 canGoBack = view.canGoBack()
@@ -250,7 +289,7 @@ class MainActivity : ComponentActivity() {
                         web = this
                     }
                 })
-                if (loadedPort == 0) Connecting(status)
+                if (loadedPort == 0 || retrying) Connecting(status)
             }
         }
 
