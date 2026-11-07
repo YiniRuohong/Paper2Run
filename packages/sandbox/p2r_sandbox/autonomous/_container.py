@@ -378,13 +378,14 @@ def setup(args):
         rule('-m', 'owner', '--uid-owner', '10001', '-j', 'ACCEPT')
         rule('-m', 'owner', '--uid-owner', '20000-60000', '-j', 'ACCEPT')
     # IPv6 stays entirely fail-closed, including IPv4-mapped addresses.
+    # Root holds CAP_CHOWN but not CAP_FOWNER: after the chown only the experiment user may
+    # change modes under /work (Docker Desktop's Windows bind mount enforces this).
     os.chown('/work', 10001, 10001)
-    os.chmod('/work', 0o2775)
-    subprocess.run(['setpriv', '--reuid=10001', '--regid=10001', '--clear-groups',
-                    '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
-                    '--no-new-privs', 'python3', '-I', '-m', 'venv', '/work/.venv'],
-                   check=True, capture_output=True)
-    subprocess.run(['chmod', '-R', 'g+rwX', '/work/.venv'], check=True, capture_output=True)
+    agent = ['setpriv', '--reuid=10001', '--regid=10001', '--clear-groups',
+             '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all', '--no-new-privs']
+    subprocess.run([*agent, 'chmod', '2775', '/work'], check=True, capture_output=True)
+    subprocess.run([*agent, 'python3', '-I', '-m', 'venv', '/work/.venv'], check=True, capture_output=True)
+    subprocess.run([*agent, 'chmod', '-R', 'g+rwX', '/work/.venv'], check=True, capture_output=True)
     return {'setup': True, 'ipv6': 'denied'}
 
 

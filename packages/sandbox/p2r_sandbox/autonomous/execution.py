@@ -372,7 +372,8 @@ class ExecutionTarget:
         record = self.state_dir / (self.container + '.json')
         record.write_text(json.dumps({'host_addresses': host_ips}))
         try:
-            self._call('setup', {'host_addresses': host_ips, 'public_internet': self.public}, timeout=90)
+            # Creating /work/.venv took 36 s on a Windows (9p) bind mount; keep a wide margin.
+            self._call('setup', {'host_addresses': host_ips, 'public_internet': self.public}, timeout=300)
             network = self._network()
             record.write_text(json.dumps({'host_addresses': host_ips, 'network': network, 'identity': {
                 'id': obj['Id'], 'started_at': obj['State']['StartedAt'], 'policy': self._policy_fingerprint()}}))
