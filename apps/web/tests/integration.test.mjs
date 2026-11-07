@@ -12,7 +12,7 @@ test('retired guided/lab/mock surfaces are gone from the source tree', async () 
   const features = (await readdir(new URL('../src/features', import.meta.url))).sort();
   assert.deepEqual(features, ['autonomous', 'docparse', 'flow', 'overview', 'reader', 'settings']);
   const clients = (await readdir(new URL('../src/api-client', import.meta.url))).sort();
-  assert.deepEqual(clients, ['autonomous.ts', 'client.ts', 'papers.ts']);
+  assert.deepEqual(clients, ['autonomous.ts', 'client.ts', 'envcheck.ts', 'papers.ts']);
   const root = (await readdir(new URL('../src', import.meta.url))).sort();
   for (const retired of ['api.ts', 'app.tsx', 'routing.ts', 'types.ts', 'styles.css', 'MockWorkspace.tsx', 'components', 'formatters']) {
     assert.ok(!root.includes(retired), `${retired} must stay deleted`);
