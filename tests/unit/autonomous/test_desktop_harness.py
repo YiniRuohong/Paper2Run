@@ -346,3 +346,21 @@ def test_electron_runtime_paths_and_environment(platform, arch):
     assert data["env"]["P2R_SKILLS_DIR"] == "/bundle/research-skills"
     assert not {"ELECTRON_RUN_AS_NODE", "NODE_OPTIONS", "PYTHONPATH"} & data["env"].keys()
     assert data["env"]["KEEP"] == "yes"
+
+
+def test_desktop_build_stages_tunnel_and_image(monkeypatch, tmp_path):
+    sys.path.insert(0, str(ROOT / "scripts/desktop"))
+    desktop = load_script("_autonomous_desktop_stage", "scripts/desktop/build_desktop.py")
+    monkeypatch.setattr(desktop.build_runtime, "RUNTIME_DIR", tmp_path / "runtime")
+    tunnel, image = tmp_path / "p2r-tunnel.exe", tmp_path / "img.tar.gz"
+    tunnel.write_bytes(b"MZ")
+    image.write_bytes(b"gz")
+    desktop.stage_extras("win32-x64", tunnel, image)
+    staged = tmp_path / "runtime" / "win32-x64"
+    assert (staged / "tunnel" / "p2r-tunnel.exe").read_bytes() == b"MZ"
+    assert (staged / "tunnel" / "remote.json").is_file() and (staged / "tunnel" / "relay-ca.pem").is_file()
+    assert (staged / "image" / "paper2run-experiment-1.tar.gz").read_bytes() == b"gz"
+    desktop.stage_extras("darwin-arm64", None, None)  # both optional
+    assert not (tmp_path / "runtime" / "darwin-arm64").exists()
+    with pytest.raises(SystemExit, match="does not exist"):
+        desktop.stage_extras("win32-x64", tmp_path / "missing.exe", None)

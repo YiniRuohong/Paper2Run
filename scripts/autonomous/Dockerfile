@@ -5,7 +5,12 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then sed -i 's|deb.debian.
     bash ca-certificates coreutils curl git iproute2 iptables iputils-ping procps tini util-linux \
     build-essential pkg-config && rm -rf /var/lib/apt/lists/* \
     && python -m venv /opt/p2r-venv
-# Experiments install packages themselves: point pip at a mirror that is reachable from mainland China.
+# Experiments install packages themselves: point pip / uv / Hugging Face at mirrors reachable from mainland China.
+# The controller passes these variables through to every job (_container.MIRROR_ENV).
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com \
+    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/ \
+    HF_ENDPOINT=https://hf-mirror.com
 RUN printf '[global]\nindex-url = https://mirrors.aliyun.com/pypi/simple/\ntrusted-host = mirrors.aliyun.com\n' > /etc/pip.conf
 RUN useradd --create-home --uid 10001 --shell /bin/bash agent
 WORKDIR /work

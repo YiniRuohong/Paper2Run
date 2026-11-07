@@ -292,7 +292,7 @@ function startBackend() {
         backendUrl = `http://127.0.0.1:${port}`;
         writeLog(`[desktop] backend ready at ${backendUrl}\n`);
         onBackendReady();
-        remote.startRemote(remote.remotePaths({ isPackaged: app.isPackaged, repo: path.resolve(__dirname, '..', '..'), home: app.getPath('home'), isWin: IS_WIN }), port, writeLog);
+        remote.startRemote(remote.remotePaths({ isPackaged: app.isPackaged, repo: path.resolve(__dirname, '..', '..'), resources: process.resourcesPath, home: app.getPath('home'), isWin: IS_WIN }), port, writeLog);
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, HEALTH_POLL_MS));

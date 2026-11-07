@@ -21,6 +21,8 @@ from pathlib import Path
 
 CONTROL = Path('/var/lib/p2r-control')
 LIMIT = 1_000_000
+# Package and model mirrors declared by the image (Dockerfile ENV); jobs get them, nothing else from our environment.
+MIRROR_ENV = ('PIP_INDEX_URL', 'PIP_TRUSTED_HOST', 'UV_DEFAULT_INDEX', 'HF_ENDPOINT')
 FILE_LIMIT = 64 * 1024 * 1024
 
 
@@ -206,6 +208,7 @@ def run_worker(job, uid, timeout_seconds):
     env = {'HOME': '/home/agent', 'USER': 'agent', 'LANG': 'C.UTF-8',
            'PATH': '/work/.venv/bin:/usr/local/bin:/usr/bin:/bin',
            'VIRTUAL_ENV': '/work/.venv', 'PIP_REQUIRE_VIRTUALENV': 'true'}
+    env.update({name: os.environ[name] for name in MIRROR_ENV if os.environ.get(name)})
     env.update(USER=f'job-{uid}', LOGNAME=f'job-{uid}',
                HOME=f'/tmp/p2r-job-{uid}', P2R_JOB_UID=str(uid))
     Path(env['HOME']).mkdir(mode=0o700, exist_ok=True)

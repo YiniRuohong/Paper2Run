@@ -71,3 +71,38 @@ def test_prepare_allows_a_slow_workspace_mount(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="stop"):
         target.prepare()
     assert seen["setup"] >= 300
+
+
+class _Stop(Exception):
+    pass
+
+
+def test_jobs_get_the_image_mirror_variables_and_nothing_else(tmp_path, monkeypatch):
+    import json
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "spec.json").write_text(json.dumps({"command": "pip install six", "timeout_seconds": 5}))
+    monkeypatch.setattr(container, "job_path", lambda job: job_dir)
+    monkeypatch.setattr(container, "boot", lambda: "boot")
+    monkeypatch.setattr(container, "identity", lambda pid: "1")
+    monkeypatch.setattr(container.os, "chown", lambda *a: None)
+    import ctypes
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **k: type("C", (), {"prctl": staticmethod(lambda *x: 0)})())
+    for name, value in {"PIP_INDEX_URL": "https://mirrors.aliyun.com/pypi/simple/", "HF_ENDPOINT": "https://hf-mirror.com",
+                        "UV_DEFAULT_INDEX": "", "AWS_SECRET_ACCESS_KEY": "must-not-leak"}.items():
+        monkeypatch.setenv(name, value)
+    seen = {}
+
+    def popen(argv, **kwargs):
+        if "guardian" in argv:
+            return None
+        seen.update(kwargs["env"])
+        raise _Stop
+
+    monkeypatch.setattr(container.subprocess, "Popen", popen)
+    with pytest.raises(_Stop):
+        container.run_worker("job", 20007, 5)
+    assert seen["PIP_INDEX_URL"] == "https://mirrors.aliyun.com/pypi/simple/"
+    assert seen["HF_ENDPOINT"] == "https://hf-mirror.com"
+    assert "UV_DEFAULT_INDEX" not in seen  # empty values are not passed
+    assert "AWS_SECRET_ACCESS_KEY" not in seen and seen["P2R_JOB_UID"] == "20007"

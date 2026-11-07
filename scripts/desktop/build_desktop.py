@@ -55,12 +55,46 @@ def validate_packaged(target: str) -> None:
     print("[desktop] packaged Node, SDK, bridge, skills and Python resources: PASS", flush=True)
 
 
+TUNNEL_FILES = ("remote.json", "relay-ca.pem")
+IMAGE_NAME = "paper2run-experiment-1.tar.gz"
+
+
+def stage_extras(target: str, tunnel: Path | None, image: Path | None) -> None:
+    """Put the optional tablet tunnel binary and experiment-image archive where package.json expects them.
+
+    Runs after the runtime build, which recreates ``.runtime/<target>``. ``tunnel`` is a p2r-tunnel
+    binary built for ``target`` (Windows: cargo --target x86_64-pc-windows-gnu); the relay config
+    comes from apps/tunnel/deploy. ``image`` is ``docker save | gzip`` of paper2run-experiment:1 for
+    the target's architecture. Either may be omitted: the app then runs without that feature.
+    """
+    staged = build_runtime.RUNTIME_DIR / target
+    if tunnel is not None:
+        if not tunnel.is_file():
+            raise SystemExit(f"--tunnel {tunnel} does not exist")
+        out = staged / "tunnel"
+        out.mkdir(parents=True, exist_ok=True)
+        name = "p2r-tunnel.exe" if target.startswith("win32") else "p2r-tunnel"
+        shutil.copy2(tunnel, out / name)
+        for file in TUNNEL_FILES:
+            shutil.copy2(ROOT / "apps" / "tunnel" / "deploy" / file, out / file)
+        print(f"[desktop] staged tablet tunnel {tunnel} -> {out}", flush=True)
+    if image is not None:
+        if not image.is_file():
+            raise SystemExit(f"--image {image} does not exist")
+        out = staged / "image"
+        out.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(image, out / IMAGE_NAME)
+        print(f"[desktop] staged experiment image {image} -> {out / IMAGE_NAME}", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("--target", choices=sorted(BUILDER_FLAGS), default=None, help="default: this host")
     parser.add_argument("--skip-web", action="store_true", help="reuse the existing apps/web/dist")
     parser.add_argument("--skip-runtime", action="store_true", help="reuse the existing apps/desktop/.runtime/<target>")
     parser.add_argument("--dir", action="store_true", help="unpacked app only, no installers")
+    parser.add_argument("--tunnel", type=Path, default=None, help="p2r-tunnel binary for the target (enables tablet pairing)")
+    parser.add_argument("--image", type=Path, default=None, help="docker save | gzip of paper2run-experiment:1 for the target")
     args = parser.parse_args(argv)
 
     target = args.target or build_runtime.host_target()
@@ -84,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         build_runtime.build(target)
         build_harness.build(target)
+    stage_extras(target, args.tunnel, args.image)
 
     run([pnpm, "--dir", "apps/desktop", "install", "--frozen-lockfile"])
     builder = [pnpm, "--dir", "apps/desktop", "exec", "electron-builder", *BUILDER_FLAGS[target], "--publish", "never"]

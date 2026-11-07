@@ -1,19 +1,25 @@
 'use strict';
 // Tablet-remote sidecar (p2r-tunnel serve), mirroring scripts/launch.py.
-// Dev builds only for now: the packaged app does not bundle the binary yet,
-// and Electron never runs cargo. Missing binary = tablet remote off, app fine.
+// Dev builds use the repo's cargo build; packaged builds that bundle the binary
+// carry it in resources/tunnel with the relay config. Electron never runs cargo.
+// Missing binary = tablet remote off, app fine.
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-function remotePaths({ isPackaged, repo, home, isWin }) {
-  if (isPackaged) return null;
+function remotePaths({ isPackaged, repo, resources, home, isWin }) {
+  const exe = isWin ? 'p2r-tunnel.exe' : 'p2r-tunnel';
+  const data = path.join(home, '.paper2run', 'remote');
+  if (isPackaged) {
+    const dir = path.join(resources, 'tunnel');
+    return { binary: path.join(dir, exe), config: path.join(dir, 'remote.json'), ca: path.join(dir, 'relay-ca.pem'), data };
+  }
   const tunnel = path.join(repo, 'apps', 'tunnel');
   return {
-    binary: path.join(tunnel, 'target', 'release', isWin ? 'p2r-tunnel.exe' : 'p2r-tunnel'),
+    binary: path.join(tunnel, 'target', 'release', exe),
     config: path.join(tunnel, 'deploy', 'remote.json'),
     ca: path.join(tunnel, 'deploy', 'relay-ca.pem'),
-    data: path.join(home, '.paper2run', 'remote'),
+    data,
   };
 }
 

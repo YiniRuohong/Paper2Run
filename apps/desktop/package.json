@@ -63,6 +63,7 @@
         { "from": ".runtime/win32-${arch}/harness/node_modules", "to": "harness/node_modules", "filter": ["**/*"] },
         { "from": ".runtime/win32-${arch}/research-skills", "to": "research-skills", "filter": ["**/*"] },
         { "from": ".runtime/win32-${arch}/image", "to": "image", "filter": ["*.tar.gz"] },
+        { "from": ".runtime/win32-${arch}/tunnel", "to": "tunnel", "filter": ["p2r-tunnel.exe", "remote.json", "relay-ca.pem"] },
         { "from": ".runtime/win32-${arch}/harness-runtime.json", "to": "harness-runtime.json" }
       ]
     },

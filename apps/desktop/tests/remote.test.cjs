@@ -31,10 +31,14 @@ test('remoteArgs refuses a config without a rendezvous id', () => {
   assert.throws(() => remoteArgs({ config, ca: '/ca', data: '/d' }, 1), /rendezvous/);
 });
 
-test('remotePaths: dev build points into the repo, packaged build has none yet', () => {
-  const dev = remotePaths({ isPackaged: false, repo: '/repo', home: '/home/u', isWin: false });
+test('remotePaths: dev build points into the repo, packaged build into resources/tunnel', () => {
+  const dev = remotePaths({ isPackaged: false, repo: '/repo', resources: '/res', home: '/home/u', isWin: false });
   assert.equal(dev.binary, path.join('/repo', 'apps', 'tunnel', 'target', 'release', 'p2r-tunnel'));
   assert.equal(dev.config, path.join('/repo', 'apps', 'tunnel', 'deploy', 'remote.json'));
   assert.equal(dev.data, path.join('/home/u', '.paper2run', 'remote'));
-  assert.equal(remotePaths({ isPackaged: true, repo: '/r', home: '/h', isWin: false }), null);
+  const packaged = remotePaths({ isPackaged: true, repo: '/r', resources: '/res', home: '/h', isWin: true });
+  assert.deepEqual(packaged, {
+    binary: path.join('/res', 'tunnel', 'p2r-tunnel.exe'), config: path.join('/res', 'tunnel', 'remote.json'),
+    ca: path.join('/res', 'tunnel', 'relay-ca.pem'), data: path.join('/h', '.paper2run', 'remote'),
+  });
 });
