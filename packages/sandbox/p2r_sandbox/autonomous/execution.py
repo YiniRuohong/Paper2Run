@@ -103,6 +103,11 @@ class ExecutionTarget:
         # errors='replace' is safe only because controller output is ASCII JSON (file
         # bytes travel base64 and are hash-checked); nothing binary may rely on this text.
         options = {'encoding': 'utf-8', 'errors': 'replace'}
+        if input is None:
+            # Never inherit our stdin: in the desktop app it is the Electron watchdog pipe with
+            # a thread blocked reading it, and on Windows a child sharing that synchronous pipe
+            # hangs while the interpreter starts (prepare's workspace script never returned).
+            options['stdin'] = subprocess.DEVNULL
         if _host_is_windows():
             options['creationflags'] = CREATE_NO_WINDOW  # no console window per docker/ssh call
         try:
