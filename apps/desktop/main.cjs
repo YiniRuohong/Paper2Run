@@ -145,6 +145,7 @@ function runtimePaths() {
       node: IS_WIN ? path.join(res, 'node', 'node.exe') : path.join(res, 'node', 'bin', 'node'),
       harness: path.join(res, 'harness'),
       skills: path.join(res, 'research-skills'),
+      image: path.join(res, 'image', 'paper2run-experiment-1.tar.gz'),
     };
   }
   const repo = path.resolve(__dirname, '..', '..');
@@ -155,6 +156,7 @@ function runtimePaths() {
     node: process.env.P2R_NODE_BINARY || path.join(__dirname, '.runtime', `${process.platform}-${process.arch}`, 'node', ...(IS_WIN ? ['node.exe'] : ['bin', 'node'])),
     harness: process.env.P2R_HARNESS_DIR || path.join(repo, 'apps', 'harness'),
     skills: process.env.P2R_SKILLS_DIR || path.join(repo, 'resources', 'research-skills'),
+    image: path.join(__dirname, '.runtime', `${process.platform}-${process.arch}`, 'image', 'paper2run-experiment-1.tar.gz'),
   };
 }
 
@@ -174,6 +176,8 @@ function backendEnv(runtime) {
     P2R_NODE_BINARY: runtime.node,
     P2R_HARNESS_DIR: runtime.harness,
     P2R_SKILLS_DIR: runtime.skills,
+    // Bundled experiment image (Windows installer): the backend imports it into Docker on first start.
+    P2R_IMAGE_ARCHIVE: runtime.image,
   };
 }
 
