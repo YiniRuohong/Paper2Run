@@ -9,6 +9,11 @@
   position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px;
   padding: 10px 18px; background: #14171c; color: #e8eaee; border-bottom: 1px solid #2a2f37;
 }
+/* 报告盖住整个窗口，工具栏贴着窗口顶边：给系统窗口按钮让位，否则关闭键被遮住。
+   Windows 标题栏按钮占右上约 140px、高 52px（main.cjs TITLE_BAR_HEIGHT）；macOS 红绿灯在左上。 */
+[data-shell="win32"] .rd-toolbar { min-height: 52px; padding-right: 148px; -webkit-app-region: drag; }
+[data-shell="darwin"] .rd-toolbar { min-height: 52px; padding-left: 82px; -webkit-app-region: drag; }
+[data-shell] .rd-toolbar button, [data-shell] .rd-toolbar a { -webkit-app-region: no-drag; }
 .rd-toolbar-title { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; font-weight: 600; font-size: 14px; }
 .rd-toolbar .btn-icon { color: #e8eaee; }
 
