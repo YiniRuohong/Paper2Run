@@ -59,7 +59,7 @@ class TunnelService : Service() {
             nm.createNotificationChannel(NotificationChannel(CHANNEL, "与电脑的连接", NotificationManager.IMPORTANCE_LOW))
         }
         val n = (if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL) else Notification.Builder(this))
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            .setSmallIcon(R.drawable.ic_stat_logo)
             .setContentTitle("Paper2Run 远程")
             .setContentText("保持与电脑的连接")
             .setOngoing(true)

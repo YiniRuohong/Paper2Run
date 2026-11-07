@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light/dark follows the system; the WebView reports the same to the page's prefers-color-scheme. -->
+    <style name="Theme.P2R" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/p2r_side</item>
+    </style>
+</resources>

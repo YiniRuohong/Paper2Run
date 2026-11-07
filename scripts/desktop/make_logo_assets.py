@@ -10,7 +10,8 @@ Writes (all committed; rerun only when the logo changes):
   apps/desktop/splash.html                       the splash mark (same tile, inlined)
   apps/web/src/ui/logo-mark.png                  sidebar mark, used as a CSS mask so it follows the theme colour
   apps/web/public/favicon.png                    tile, 256
-  --android-res: launcher icons (adaptive foreground + legacy/round mipmaps) for apps/android on feat/tablet-remote
+  --android-res: launcher icons (adaptive foreground + legacy/round mipmaps), the in-app logo tile
+                 and the notification glyph for apps/android
 
 Needs Pillow (python3 -m pip install pillow); the build itself never runs this.
 """
@@ -129,6 +130,12 @@ def write_android(mark: Image.Image, res: Path) -> None:
         folder = res / f"mipmap-{density}"
         tile(mark, size, margin_ratio=0.0833, glyph_ratio=0.66).save(folder / "ic_launcher.webp", "WEBP", lossless=True)
         tile(mark, size, margin_ratio=0.0833, glyph_ratio=0.62, round_=True).save(folder / "ic_launcher_round.webp", "WEBP", lossless=True)
+    # In-app marks: the tile on the pairing / connecting screens and a white glyph
+    # for the status-bar notification.
+    tile(mark, 384, margin_ratio=0.03).save(nodpi / "logo_tile.png", optimize=True)
+    white = scaled(mark, 96)
+    white = Image.merge("RGBA", (*Image.new("RGB", white.size, (255, 255, 255)).split(), white.getchannel("A")))
+    white.save(nodpi / "ic_stat_logo.png", optimize=True)
 
 
 def main() -> int:

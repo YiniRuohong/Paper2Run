@@ -1,3 +1,5 @@
 /build
 src/main/jniLibs/
-src/main/assets/
+# Copied from apps/tunnel/deploy by build-apk.sh; bridge.js is source.
+src/main/assets/remote.json
+src/main/assets/relay-ca.pem
