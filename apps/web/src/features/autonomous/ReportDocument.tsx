@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { AutonomousFile, AutonomousTask } from '../../api-client/autonomous';
+import { enterReportMode } from '../../desktop';
 import { Icon } from '../../ui/Icon';
 import { outcomeLabel, outcomeReasonLabel } from './config';
 import type { ExperimentReport, ReportDocumentData, ReportFigure } from './report';
@@ -112,7 +113,8 @@ export function ReportDocument({ report, task, files, load, onClose }: {
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close.current(); };
     document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('keydown', onKey); document.documentElement.classList.remove('rd-printing'); opener?.focus?.(); };
+    const leaveReportMode = enterReportMode();
+    return () => { document.removeEventListener('keydown', onKey); document.documentElement.classList.remove('rd-printing'); leaveReportMode(); opener?.focus?.(); };
   }, []);
 
   const exportPdf = () => {

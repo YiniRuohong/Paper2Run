@@ -595,6 +595,20 @@ function installIpc() {
     explicitTheme = theme;
     applyTheme();
   });
+  // The report reader covers the whole window. On Windows the caption buttons would sit on
+  // top of its toolbar, so the reader runs full screen (no caption buttons): close the
+  // report first, then the window. Leaving restores the previous maximized state.
+  let reportRestoreMaximized = false;
+  ipcMain.on('p2r:report-mode', (event, on) => {
+    if (!fromMainWindow(event) || !IS_WIN || !mainWindow || mainWindow.isDestroyed()) return;
+    if (on === true && !mainWindow.isFullScreen()) {
+      reportRestoreMaximized = mainWindow.isMaximized();
+      mainWindow.setFullScreen(true);
+    } else if (on === false && mainWindow.isFullScreen()) {
+      mainWindow.setFullScreen(false);
+      if (reportRestoreMaximized) mainWindow.maximize();
+    }
+  });
   ipcMain.on('p2r:splash-retry', (event) => {
     if (!fromSplashWindow(event) || quitState !== 'running') return;
     setSplash({ state: 'starting' });

@@ -251,6 +251,8 @@ button.wb-tab.wb-tab-bar { max-width: 360px; gap: 9px; }
 .wb.is-app > .wb-grid { display: contents; }
 .wb.is-app .wb-rail { grid-area: rail; }
 .wb.is-app .wb-head { grid-area: head; align-self: end; }
+/* Windows 标题栏按钮压在窗口右上（约 140×52）：标题行右端的「任务详情」等按钮要让开。 */
+[data-shell="win32"] .wb.is-app .wb-head { padding-right: 112px; }
 /* App layout: the status pill sits on the title line, so every page's centre column starts at the same height. */
 .wb.is-app .wb-head-main { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; }
 .wb.is-app .wb-head-main .wb-eyebrow { flex-basis: 100%; }

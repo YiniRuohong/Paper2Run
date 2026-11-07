@@ -18,6 +18,8 @@ interface P2RDesktop {
   backendUrl: string;
   openPath(kind: 'data' | 'logs'): Promise<void>;
   setTheme(theme: 'light' | 'dark'): void;
+  /** Windows: full screen while the report reader is open, so no caption buttons cover it. Optional: older shells lack it. */
+  setReportMode?(on: boolean): void;
 }
 
 interface Window {
